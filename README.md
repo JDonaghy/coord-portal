@@ -60,24 +60,43 @@ Everything above works offline with no Cloudflare account. `wrangler dev` runs t
 miniflare with local D1 and R2, which is why the e2e suite is the acceptance bar rather than a
 mock-heavy unit layer.
 
+## Deployment
+
+**Live at https://coord-portal.johnfdonaghy.workers.dev** (since 2026-08-08). Merges to `main`
+deploy automatically: `.github/workflows/deploy.yml` applies D1 migrations, runs `wrangler deploy`,
+then polls `/api/health` until it reports `ok` — so a deploy that lands broken fails the run rather
+than sitting there green.
+
+> **⚠️ It is public and unauthenticated.** There is no Cloudflare Access in front of it yet, so
+> anyone with the URL can read the landing page and `/api/health`. That is acceptable for a version
+> string and a schema number. **It stops being acceptable the moment anything stores a customer's
+> words** — Access (step 7 below) must land before the design-round work in #1983.
+
 ### Cloudflare account setup
 
-Not done yet — the repo is deliberately deployable-once-configured rather than half-deployed. The
-steps, in order:
+Done, except DNS and Access:
 
-1. `npx wrangler login`
-2. `npx wrangler d1 create coord-portal` → paste the returned `database_id` into `wrangler.toml`
-   (it is an account-scoped identifier, not a secret)
-3. `npx wrangler r2 bucket create coord-portal-artifacts`
-4. `npx wrangler d1 migrations apply coord-portal --remote`
-5. `npx wrangler deploy`
-6. Point a `heurontech.com` subdomain at the Worker (Cloudflare DNS → Workers Routes)
-7. Put **Cloudflare Access** in front of the hostname — until that is done the site is public
-8. Repo secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and repo variable `PORTAL_URL`,
-   so `.github/workflows/deploy.yml` starts deploying on merge to `main`
+- [x] `npx wrangler login`
+- [x] `npx wrangler d1 create coord-portal` — `database_id` is in `wrangler.toml` (an
+      account-scoped identifier, not a secret)
+- [x] `npx wrangler r2 bucket create coord-portal-artifacts` — note R2 must be **enabled** in the
+      dashboard first, which D1 does not require
+- [x] `npx wrangler d1 migrations apply coord-portal --remote`
+- [x] `npx wrangler deploy`
+- [ ] **DNS** — point a `heurontech.com` subdomain at the Worker. Requires moving the zone to
+      Cloudflare: Access only works on a Cloudflare zone, and per-subdomain (CNAME) delegation is a
+      Business-plan feature.
+- [ ] **Cloudflare Access** in front of the hostname. **Set `workers_dev = false` in the same
+      change** — otherwise the `*.workers.dev` URL stays reachable and bypasses Access entirely.
+- [x] Repo secrets `CLOUDFLARE_API_TOKEN` (scoped: Workers Scripts edit, D1 edit, R2 read, Account
+      Settings read) and `CLOUDFLARE_ACCOUNT_ID`, plus repo variable `PORTAL_URL`
 
-The deploy workflow **skips itself** while `CLOUDFLARE_API_TOKEN` is unset, so `main` stays green
-until step 8. It applies migrations before deploying and then checks `/api/health` reports `ok`.
+`Deploy` triggers on `push: main` and `workflow_dispatch` **only — never `pull_request`**, so a fork
+PR cannot reach the token. Do not add one.
+
+The deploy workflow **skips itself** while `CLOUDFLARE_API_TOKEN` is unset — the guard is its own
+job, so an unconfigured repo records no deployment at all rather than a `production / success` that
+never happened.
 
 ## Contributing
 
