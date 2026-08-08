@@ -1,0 +1,43 @@
+# coord-portal — Cloudflare Worker (API + static site) with D1 and R2.
+#
+# One Worker serves both the static site and the JSON API. That is deliberate:
+# a single deploy lane and no cross-origin boundary between the page and its API.
+#
+# NOTHING SECRET GOES IN THIS FILE. It is committed to a public repo. API tokens
+# and provider keys live in GitHub Actions secrets and `wrangler secret put`.
+
+name = "coord-portal"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+
+[observability]
+enabled = true
+
+# Static site. Assets are matched first; anything with no matching file falls
+# through to the Worker, which is how /api/* reaches the router.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[vars]
+PORTAL_ENV = "dev"
+
+# Records. `database_id` is a placeholder until `wrangler d1 create coord-portal`
+# is run against the real account — see README "Cloudflare account setup".
+# The id is not a secret; it is an account-scoped identifier.
+[[d1_databases]]
+binding = "DB"
+database_name = "coord-portal"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# Mock bundles and screenshots.
+[[r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "coord-portal-artifacts"
+
+[env.production]
+name = "coord-portal"
+
+[env.production.vars]
+PORTAL_ENV = "production"

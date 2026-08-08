@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>coord-portal</title>
+<link rel="stylesheet" href="/tokens.css">
+</head>
+<body>
+<main>
+  <h1>coord-portal</h1>
+  <p class="lede">
+    Customer intake and design sign-off for a claude&#8209;coordinator fleet.
+    Nothing is built yet — this page exists to prove the stack is wired.
+  </p>
+
+  <section class="card">
+    <h2>Service health</h2>
+    <p><span class="pill" data-state="loading" id="overall">checking…</span></p>
+    <dl class="probe">
+      <dt>version</dt><dd id="version">—</dd>
+      <dt>environment</dt><dd id="env">—</dd>
+      <dt>D1 (records)</dt><dd id="d1">—</dd>
+      <dt>R2 (artifacts)</dt><dd id="r2">—</dd>
+    </dl>
+  </section>
+
+  <footer>
+    <a href="https://github.com/JDonaghy/coord-portal">source</a> · MIT ·
+    <a href="/api/health">/api/health</a>
+  </footer>
+</main>
+
+<script type="module">
+  // Deliberately dependency-free. The first framework here should arrive with
+  // the first real screen (#1983), not with a status readout.
+  const set = (id, text) => { document.getElementById(id).textContent = text }
+  const describe = (probe) =>
+    (probe.ok ? "ok" : "FAILED") + (probe.detail ? ` — ${probe.detail}` : "")
+
+  try {
+    const res = await fetch("/api/health", { headers: { accept: "application/json" } })
+    const body = await res.json()
+    set("version", body.version ?? "—")
+    set("env", body.env ?? "—")
+    set("d1", describe(body.checks?.d1 ?? { ok: false, detail: "no response" }))
+    set("r2", describe(body.checks?.r2 ?? { ok: false, detail: "no response" }))
+
+    const pill = document.getElementById("overall")
+    pill.dataset.state = body.ok ? "ok" : "degraded"
+    pill.textContent = body.ok ? "all systems ok" : "degraded"
+  } catch (err) {
+    const pill = document.getElementById("overall")
+    pill.dataset.state = "degraded"
+    pill.textContent = "unreachable"
+    set("d1", String(err))
+  }
+</script>
+</body>
+</html>
