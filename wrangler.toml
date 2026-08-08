@@ -10,6 +10,12 @@ name = "coord-portal"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 
+# NO NAMED ENVIRONMENTS, DELIBERATELY. Wrangler does not inherit bindings into
+# `[env.x]` — an `[env.production]` block that omits `d1_databases`/`r2_buckets`
+# deploys a Worker with neither, silently. One config, one deployment target, no
+# duplicated `database_id` to drift. The Worker reports which deployment it is
+# by looking at its own hostname, so nothing has to be kept in step by hand.
+
 [observability]
 enabled = true
 
@@ -19,25 +25,15 @@ enabled = true
 directory = "./public"
 binding = "ASSETS"
 
-[vars]
-PORTAL_ENV = "dev"
-
-# Records. `database_id` is a placeholder until `wrangler d1 create coord-portal`
-# is run against the real account — see README "Cloudflare account setup".
-# The id is not a secret; it is an account-scoped identifier.
+# Records. Created 2026-08-08 in region ENAM. The id is an account-scoped
+# identifier, not a secret — it is useless without a credential for the account.
 [[d1_databases]]
 binding = "DB"
 database_name = "coord-portal"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "bfe11dc0-b9b3-487e-8c22-1e7c99fec67e"
 migrations_dir = "migrations"
 
 # Mock bundles and screenshots.
 [[r2_buckets]]
 binding = "ARTIFACTS"
 bucket_name = "coord-portal-artifacts"
-
-[env.production]
-name = "coord-portal"
-
-[env.production.vars]
-PORTAL_ENV = "production"

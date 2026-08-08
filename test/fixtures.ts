@@ -14,11 +14,10 @@ export interface FakeEnvOptions {
   schemaVersion?: string | null
   d1Throws?: Error
   r2Throws?: Error
-  portalEnv?: string
 }
 
 export function fakeEnv(options: FakeEnvOptions = {}): Env {
-  const { schemaVersion = "0001", d1Throws, r2Throws, portalEnv = "test" } = options
+  const { schemaVersion = "0001", d1Throws, r2Throws } = options
 
   const DB = {
     prepare(_sql: string) {
@@ -50,7 +49,6 @@ export function fakeEnv(options: FakeEnvOptions = {}): Env {
     DB,
     ARTIFACTS,
     ASSETS,
-    PORTAL_ENV: portalEnv,
   } as unknown as Env
 }
 
