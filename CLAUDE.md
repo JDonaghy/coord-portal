@@ -57,8 +57,30 @@ request may arrive twice.
 
 ## Testing
 
-Behaviour-changing PRs ship a **black-box test** that drives the running app and asserts on rendered
-output — Playwright against a seeded (synthetic) database. Unit tests are welcome but are not the
-acceptance bar. Pure refactors are exempt; say so in the PR.
+Three tiers, and they are not interchangeable:
 
-Build the harness once, then add tests incrementally with the behaviour they cover.
+| Tier | Location | Who writes it | Run with |
+|---|---|---|---|
+| unit | `test/` | you | `npm test` (vitest, mocked bindings) |
+| smoke | `e2e/` | you | `npm run test:e2e` (real Worker, port 8788) |
+| **sealed acceptance** | `tests/acceptance/` | **an independent agent** | `coord acceptance run --repo coord-portal --issue N` |
+
+**You must never create, edit or delete anything under `tests/acceptance/`.** It is written by an
+independent `test-author` agent from the milestone's Gate-A contract, before and without sight of
+your implementation. That independence is the whole point: a test written against your own code
+proves the code does what you made it do, not what was asked for. Editing the oracle to go green is
+the one failure this pipeline exists to prevent — if a sealed test looks wrong, say so and stop;
+do not "fix" it.
+
+`coord acceptance run` prints pass/fail and failure messages only, never test source, so you can
+iterate against the oracle without reading it. The coordinator then re-runs the same suite
+externally against the SHA you pushed.
+
+Behaviour-changing PRs still ship their own black-box `e2e/` coverage that drives the running app
+and asserts on rendered output. Unit tests are welcome but are not the acceptance bar. Pure
+refactors are exempt; say so in the PR.
+
+**Determinism:** `npm run serve:acceptance` wipes `.wrangler/state` before migrating, so every
+acceptance run starts from an empty database at schema head. Never write a test that depends on
+rows another test left behind — the suite runs single-worker with no retries so that shows up as a
+failure rather than as flakiness.

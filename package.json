@@ -6,15 +6,17 @@
   "description": "Customer intake and design sign-off portal for a claude-coordinator fleet",
   "license": "MIT",
   "scripts": {
-    "dev": "wrangler dev",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.e2e.json",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:e2e": "playwright test",
-    "serve:test": "wrangler d1 migrations apply coord-portal --local && wrangler dev --port 8788",
     "db:migrate:local": "wrangler d1 migrations apply coord-portal --local",
     "db:migrate:remote": "wrangler d1 migrations apply coord-portal --remote",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "serve:acceptance": "rm -rf ./.wrangler/state && wrangler d1 migrations apply coord-portal --local && wrangler dev --port 8789",
+    "serve:test": "wrangler d1 migrations apply coord-portal --local && wrangler dev --port 8788",
+    "test": "vitest run",
+    "test:acceptance": "playwright test --config=playwright.acceptance.config.ts",
+    "test:e2e": "playwright test",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.e2e.json"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260801.1",
