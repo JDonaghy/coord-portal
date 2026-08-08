@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Two-factor authentication for customer logins — coord-portal</title>
+<!-- MOCK — Gate-A screen state: terminal, Shipped. Route: GET /submissions/:id -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; gap: 1.25rem;
+    max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; gap: 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.25em 0.75em; border-radius: 999px; font-size: var(--step--1); font-weight: 600;
+  }
+  .status-pill[data-status="shipped"] { background: var(--pass-wash); color: var(--pass); }
+  .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); margin: 0.35rem 0 1.5rem; }
+
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 1.25rem; }
+  a.button.primary {
+    display: inline-block; margin-top: 1rem; background: var(--accent); color: white;
+    text-decoration: none; border-radius: var(--r-md); padding: 0.6rem 1.1rem;
+    font-weight: 600; font-size: var(--step--1);
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/submissions" data-testid="nav-dashboard">My requests</a>
+    <a href="/intake" data-testid="nav-new">New request</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ada@example.test</span>
+</header>
+<main data-testid="submission-detail" data-status="shipped">
+  <span class="status-pill" data-testid="status-pill" data-status="shipped">Shipped</span>
+  <h1>Two-factor authentication for customer logins</h1>
+  <p class="meta" data-testid="submission-reference">SUB-1A2B3C &middot; shipped 2 weeks ago</p>
+
+  <section class="card">
+    <p data-testid="shipped-copy">This is live. Thanks for working through the design with us.</p>
+    <a class="button primary" href="#" data-testid="shipped-link">View the result &rarr;</a>
+  </section>
+</main>
+</body>
+</html>

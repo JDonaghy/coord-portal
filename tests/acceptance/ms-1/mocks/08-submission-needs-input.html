@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Single sign-on for the admin console — coord-portal</title>
+<!-- MOCK — Gate-A screen state: Needs your input — raise -> pause -> resume
+     (issue #11). Route: GET /submissions/:id -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; gap: 1.25rem;
+    max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; gap: 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.25em 0.75em; border-radius: 999px; font-size: var(--step--1); font-weight: 600;
+  }
+  .status-pill[data-status="needs-input"] { background: var(--attn-wash); color: var(--attn); }
+  .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); margin: 0.35rem 0 1.5rem; }
+
+  .pause-banner {
+    background: var(--attn-wash); color: var(--attn); border-radius: var(--r-md);
+    padding: 0.75rem 1rem; font-size: var(--step--1); font-weight: 600; margin-bottom: 1.25rem;
+  }
+
+  .question-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 1.5rem; }
+  .question-card h2 { font-size: var(--step-0); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin: 0 0 0.75rem; }
+  .question-text { font-size: var(--step-1); margin: 0 0 1.25rem; }
+
+  .answer-field { width: 100%; font: inherit; padding: 0.65rem 0.75rem; border-radius: var(--r-md);
+    border: 1px solid var(--line-strong); background: var(--ground); color: var(--text); resize: vertical; }
+  .actions { display: flex; justify-content: flex-end; margin-top: 1rem; }
+  button.primary {
+    background: var(--accent); color: white; border: none; border-radius: var(--r-md);
+    padding: 0.6rem 1.1rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/submissions" data-testid="nav-dashboard">My requests</a>
+    <a href="/intake" data-testid="nav-new">New request</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ada@example.test</span>
+</header>
+<main data-testid="submission-detail" data-status="needs-input">
+  <span class="status-pill" data-testid="status-pill" data-status="needs-input">Needs your input</span>
+  <h1>Single sign-on for the admin console</h1>
+  <p class="meta" data-testid="submission-reference">SUB-8811B2 &middot; updated 1 hour ago</p>
+
+  <p class="pause-banner" data-testid="pause-banner">Work is paused until you answer.</p>
+
+  <section class="question-card" data-testid="question-thread">
+    <h2>Question from the team</h2>
+    <p class="question-text" data-testid="question-text">
+      Should existing users who already have a password be forced onto SSO on their next
+      login, or can the two sign-in methods co-exist indefinitely?
+    </p>
+
+    <label for="answerField" class="visually-hidden">Your answer</label>
+    <textarea id="answerField" class="answer-field" rows="4"
+      data-testid="answer-field"
+      placeholder="Type your answer&hellip;"></textarea>
+    <div class="actions">
+      <button type="button" class="primary" data-testid="submit-answer">Send answer</button>
+    </div>
+  </section>
+</main>
+</body>
+</html>

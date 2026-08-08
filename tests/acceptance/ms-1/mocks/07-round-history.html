@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Round history — Bulk CSV import for contacts — coord-portal</title>
+<!-- MOCK — Gate-A screen state: versioned round history, every previous round
+     stays readable (issue #13). Route: GET /submissions/:id/rounds -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; gap: 1.25rem;
+    max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; gap: 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+
+  .back-link { font-size: var(--step--1); display: inline-block; margin-bottom: 1rem; }
+
+  .round-entry {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1.25rem 1.5rem; margin-bottom: 1rem;
+  }
+  .round-entry-head { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+  .round-badge {
+    font-family: var(--font-mono); font-size: var(--step--1); color: var(--text-dim);
+    background: var(--surface-2); border-radius: 999px; padding: 0.2em 0.7em;
+  }
+  .verdict-pill {
+    font-size: var(--step--1); font-weight: 600; padding: 0.2em 0.7em; border-radius: 999px;
+  }
+  .verdict-pill[data-verdict="changes-requested"] { background: var(--fail-wash); color: var(--fail); }
+  .verdict-pill[data-verdict="approved"]          { background: var(--pass-wash); color: var(--pass); }
+  .verdict-pill[data-verdict="pending"]           { background: var(--attn-wash); color: var(--attn); }
+  .round-date { color: var(--text-faint); font-size: var(--step--1); margin-left: auto; }
+
+  .round-entry .outcome-definition { margin: 0 0 0.5rem; }
+  .round-entry blockquote {
+    margin: 0.75rem 0 0; padding: 0.6rem 0.9rem; border-left: 3px solid var(--line-strong);
+    color: var(--text-dim); font-size: var(--step--1);
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/submissions" data-testid="nav-dashboard">My requests</a>
+    <a href="/intake" data-testid="nav-new">New request</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ada@example.test</span>
+</header>
+<main>
+  <a class="back-link" href="/submissions/sub_c04df1" data-testid="back-to-submission">&larr; Bulk CSV import for contacts</a>
+  <h1>Round history</h1>
+
+  <div data-testid="round-history">
+    <section class="round-entry" data-testid="round-entry" data-round="2" data-verdict="pending">
+      <div class="round-entry-head">
+        <span class="round-badge">Round 2</span>
+        <span class="verdict-pill" data-testid="verdict-pill" data-verdict="pending">Awaiting your sign-off</span>
+        <span class="round-date">opened yesterday</span>
+      </div>
+      <p class="outcome-definition">Let an admin drop in a CSV of contacts and have them appear in the contact list, with bad rows reported back instead of silently skipped or failing the whole import.</p>
+    </section>
+
+    <section class="round-entry" data-testid="round-entry" data-round="1" data-verdict="changes-requested">
+      <div class="round-entry-head">
+        <span class="round-badge">Round 1</span>
+        <span class="verdict-pill" data-testid="verdict-pill" data-verdict="changes-requested">Changes requested</span>
+        <span class="round-date">opened 4 days ago</span>
+      </div>
+      <p class="outcome-definition">Let an admin drop in a CSV of contacts and have them appear in the contact list.</p>
+      <blockquote data-testid="round-comment">
+        &ldquo;This needs to tell me which rows failed and why — silently dropping bad rows is worse than not having the feature.&rdquo;
+      </blockquote>
+    </section>
+  </div>
+</main>
+</body>
+</html>

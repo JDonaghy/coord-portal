@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>New request — coord-portal</title>
+<!-- MOCK — Gate-A screen state: intake / empty form. Route: GET /intake -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; gap: 1.25rem;
+    max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; gap: 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+
+  form.intake { display: grid; gap: 1.25rem; }
+  .field { display: grid; gap: 0.4rem; }
+  .field label { font-weight: 600; font-size: var(--step--1); color: var(--text); }
+  .field .hint { color: var(--text-faint); font-size: var(--step--1); font-weight: 400; }
+  .field textarea, .field input[type="text"] {
+    font: inherit; padding: 0.65rem 0.75rem; border-radius: var(--r-md);
+    border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
+    resize: vertical;
+  }
+  .field textarea:focus, .field input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .optional-tag {
+    font-size: var(--step--1); color: var(--text-faint); font-weight: 400;
+    border: 1px solid var(--line); border-radius: 999px; padding: 0 0.5em; margin-left: 0.5em;
+  }
+  .actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.5rem; }
+  button.primary {
+    background: var(--accent); color: white; border: none; border-radius: var(--r-md);
+    padding: 0.65rem 1.25rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.primary:hover { background: var(--accent-dim); }
+  .async-note {
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md);
+    padding: 0.85rem 1rem; font-size: var(--step--1); color: var(--text-dim); margin-bottom: 1.5rem;
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/submissions" data-testid="nav-dashboard">My requests</a>
+    <a href="/intake" aria-current="page" data-testid="nav-new">New request</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ada@example.test</span>
+</header>
+<main>
+  <h1>Describe what you want done</h1>
+  <p class="lede">No live chat, no back-and-forth right now — write it once, and the team will follow up.</p>
+
+  <p class="async-note" data-testid="async-note">
+    This is a form, not a conversation. Submit it and go — you'll get an email
+    the moment there's a design ready for you to look at.
+  </p>
+
+  <form class="intake" data-testid="intake-form" aria-label="New request">
+    <div class="field">
+      <label for="outcome">What do you want done?</label>
+      <textarea id="outcome" name="outcome" rows="4" required
+        data-testid="field-outcome"
+        placeholder="Describe the outcome in plain language — not a spec, just what you need."></textarea>
+    </div>
+
+    <div class="field">
+      <label for="audience">Who is this for?</label>
+      <input id="audience" name="audience" type="text" required
+        data-testid="field-audience"
+        placeholder="e.g. our support team, our end customers, just me">
+    </div>
+
+    <div class="field">
+      <label for="doneDefinition">What does &ldquo;done&rdquo; look like?</label>
+      <textarea id="doneDefinition" name="doneDefinition" rows="3" required
+        data-testid="field-done-definition"
+        placeholder="How will you know this is finished?"></textarea>
+    </div>
+
+    <div class="field">
+      <label for="constraints">Constraints <span class="optional-tag">optional</span></label>
+      <textarea id="constraints" name="constraints" rows="2"
+        data-testid="field-constraints"
+        placeholder="Budget, deadline, tools you already use, anything off-limits."></textarea>
+    </div>
+
+    <div class="field">
+      <label for="projectScope">Project area <span class="optional-tag">optional</span></label>
+      <input id="projectScope" name="projectScope" type="text"
+        data-testid="field-project-scope"
+        placeholder="If you know which product or area this touches">
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="primary" data-testid="submit-intake">Send to the team</button>
+    </div>
+  </form>
+</main>
+</body>
+</html>

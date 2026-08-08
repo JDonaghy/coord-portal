@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Email preview — work shipped — coord-portal</title>
+<!--
+  MOCK — Gate-A screen state: transactional email, "work shipped" (issue #14).
+  One of exactly three states that generate a send (terminal case).
+  Not a portal route — rendered as an inbox preview for review purposes.
+-->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  body { background: var(--surface-2); }
+  .inbox-chrome {
+    max-width: 34rem; margin: 0 auto; color: var(--text-faint); font-size: var(--step--1);
+    margin-bottom: 0.5rem; font-family: var(--font-mono);
+  }
+  .email {
+    max-width: 34rem; margin: 0 auto; background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--r-lg); overflow: hidden;
+  }
+  .email-meta { padding: 1rem 1.5rem; border-bottom: 1px solid var(--line); font-size: var(--step--1); color: var(--text-dim); }
+  .email-meta dl { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.75rem; margin: 0; }
+  .email-meta dt { color: var(--text-faint); }
+  .email-subject { padding: 1.25rem 1.5rem 0; font-size: var(--step-2); font-weight: 700; }
+  .email-preheader { padding: 0 1.5rem; color: var(--text-faint); font-size: var(--step--1); margin: 0.35rem 0 1rem; }
+  .email-body { padding: 0 1.5rem 1.5rem; }
+  .email-cta {
+    display: inline-block; margin-top: 1rem; background: var(--pass); color: white !important;
+    text-decoration: none; border-radius: var(--r-md); padding: 0.65rem 1.25rem; font-weight: 600;
+  }
+  .email-footer { padding: 1rem 1.5rem; border-top: 1px solid var(--line); color: var(--text-faint); font-size: var(--step--1); }
+</style>
+</head>
+<body>
+<p class="inbox-chrome">Inbox preview — not a live send</p>
+<article class="email" data-testid="email-preview" data-email-type="shipped">
+  <div class="email-meta">
+    <dl>
+      <dt>From</dt><dd data-testid="email-from">coord-portal &lt;notify@intake.heurontech.com&gt;</dd>
+      <dt>To</dt><dd data-testid="email-to">ada@example.test</dd>
+    </dl>
+  </div>
+  <h1 class="email-subject" data-testid="email-subject">Your work has shipped</h1>
+  <p class="email-preheader" data-testid="email-preheader">Two-factor authentication for customer logins</p>
+  <div class="email-body" data-testid="email-body">
+    <p>&ldquo;Two-factor authentication for customer logins&rdquo; is live.</p>
+    <a class="email-cta" href="#" data-testid="email-cta">View the result</a>
+  </div>
+  <div class="email-footer">This is the last email you'll get about this request.</div>
+</article>
+</body>
+</html>
