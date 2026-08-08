@@ -1,0 +1,24 @@
+# ms-1 — sealed acceptance manifest: test id -> issue slice.
+#
+# Ids are the `web-playwright` driver's node ids, exactly as
+# `coord.acceptance_drivers.parse_playwright_json_report` builds them:
+#
+#   [{project}] {file relative to testDir} › {describe path} › {test title}
+#
+# They must match character-for-character (including the `›` separators) —
+# `coord acceptance run --issue N` filters by exact id, and an id that matches
+# nothing is reported as a missing test, not as a pass.
+#
+# One block per issue. Later slices MERGE into this file; do not rewrite
+# another issue's block.
+
+issues:
+  9:
+    - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › the intake screen is a form, not a conversation"
+    - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › submitting the form creates a submission and returns a reference"
+    - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › constraints and project scope really are optional"
+    - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › an empty form creates no submission"
+    - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › each submission gets its own reference"
+    - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › a submission is a durable record, not a live session"
+    - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › a fresh submission shows the customer no design round"
+    - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › no engineer-side identifier reaches the intake surface"
