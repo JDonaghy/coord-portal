@@ -87,7 +87,8 @@ that is a signal to stop and re-read this paragraph.
       only, or the apex site would have gone behind the proxy on activation.
 - [x] `intake.heurontech.com` as a Worker custom domain (proxied — a route only fires on a proxied
       record)
-- [ ] **Cloudflare Access** — two applications, see below
+- [x] **Cloudflare Access** — two applications, see below (team domain
+      `heurontech.cloudflareaccess.com`)
 - [x] Repo secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, plus repo variable
       `PORTAL_URL`
 
@@ -98,9 +99,7 @@ scoped to `heurontech.com` only. That last one is required by the custom domain 
 
 ### Access
 
-> **⚠️ NOT YET CONFIGURED — the site is public and unauthenticated.** Acceptable for a version
-> string and a schema number. **It stops being acceptable the moment anything stores a customer's
-> words**, so this must land before the design-round work in #1983.
+Configured 2026-08-08. Team domain `heurontech.cloudflareaccess.com`; login by one-time PIN.
 
 Two applications, not one — Cloudflare matches most-specific-first:
 
@@ -116,6 +115,16 @@ customer.
 Until #1981 verifies the Access JWT in the Worker, **Access is the only control** — deleting or
 misconfiguring that policy silently reopens the site, because the Worker cannot currently tell a
 genuine Access request from a forged one. See `src/identity.ts`.
+
+**Verifying a policy change did what you meant.** Checking that `/api/health` still answers proves
+nothing about the rest — a bypass mistakenly scoped to `api` instead of `api/health` leaves every
+API route public while health looks identical. Check a path that must be *closed*:
+
+```bash
+curl -sS -o /dev/null -w "%{http_code} %{url_effective}\n" -L https://intake.heurontech.com/api/whoami
+# must land on heurontech.cloudflareaccess.com/cdn-cgi/access/login/...
+curl -sS https://intake.heurontech.com/ | grep -c "coord-portal"    # must be 0
+```
 
 `Deploy` triggers on `push: main` and `workflow_dispatch` **only — never `pull_request`**, so a fork
 PR cannot reach the token. Do not add one.
