@@ -6,8 +6,6 @@ export interface Env {
   ARTIFACTS: R2Bucket
   /** Static site. Serves everything that is not /api/*. */
   ASSETS: Fetcher
-  /** "dev" | "production" — see [vars] in wrangler.toml. */
-  PORTAL_ENV: string
 }
 
 export interface ProbeResult {

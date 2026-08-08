@@ -20,7 +20,7 @@
     <p><span class="pill" data-state="loading" id="overall">checking…</span></p>
     <dl class="probe">
       <dt>version</dt><dd id="version">—</dd>
-      <dt>environment</dt><dd id="env">—</dd>
+      <dt>deployment</dt><dd id="env">—</dd>
       <dt>D1 (records)</dt><dd id="d1">—</dd>
       <dt>R2 (artifacts)</dt><dd id="r2">—</dd>
     </dl>
@@ -43,7 +43,7 @@
     const res = await fetch("/api/health", { headers: { accept: "application/json" } })
     const body = await res.json()
     set("version", body.version ?? "—")
-    set("env", body.env ?? "—")
+    set("env", body.deployment ?? "—")
     set("d1", describe(body.checks?.d1 ?? { ok: false, detail: "no response" }))
     set("r2", describe(body.checks?.r2 ?? { ok: false, detail: "no response" }))
 

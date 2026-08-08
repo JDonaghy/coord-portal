@@ -13,6 +13,21 @@
  * its cache, and the audience check are #1981. When that lands, this file gains
  * an async `verifyAccessIdentity()` and `verified` becomes meaningful — the
  * shape below exists so that change is additive rather than a rewrite.
+ *
+ * ── MEASURED AGAINST THE LIVE DEPLOYMENT, 2026-08-08 ───────────────────────
+ * The two headers are NOT equally trustworthy, and the difference is not
+ * documented anywhere obvious:
+ *
+ *   Cf-Access-Authenticated-User-Email  — STRIPPED by Cloudflare's edge on a
+ *       request that did not come through Access. A client cannot set it.
+ *   Cf-Access-Jwt-Assertion             — PASSES THROUGH UNTOUCHED. A curl with
+ *       a self-minted `{"alg":"none"}` token was parsed by this Worker and came
+ *       back as `attacker@example.test`.
+ *
+ * So the JWT path is client-controlled today, and `verified: false` is the only
+ * thing standing in front of it. #1981 is not hardening; it is the control.
+ * Do not "simplify" by trusting either header, and do not assume the stripping
+ * behaviour above is a contract — it is observed, not promised.
  */
 
 export type IdentitySource = "cf-access-header" | "cf-access-jwt" | "none"

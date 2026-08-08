@@ -12,7 +12,7 @@ describe("GET /api/health", () => {
       ok: true,
       service: "coord-portal",
       version: VERSION,
-      env: "test",
+      deployment: "portal.test",
       checks: { d1: { ok: true, detail: "schema 0001" }, r2: { ok: true } },
     })
   })
