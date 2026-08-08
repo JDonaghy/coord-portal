@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Request changes — Bulk CSV import for contacts — coord-portal</title>
+<!-- MOCK — Gate-A screen state: the "Request changes" composer, opened from the
+     Awaiting-your-sign-off screen (05) by the Request changes button. Same route,
+     GET /submissions/:id, with the composer expanded — this is not a separate URL. -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; gap: 1.25rem;
+    max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; gap: 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.25em 0.75em; border-radius: 999px; font-size: var(--step--1); font-weight: 600;
+  }
+  .status-pill[data-status="awaiting-signoff"] { background: var(--attn-wash); color: var(--attn); }
+  .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); margin: 0.35rem 0 1.5rem; }
+
+  .round-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 1.5rem; opacity: 0.55; }
+  .round-badge {
+    font-family: var(--font-mono); font-size: var(--step--1); color: var(--text-dim);
+    background: var(--surface-2); border-radius: 999px; padding: 0.2em 0.7em;
+  }
+
+  .composer {
+    background: var(--surface); border: 1px solid var(--attn); border-radius: var(--r-lg);
+    padding: 1.5rem; margin-top: 1rem; box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+  }
+  .composer h2 { margin-top: 0; font-size: var(--step-1); }
+  .composer .hint { color: var(--text-dim); font-size: var(--step--1); margin-bottom: 1rem; }
+  .composer textarea {
+    width: 100%; font: inherit; padding: 0.65rem 0.75rem; border-radius: var(--r-md);
+    border: 1px solid var(--line-strong); background: var(--ground); color: var(--text); resize: vertical;
+  }
+  .composer .actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem; }
+  button.primary {
+    background: var(--attn); color: white; border: none; border-radius: var(--r-md);
+    padding: 0.6rem 1.1rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.ghost {
+    background: transparent; color: var(--text-dim); border: 1px solid var(--line-strong);
+    border-radius: var(--r-md); padding: 0.6rem 1.1rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  .next-round-note { font-size: var(--step--1); color: var(--text-faint); margin-top: 0.75rem; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/submissions" data-testid="nav-dashboard">My requests</a>
+    <a href="/intake" data-testid="nav-new">New request</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ada@example.test</span>
+</header>
+<main data-testid="submission-detail" data-status="awaiting-signoff">
+  <span class="status-pill" data-testid="status-pill" data-status="awaiting-signoff">Awaiting your sign-off</span>
+  <h1>Bulk CSV import for contacts</h1>
+  <p class="meta" data-testid="submission-reference">SUB-C04DF1 &middot; updated yesterday</p>
+
+  <section class="round-card" data-testid="design-round" data-round="2" aria-hidden="true">
+    <span class="round-badge">Round 2</span>
+  </section>
+
+  <section class="composer" data-testid="request-changes-form" aria-label="Request changes">
+    <h2>What should change?</h2>
+    <p class="hint">Your notes become Round 3. Round 2 stays exactly as it is, for reference.</p>
+    <label for="changesComment" class="visually-hidden">Requested changes</label>
+    <textarea id="changesComment" name="changesComment" rows="5" required
+      data-testid="changes-comment"
+      placeholder="Tell us what to change and why."></textarea>
+    <p class="next-round-note" data-testid="next-round-note">Submitting opens Round 3 and moves this back to <strong>In design</strong>.</p>
+    <div class="actions">
+      <button type="button" class="ghost" data-testid="cancel-changes">Cancel</button>
+      <button type="button" class="primary" data-testid="submit-changes">Submit changes</button>
+    </div>
+  </section>
+</main>
+</body>
+</html>

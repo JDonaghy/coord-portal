@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Request received — coord-portal</title>
+<!-- MOCK — Gate-A screen state: intake / post-submit receipt. Route: GET /submissions/:id
+     immediately after POST from /intake, status = Describing. -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; gap: 1.25rem;
+    max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; gap: 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.25em 0.75em; border-radius: 999px;
+    font-size: var(--step--1); font-weight: 600;
+  }
+  .status-pill[data-status="describing"] { background: var(--idle-wash); color: var(--idle); }
+
+  .receipt { text-align: center; padding: 2rem 1rem; }
+  .receipt .ref {
+    font-family: var(--font-mono); color: var(--text-faint); font-size: var(--step--1);
+    margin: 0.5rem 0 1.5rem;
+  }
+  .receipt h1 { margin-bottom: 0.5rem; }
+  .receipt p.lede { max-width: 32rem; margin: 0 auto 2rem; }
+  .actions { display: flex; justify-content: center; gap: 0.75rem; }
+  a.button {
+    display: inline-block; text-decoration: none; border-radius: var(--r-md);
+    padding: 0.6rem 1.1rem; font-weight: 600; font-size: var(--step--1);
+  }
+  a.button.primary { background: var(--accent); color: white; }
+  a.button.secondary { border: 1px solid var(--line-strong); color: var(--text); }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/submissions" data-testid="nav-dashboard">My requests</a>
+    <a href="/intake" data-testid="nav-new">New request</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ada@example.test</span>
+</header>
+<main>
+  <section class="receipt" data-testid="intake-receipt">
+    <p class="status-pill" data-testid="status-pill" data-status="describing">Describing</p>
+    <h1>Got it — we're on it</h1>
+    <p class="ref" data-testid="submission-reference">Reference SUB-7F3A2C</p>
+    <p class="lede">
+      No one is chatting with you right now, and that's fine — the team will turn this
+      into a design. We'll email you the moment there's something ready for your sign-off.
+      No need to check back.
+    </p>
+    <div class="actions">
+      <a class="button primary" href="/submissions/sub_7f3a2c" data-testid="view-submission">View this request</a>
+      <a class="button secondary" href="/submissions" data-testid="back-to-dashboard">My requests</a>
+    </div>
+  </section>
+</main>
+</body>
+</html>

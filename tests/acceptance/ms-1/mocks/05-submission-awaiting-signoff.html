@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bulk CSV import for contacts — coord-portal</title>
+<!-- MOCK — Gate-A screen state: submission detail, Awaiting your sign-off, current
+     design round shown with Approve / Request changes actions. Route: GET /submissions/:id -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; gap: 1.25rem;
+    max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; gap: 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.25em 0.75em; border-radius: 999px; font-size: var(--step--1); font-weight: 600;
+  }
+  .status-pill[data-status="awaiting-signoff"] { background: var(--attn-wash); color: var(--attn); }
+
+  .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); margin: 0.35rem 0 1.5rem; }
+
+  .round-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 1.5rem; }
+  .round-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+  .round-badge {
+    font-family: var(--font-mono); font-size: var(--step--1); color: var(--text-dim);
+    background: var(--surface-2); border-radius: 999px; padding: 0.2em 0.7em;
+  }
+  .round-history-link { font-size: var(--step--1); }
+
+  .round-card h2 { font-size: var(--step-0); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin: 1.25rem 0 0.5rem; }
+  .round-card h2:first-of-type { margin-top: 0; }
+  .outcome-definition { white-space: pre-line; }
+
+  ul.decomposition-list { margin: 0; padding-left: 1.25rem; display: grid; gap: 0.4rem; }
+  ul.decomposition-list li { data-testid: decomposition-item; }
+
+  .mock-bundle-link {
+    display: inline-flex; align-items: center; gap: 0.5em; margin-top: 0.5rem;
+    color: var(--accent); text-decoration: none; font-weight: 600; font-size: var(--step--1);
+  }
+
+  .actions { display: flex; gap: 0.75rem; margin-top: 1.75rem; }
+  button.primary {
+    background: var(--pass); color: white; border: none; border-radius: var(--r-md);
+    padding: 0.65rem 1.25rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.secondary {
+    background: var(--surface); color: var(--text); border: 1px solid var(--line-strong);
+    border-radius: var(--r-md); padding: 0.65rem 1.25rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/submissions" data-testid="nav-dashboard">My requests</a>
+    <a href="/intake" data-testid="nav-new">New request</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ada@example.test</span>
+</header>
+<main data-testid="submission-detail" data-status="awaiting-signoff">
+  <span class="status-pill" data-testid="status-pill" data-status="awaiting-signoff">Awaiting your sign-off</span>
+  <h1>Bulk CSV import for contacts</h1>
+  <p class="meta" data-testid="submission-reference">SUB-C04DF1 &middot; updated yesterday</p>
+
+  <section class="round-card" data-testid="design-round" data-round="2" data-verdict="pending">
+    <div class="round-head">
+      <span class="round-badge" data-testid="round-number">Round 2</span>
+      <a class="round-history-link" href="/submissions/sub_c04df1/rounds" data-testid="round-history-link">See all rounds</a>
+    </div>
+
+    <h2>What we understood</h2>
+    <p class="outcome-definition" data-testid="outcome-definition">Let an admin drop in a CSV of contacts and have them appear in the contact list, with bad rows reported back instead of silently skipped or failing the whole import.</p>
+
+    <h2>What we're proposing</h2>
+    <ul class="decomposition-list" data-testid="decomposition-list">
+      <li data-testid="decomposition-item">A CSV upload step with a preview before anything is saved</li>
+      <li data-testid="decomposition-item">Column mapping, so headers don't have to match exactly</li>
+      <li data-testid="decomposition-item">A results screen listing exactly which rows failed and why</li>
+    </ul>
+
+    <h2>Mock bundle</h2>
+    <a class="mock-bundle-link" href="#" data-testid="mock-bundle-link" aria-label="Open the mock bundle for this round">
+      View the mock &rarr;
+    </a>
+
+    <div class="actions">
+      <button type="button" class="primary" data-testid="approve-button">Approve</button>
+      <button type="button" class="secondary" data-testid="request-changes-button">Request changes</button>
+    </div>
+  </section>
+</main>
+</body>
+</html>

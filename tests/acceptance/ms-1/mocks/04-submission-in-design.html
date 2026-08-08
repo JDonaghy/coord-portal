@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weekly usage digest for team admins — coord-portal</title>
+<!-- MOCK — Gate-A screen state: submission detail, read-only rollup status.
+     Route: GET /submissions/:id. Applies verbatim (only the pill text and
+     timeline-highlight step change) to Planned, In progress and Quality check —
+     those three plus In design are non-actionable rollup states: internal churn
+     (review rounds, merge conflicts, CI) never crosses the wall while a
+     submission sits in one of them. -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; gap: 1.25rem;
+    max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; gap: 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.25em 0.75em; border-radius: 999px; font-size: var(--step--1); font-weight: 600;
+  }
+  .status-pill[data-status="in-design"] { background: var(--accent-wash); color: var(--accent-dim); }
+
+  .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); margin: 0.35rem 0 1.5rem; }
+
+  ol.timeline {
+    list-style: none; margin: 0 0 2rem; padding: 0; display: flex; flex-wrap: wrap; gap: 0 0.5rem;
+  }
+  ol.timeline li {
+    font-size: var(--step--1); color: var(--text-faint); padding: 0.3em 0;
+    position: relative;
+  }
+  ol.timeline li:not(:last-child)::after { content: "→"; margin: 0 0.5em; color: var(--line-strong); }
+  ol.timeline li[data-current="true"] { color: var(--accent-dim); font-weight: 700; }
+
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 1.25rem; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/submissions" data-testid="nav-dashboard">My requests</a>
+    <a href="/intake" data-testid="nav-new">New request</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ada@example.test</span>
+</header>
+<main data-testid="submission-detail" data-status="in-design">
+  <span class="status-pill" data-testid="status-pill" data-status="in-design">In design</span>
+  <h1>Weekly usage digest for team admins</h1>
+  <p class="meta" data-testid="submission-reference">SUB-2B91EE &middot; submitted 3 days ago</p>
+
+  <ol class="timeline" data-testid="status-timeline" aria-label="Progress">
+    <li data-testid="timeline-step" data-step="describing">Describing</li>
+    <li data-testid="timeline-step" data-step="in-design" data-current="true">In design</li>
+    <li data-testid="timeline-step" data-step="awaiting-signoff">Awaiting your sign-off</li>
+    <li data-testid="timeline-step" data-step="in-progress">In progress</li>
+    <li data-testid="timeline-step" data-step="shipped">Shipped</li>
+  </ol>
+
+  <section class="card">
+    <p data-testid="rollup-copy">
+      Our team is turning this into a design. There's nothing for you to do right
+      now — we'll email you the moment there's a proposal ready for your sign-off.
+    </p>
+  </section>
+</main>
+</body>
+</html>
