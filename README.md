@@ -62,34 +62,60 @@ mock-heavy unit layer.
 
 ## Deployment
 
-**Live at https://coord-portal.johnfdonaghy.workers.dev** (since 2026-08-08). Merges to `main`
-deploy automatically: `.github/workflows/deploy.yml` applies D1 migrations, runs `wrangler deploy`,
-then polls `/api/health` until it reports `ok` — so a deploy that lands broken fails the run rather
-than sitting there green.
+**Live at https://intake.heurontech.com** (since 2026-08-08). Merges to `main` deploy
+automatically: `.github/workflows/deploy.yml` applies D1 migrations, runs `wrangler deploy`, then
+polls `/api/health` until it reports `ok` — so a deploy that lands broken fails the run rather than
+sitting there green.
 
-> **⚠️ It is public and unauthenticated.** There is no Cloudflare Access in front of it yet, so
-> anyone with the URL can read the landing page and `/api/health`. That is acceptable for a version
-> string and a schema number. **It stops being acceptable the moment anything stores a customer's
-> words** — Access (step 7 below) must land before the design-round work in #1983.
+`*.workers.dev` is **disabled** (`workers_dev = false`). It is not tidiness: Access protects a
+hostname, so a live workers.dev URL would be a second, unprotected front door to the same Worker.
+That setting and the route in `wrangler.toml` must always change together.
+
+The apex `heurontech.com` is a **separate, untouched site** — GitHub Pages, grey-cloud, plus Zoho
+mail. Only `intake` is proxied. Nothing here should ever need an apex DNS change; if a task seems to,
+that is a signal to stop and re-read this paragraph.
 
 ### Cloudflare account setup
 
-Done, except DNS and Access:
+- [x] `wrangler login`, D1 `coord-portal` (ENAM), R2 `coord-portal-artifacts`
+      — note R2 must be **enabled in the dashboard** before a bucket can be created; D1 needs no
+      such step
+- [x] Migrations applied remotely; `wrangler deploy`
+- [x] **DNS** — `heurontech.com` zone moved to Cloudflare (registrar stays Hostinger). Apex A
+      records, `www`, three Zoho MX and the verification TXT all replicated and **grey-cloud**.
+      Cloudflare's importer defaults A/CNAME records to *proxied* — they had to be set back to DNS
+      only, or the apex site would have gone behind the proxy on activation.
+- [x] `intake.heurontech.com` as a Worker custom domain (proxied — a route only fires on a proxied
+      record)
+- [ ] **Cloudflare Access** — two applications, see below
+- [x] Repo secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, plus repo variable
+      `PORTAL_URL`
 
-- [x] `npx wrangler login`
-- [x] `npx wrangler d1 create coord-portal` — `database_id` is in `wrangler.toml` (an
-      account-scoped identifier, not a secret)
-- [x] `npx wrangler r2 bucket create coord-portal-artifacts` — note R2 must be **enabled** in the
-      dashboard first, which D1 does not require
-- [x] `npx wrangler d1 migrations apply coord-portal --remote`
-- [x] `npx wrangler deploy`
-- [ ] **DNS** — point a `heurontech.com` subdomain at the Worker. Requires moving the zone to
-      Cloudflare: Access only works on a Cloudflare zone, and per-subdomain (CNAME) delegation is a
-      Business-plan feature.
-- [ ] **Cloudflare Access** in front of the hostname. **Set `workers_dev = false` in the same
-      change** — otherwise the `*.workers.dev` URL stays reachable and bypasses Access entirely.
-- [x] Repo secrets `CLOUDFLARE_API_TOKEN` (scoped: Workers Scripts edit, D1 edit, R2 read, Account
-      Settings read) and `CLOUDFLARE_ACCOUNT_ID`, plus repo variable `PORTAL_URL`
+**Token scope** (least privilege that actually works): Account → Workers Scripts **Edit**, D1
+**Edit**, Workers R2 Storage **Read**, Account Settings **Read**; Zone → Workers Routes **Edit**,
+scoped to `heurontech.com` only. That last one is required by the custom domain — without it
+`wrangler deploy` uploads the Worker and then fails registering the route.
+
+### Access
+
+> **⚠️ NOT YET CONFIGURED — the site is public and unauthenticated.** Acceptable for a version
+> string and a schema number. **It stops being acceptable the moment anything stores a customer's
+> words**, so this must land before the design-round work in #1983.
+
+Two applications, not one — Cloudflare matches most-specific-first:
+
+| Application | Path | Policy |
+|---|---|---|
+| `intake.heurontech.com/api/health` | health only | **Bypass** — everyone |
+| `intake.heurontech.com` | everything else | **Allow** — permitted emails |
+
+The bypass is **required, not a convenience**: without it CI's post-deploy health check receives a
+login page and every deploy fails. Health exposes a version and a schema version, nothing about any
+customer.
+
+Until #1981 verifies the Access JWT in the Worker, **Access is the only control** — deleting or
+misconfiguring that policy silently reopens the site, because the Worker cannot currently tell a
+genuine Access request from a forged one. See `src/identity.ts`.
 
 `Deploy` triggers on `push: main` and `workflow_dispatch` **only — never `pull_request`**, so a fork
 PR cannot reach the token. Do not add one.
