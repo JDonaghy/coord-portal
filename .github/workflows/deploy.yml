@@ -1,0 +1,72 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: wrangler deploy
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - id: guard
+        # The Cloudflare account is not wired up yet. Skip rather than fail, so
+        # main stays green until `CLOUDFLARE_API_TOKEN` and
+        # `CLOUDFLARE_ACCOUNT_ID` are set in repo secrets — see README.
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN not set — skipping deploy"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.guard.outputs.configured == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.guard.outputs.configured == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        if: steps.guard.outputs.configured == 'true'
+
+      - name: Apply D1 migrations
+        if: steps.guard.outputs.configured == 'true'
+        run: npx wrangler d1 migrations apply coord-portal --remote --env production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy Worker
+        if: steps.guard.outputs.configured == 'true'
+        run: npx wrangler deploy --env production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Verify the deploy answers
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          URL: ${{ vars.PORTAL_URL }}
+        run: |
+          if [ -z "$URL" ]; then
+            echo "::notice::PORTAL_URL variable not set — skipping post-deploy check"
+            exit 0
+          fi
+          for i in 1 2 3 4 5; do
+            if curl -fsS "$URL/api/health" | tee /dev/stderr | grep -q '"ok": true'; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::$URL/api/health did not report ok after deploy"
+          exit 1

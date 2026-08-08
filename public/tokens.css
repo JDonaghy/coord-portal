@@ -1,0 +1,141 @@
+/* coord-portal — design tokens.
+ *
+ * Same hues and semantic names as coord's engineer-facing surface
+ * (claude-coordinator docs/mocks/web/_tokens.css) so the two read as one
+ * product — but LIGHT IS THE DEFAULT here, and that inversion is deliberate.
+ * The engineer surface is a cockpit someone stares at all day; this is a page a
+ * customer opens three times a month, usually on a phone, often outdoors. Dark
+ * remains a real designed theme, not an inversion, and follows the OS.
+ */
+
+:root {
+  --ground:      #f7f9fb;
+  --surface:     #ffffff;
+  --surface-2:   #eff3f7;
+  --surface-3:   #e3e9ef;
+  --line:        #d7dee6;
+  --line-strong: #b9c4cf;
+
+  --text:       #1b2229;
+  --text-dim:   #5a6874;
+  --text-faint: #8b97a5;
+
+  --accent:      #1f7d92;
+  --accent-dim:  #2d7688;
+  --accent-wash: rgba(31, 125, 146, 0.10);
+
+  --pass:      #3d8b62;
+  --pass-wash: rgba(61, 139, 98, 0.12);
+  --attn:      #a9762c;
+  --attn-wash: rgba(169, 118, 44, 0.14);
+  --fail:      #b8433f;
+  --fail-wash: rgba(184, 67, 63, 0.12);
+  --idle:      #7a8792;
+  --idle-wash: rgba(122, 135, 146, 0.12);
+
+  --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+             "Helvetica Neue", Arial, sans-serif;
+  /* mono is reserved for values the machine owns */
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+               "Liberation Mono", monospace;
+
+  --step--1: 0.8125rem;
+  --step-0:  0.9375rem;
+  --step-1:  1.0625rem;
+  --step-2:  1.375rem;
+  --step-3:  1.75rem;
+
+  --r-sm: 5px;
+  --r-md: 8px;
+  --r-lg: 12px;
+
+  --gap: 1rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground:      #101418;
+    --surface:     #171c22;
+    --surface-2:   #1e242b;
+    --surface-3:   #252d36;
+    --line:        #2a323b;
+    --line-strong: #3a444f;
+
+    --text:       #dfe6ee;
+    --text-dim:   #8b97a5;
+    --text-faint: #5f6b78;
+
+    --accent:      #4fb8cf;
+    --accent-dim:  #2d7688;
+    --accent-wash: rgba(79, 184, 207, 0.12);
+
+    --pass:      #4ea87a;
+    --pass-wash: rgba(78, 168, 122, 0.14);
+    --attn:      #d9a54c;
+    --attn-wash: rgba(217, 165, 76, 0.14);
+    --fail:      #d9605e;
+    --fail-wash: rgba(217, 96, 94, 0.14);
+    --idle:      #55606d;
+    --idle-wash: rgba(85, 96, 109, 0.14);
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: clamp(1.5rem, 5vw, 3rem) 1.25rem;
+  background: var(--ground);
+  color: var(--text);
+  font: var(--step-0)/1.6 var(--font-ui);
+  -webkit-text-size-adjust: 100%;
+}
+
+main { max-width: 44rem; margin: 0 auto; }
+
+h1 {
+  font-size: var(--step-3);
+  line-height: 1.25;
+  margin: 0 0 0.35em;
+  letter-spacing: -0.01em;
+}
+
+.lede { color: var(--text-dim); font-size: var(--step-1); margin: 0 0 2rem; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 1.25rem;
+  margin-bottom: var(--gap);
+}
+
+.card h2 {
+  font-size: var(--step-0);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 0 0 0.75rem;
+}
+
+dl.probe { display: grid; grid-template-columns: auto 1fr; gap: 0.4rem 1rem; margin: 0; }
+dl.probe dt { color: var(--text-dim); }
+dl.probe dd { margin: 0; font-family: var(--font-mono); font-size: var(--step--1); }
+
+.pill {
+  display: inline-block;
+  padding: 0.1em 0.6em;
+  border-radius: 999px;
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+.pill[data-state="ok"]      { background: var(--pass-wash); color: var(--pass); }
+.pill[data-state="degraded"]{ background: var(--fail-wash); color: var(--fail); }
+.pill[data-state="loading"] { background: var(--idle-wash); color: var(--idle); }
+
+footer {
+  margin-top: 2.5rem;
+  color: var(--text-faint);
+  font-size: var(--step--1);
+}
+footer a { color: var(--accent); }
