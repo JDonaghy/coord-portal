@@ -10,6 +10,19 @@ name = "coord-portal"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 
+# The Worker answers ONLY on the custom domain.
+#
+# `workers_dev = false` is not tidiness — it is load-bearing. Cloudflare Access
+# protects a hostname, so while coord-portal.johnfdonaghy.workers.dev stays
+# enabled it is a second, unprotected front door to the same Worker that
+# bypasses every Access policy below. This line and the route must always change
+# together.
+workers_dev = false
+
+[[routes]]
+pattern = "intake.heurontech.com"
+custom_domain = true
+
 # NO NAMED ENVIRONMENTS, DELIBERATELY. Wrangler does not inherit bindings into
 # `[env.x]` — an `[env.production]` block that omits `d1_databases`/`r2_buckets`
 # deploys a Worker with neither, silently. One config, one deployment target, no
