@@ -107,6 +107,30 @@ export function page(title: string, main: string): string {
   }
   a.button.primary { background: var(--accent); color: white; }
   a.button.secondary { border: 1px solid var(--line-strong); color: var(--text); }
+
+  .page-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1.5rem; }
+  ul.submission-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+  .submission-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    text-decoration: none; color: inherit;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1rem 1.25rem;
+  }
+  .submission-row:hover { border-color: var(--line-strong); }
+  .submission-row .title { font-weight: 600; }
+  .submission-row .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  .row-main { display: grid; gap: 0.2rem; }
+
+  .status-pill[data-status="in-design"]        { background: var(--accent-wash); color: var(--accent-dim); }
+  .status-pill[data-status="awaiting-signoff"] { background: var(--attn-wash);   color: var(--attn); }
+  .status-pill[data-status="planned"]          { background: var(--idle-wash);   color: var(--idle); }
+  .status-pill[data-status="in-progress"]      { background: var(--accent-wash); color: var(--accent-dim); }
+  .status-pill[data-status="quality-check"]    { background: var(--accent-wash); color: var(--accent-dim); }
+  .status-pill[data-status="needs-input"]      { background: var(--attn-wash);   color: var(--attn); }
+  .status-pill[data-status="shipped"]          { background: var(--pass-wash);   color: var(--pass); }
+  .status-pill[data-status="on-hold"]          { background: var(--idle-wash);   color: var(--idle); }
+
+  .back-link { font-size: var(--step--1); display: inline-block; margin-bottom: 1rem; }
 </style>
 </head>
 <body>
