@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Get in touch — coord-portal</title>
+<!-- MOCK — Gate-A screen state: the form redisplayed after POST /start was
+     REJECTED — no lead created. Same route as 01, same "no Access identity"
+     rule applies. This is the one screen issue #32 pins directly: "creates no
+     lead and says so plainly without explaining what a valid token would look
+     like." One generic banner covers every rejection reason (missing token,
+     malformed token, reused token, failed siteverify, AND the per-IP rate
+     limit) — see contract.md "Bot gate + rate limit" for why this mock does
+     not ship a second banner variant. -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar-public {
+    display: flex; align-items: center;
+    max-width: 40rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar-public .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+
+  main { max-width: 40rem; }
+
+  form.lead { display: grid; gap: 1.25rem; }
+  .field { display: grid; gap: 0.4rem; }
+  .field label { font-weight: 600; font-size: var(--step--1); color: var(--text); }
+  .field textarea, .field input[type="text"], .field input[type="email"] {
+    font: inherit; padding: 0.65rem 0.75rem; border-radius: var(--r-md);
+    border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
+    resize: vertical;
+  }
+  .optional-tag {
+    font-size: var(--step--1); color: var(--text-faint); font-weight: 400;
+    border: 1px solid var(--line); border-radius: 999px; padding: 0 0.5em; margin-left: 0.5em;
+  }
+
+  .turnstile-block {
+    display: grid; place-items: center; gap: 0.4rem;
+    border: 1px dashed var(--line-strong); border-radius: var(--r-md);
+    padding: 1rem; background: var(--surface-2); color: var(--text-faint); font-size: var(--step--1);
+  }
+  .turnstile-block .cf-turnstile { width: 300px; height: 65px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); display: grid; place-items: center; }
+
+  .actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.5rem; }
+  button.primary {
+    background: var(--accent); color: white; border: none; border-radius: var(--r-md);
+    padding: 0.65rem 1.25rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+
+  .lead-error {
+    background: var(--fail-wash); color: var(--fail); border: 1px solid var(--fail);
+    border-radius: var(--r-md); padding: 0.85rem 1rem; font-size: var(--step--1);
+    margin-bottom: 1.5rem; font-weight: 600;
+  }
+</style>
+</head>
+<body>
+<header class="topbar-public">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+</header>
+<main>
+  <h1>Tell us what you need</h1>
+  <p class="lede">No account, no login — just say what you're trying to get done and how to
+    reach you. A person reads every one of these.</p>
+
+  <p class="lead-error" data-testid="lead-error" role="alert">
+    We couldn't send that — please try again.
+  </p>
+
+  <form class="lead" method="POST" action="/start" data-testid="lead-form" aria-label="Get in touch">
+    <div class="field">
+      <label for="summary">What are you trying to get done?</label>
+      <textarea id="summary" name="summary" rows="4" required
+        data-testid="field-lead-summary"
+        placeholder="Plain language is fine — what do you want built or fixed?">A booking calendar our clients can self-serve, synced to the one we already use.</textarea>
+    </div>
+
+    <div class="field">
+      <label for="email">Best email to reach you</label>
+      <input id="email" name="email" type="email" required
+        data-testid="field-lead-email"
+        value="priya@example.test">
+    </div>
+
+    <div class="field">
+      <label for="name">Name <span class="optional-tag">optional</span></label>
+      <input id="name" name="name" type="text"
+        data-testid="field-lead-name"
+        value="Priya">
+    </div>
+
+    <div class="turnstile-block">
+      <div class="cf-turnstile" data-testid="turnstile-widget" data-sitekey="1x00000000000000000000AA">Turnstile widget (fresh — tokens are single-use)</div>
+      <span>Verified server-side on submit — see contract.md "Bot gate"</span>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="primary" data-testid="submit-lead">Send</button>
+    </div>
+  </form>
+</main>
+</body>
+</html>
