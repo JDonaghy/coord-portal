@@ -22,6 +22,18 @@ issues:
     - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › a submission is a durable record, not a live session"
     - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › a fresh submission shows the customer no design round"
     - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › no engineer-side identifier reaches the intake surface"
+  12:
+    - "[chromium] ms-1/12-access-auth.spec.ts › ms-1 issue 12 access auth › the signed-in identity comes from Cloudflare Access, not from a portal login"
+    - "[chromium] ms-1/12-access-auth.spec.ts › ms-1 issue 12 access auth › every authenticated screen names the signed-in customer"
+    - "[chromium] ms-1/12-access-auth.spec.ts › ms-1 issue 12 access auth › the portal offers no self-serve signup"
+    - "[chromium] ms-1/12-access-auth.spec.ts › ms-1 issue 12 access auth › identity is read per request, with no portal session to hold it"
+    - "[chromium] ms-1/12-access-auth.spec.ts › ms-1 issue 12 access auth › whoami reports the same identity the screens render"
+    - "[chromium] ms-1/12-access-auth.spec.ts › ms-1 issue 12 access auth › the dashboard lists only the caller's own submissions"
+    - "[chromium] ms-1/12-access-auth.spec.ts › ms-1 issue 12 access auth › one customer cannot open another customer's submission by URL"
+    - "[chromium] ms-1/12-access-auth.spec.ts › ms-1 issue 12 access auth › one customer cannot read another customer's round history"
+    - "[chromium] ms-1/12-access-auth.spec.ts › ms-1 issue 12 access auth › a request with no Access identity gets no customer data"
+    - "[chromium] ms-1/12-access-auth.spec.ts › ms-1 issue 12 access auth › the health check is the only unauthenticated bypass"
+    - "[chromium] ms-1/12-access-auth.spec.ts › ms-1 issue 12 access auth › no query parameter widens the dashboard past the caller"
   15:
     - "[chromium] ms-1/15-sync-bridge.spec.ts › ms-1 issue 15 sync bridge › an unauthenticated request is 401 on every bridge route"
     - "[chromium] ms-1/15-sync-bridge.spec.ts › ms-1 issue 15 sync bridge › a customer Access identity is not a bridge credential"
