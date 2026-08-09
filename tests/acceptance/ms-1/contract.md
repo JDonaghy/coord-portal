@@ -165,21 +165,117 @@ send. This is a black-box invariant: a test may assert that no other status tran
   component is compatible with this contract as long as each screen's pinned `data-testid`s and
   text still resolve.
 
-## Sync bridge (issue #15) — explicitly not fully pinned
+## Sync bridge (issue #15) — pinned wire contract
 
-Issue #15 itself states the endpoints are "shape, not final signature": Pull (submissions/sign-offs
-since a cursor), Push (pipeline status/design rounds, applied idempotently), Heartbeat. This
-contract pins only the constraints the issue commits to, because inventing a concrete path/method
-beyond that would be resolving an open question this Gate-A was told not to resolve:
-- cursor-based, replay-safe: every request may arrive twice, and the second must be a no-op
-- sole-writer per field: the portal owns customer-authored facts (submissions, sign-offs,
-  comments, answers); coord owns engineer-authored facts (decomposition, pipeline status,
-  questions). A write to a field the receiving side does not own must be rejected, not merged.
-- auth is a Cloudflare Access **service token**, scoped to bridge endpoints only.
+Amended: issue #15's body now carries a section headed "## Wire contract (pinned 2026-08-08)",
+jointly owned with the daemon side (`JDonaghy/claude-coordinator#1982`) — neither side may change
+it unilaterally. That section supersedes the earlier "shape, not final signature" caveat this
+contract originally carried for #15; it is pinned here in full because `docs/ORACLE_LOOP.md`
+requires this contract to pin exact API field shapes where the source issue commits to them, and
+#15 now does.
 
-No screen in `mocks/` renders the sync bridge directly — it has no customer-visible surface. It is
-listed here only because `docs/ORACLE_LOOP.md` requires this contract to also pin "API field
-shapes" where they exist in the source issues, and this is the one place they do, however loosely.
+All routes are under `/api/bridge`, JSON request/response bodies throughout.
+
+### Auth — Access service token
+
+Presented as headers `CF-Access-Client-Id` / `CF-Access-Client-Secret`, checked against a third
+Access application scoped to `intake.heurontech.com/api/bridge` with a **Service Auth** policy —
+separate from the site application and the `/api/health` bypass; that path must never widen into
+a general bypass. Missing or invalid credentials ⇒ **401**, empty body, no detail about what was
+wrong. This is the *only* status-code-level failure in this surface — see the trap note below.
+
+### `GET /api/bridge/pull`
+
+Query: `cursor` (opaque, optional — absent means from the beginning), `limit` (1–200, default 50).
+
+Response, 200:
+```json
+{
+  "events": [
+    {
+      "id": "evt_01H…",
+      "revision": 41,
+      "type": "submission.created",
+      "submission_id": "SUB-7F3A2C",
+      "occurred_at": "2026-08-08T19:04:11Z",
+      "payload": { }
+    }
+  ],
+  "cursor": "…",
+  "has_more": false
+}
+```
+
+- `type` ∈ `submission.created` · `signoff.approved` · `signoff.changes_requested` ·
+  `question.answered` — customer-authored facts only; the portal never emits an event about a
+  coord-owned fact.
+- Ordered by `revision` ascending. `revision` is monotonic and never reused.
+- **Replay-safe from a cursor:** pulling the same cursor twice returns the same events. A test may
+  assert this directly (pull twice with the same cursor, diff the results).
+
+### `POST /api/bridge/push`
+
+Request:
+```json
+{ "updates": [ { "submission_id": "SUB-7F3A2C", "revision": 12, "fields": { "status": "in-progress" } } ] }
+```
+
+Response, 200, one result per update, in request order:
+```json
+{ "results": [ { "submission_id": "SUB-7F3A2C", "outcome": "applied" } ] }
+```
+
+- `outcome` ∈ `applied` · `already_applied` · `rejected` (`rejected` carries `reason`).
+- **Idempotent by `(submission_id, revision)`:** a revision less than or equal to the stored one is
+  `already_applied` — not an error. Assume every request arrives twice.
+- **Whole-update atomicity:** if any field in an update is rejected, nothing in that update is
+  applied — a partial write must not sneak through on the back of a valid sibling field.
+- An ownership violation is `rejected` with `reason: "not_owned:<field>"`.
+
+### `POST /api/bridge/heartbeat`
+
+Request: `{ "at": "2026-08-08T19:04:11Z" }` → Response, 200: `{ "ok": true }`. The portal records
+last-seen; past a threshold it must say the daemon looks stale rather than keep rendering old
+state as current.
+
+### Ownership — sole-writer table (pinned, both directions)
+
+| Portal owns (coord may **never** write) | Coord owns (portal may **never** write) |
+|---|---|
+| `outcome`, `audience`, `done_definition`, `constraints`, `project_scope` | `status` |
+| `signoff_verdict`, `signoff_comment` | `decomposition` |
+| `answer` | `question` |
+| | `design_round`, `artifacts` |
+
+Nothing is co-written, so there is no merge problem and no split-brain. Enforcement of this table
+is issue #8.
+
+### Traps for the test-author
+
+- **An ownership violation and a stale revision are both HTTP 200**, not 4xx. `rejected` and
+  `already_applied` are per-item `outcome` values inside a 200 batch response, not transport
+  failures. Only a missing/invalid service token produces a status code (401) — a spec that
+  asserts "rejected write ⇒ 4xx" is wrong against this contract.
+- **This surface has no customer-visible screen.** Nothing in `mocks/` renders the bridge, and
+  this amendment adds no new mock — none is needed or wanted. Drive this slice through
+  Playwright's `APIRequestContext` directly against `/api/bridge/*`, not through a page/browser
+  context.
+
+### Non-negotiable (from issue #15)
+
+- **No inbound path.** No webhook, no callback URL, no "push endpoint" for the daemon to
+  register — not even behind a shared secret. If latency feels bad, the daemon polls faster.
+- **No customer material in git.** Any acceptance fixtures for this slice must be synthetic.
+
+### Acceptance (from issue #15)
+
+Black-box against the running Worker with a real local D1: an unauthenticated request gets 401; a
+pull returns only events after the cursor and returns the same events when replayed; the same push
+applied twice yields `applied` then `already_applied` with one stored change; a push touching a
+portal-owned field is `rejected` and leaves every field of that update unchanged; a heartbeat is
+recorded.
+
+Design of record: `docs/CUSTOMER_PORTAL.md` in `claude-coordinator` (§ *The sync bridge*).
 
 ## Notes — open questions and ambiguities (not resolved by this contract)
 
