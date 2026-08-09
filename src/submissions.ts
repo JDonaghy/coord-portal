@@ -34,12 +34,50 @@ export const SUBMISSION_STATUS_TEXT = {
 
 export type SubmissionStatus = keyof typeof SUBMISSION_STATUS_TEXT
 
+/** Every slug, in the contract's pinned order. */
+export const SUBMISSION_STATUSES = Object.keys(
+  SUBMISSION_STATUS_TEXT,
+) as SubmissionStatus[]
+
 export function isSubmissionStatus(value: unknown): value is SubmissionStatus {
   return typeof value === "string" && value in SUBMISSION_STATUS_TEXT
 }
 
 export function statusText(status: SubmissionStatus): string {
   return SUBMISSION_STATUS_TEXT[status]
+}
+
+/**
+ * "Only `Awaiting your sign-off` and `Needs your input` are customer-actionable"
+ * (Gate-A contract, § Customer status vocabulary). Everything else is a
+ * read-only status report.
+ */
+const ACTIONABLE_STATUSES = new Set<SubmissionStatus>(["awaiting-signoff", "needs-input"])
+
+export function isActionableStatus(status: SubmissionStatus): boolean {
+  return ACTIONABLE_STATUSES.has(status)
+}
+
+/** "Only `Shipped` is terminal" (same table). */
+export function isTerminalStatus(status: SubmissionStatus): boolean {
+  return status === "shipped"
+}
+
+/**
+ * The four non-actionable, non-terminal states that "share one read-only
+ * template" per the contract's note on `04-submission-in-design.html`:
+ * request-changes reviews, merge conflicts and CI churn stay hidden inside
+ * these while the daemon works.
+ */
+export const ROLLUP_STATUSES: SubmissionStatus[] = [
+  "in-design",
+  "planned",
+  "in-progress",
+  "quality-check",
+]
+
+export function isRollupStatus(status: SubmissionStatus): boolean {
+  return (ROLLUP_STATUSES as SubmissionStatus[]).includes(status)
 }
 
 export interface Submission {
@@ -222,4 +260,48 @@ export async function getSubmissionByReference(
     .bind(reference)
     .first<SubmissionRow>()
   return row ? fromRow(row) : null
+}
+
+/**
+ * The intake form collects an outcome, not a title (contract note 3: no
+ * portal-internal field schema is pinned). The first line of the outcome text
+ * is close enough to a title for a list row or a detail heading, truncated so
+ * one very long paragraph cannot blow out the layout.
+ *
+ * Shared by the dashboard rows and the submission detail screens so the same
+ * submission reads with the same title everywhere.
+ */
+export function titleOf(submission: Submission): string {
+  const firstLine = submission.outcome.split("\n")[0]?.trim() || submission.outcome
+  return firstLine.length > 80 ? `${firstLine.slice(0, 79)}…` : firstLine
+}
+
+/**
+ * One coord-owned fact this milestone has no dedicated column for (issue #10:
+ * `onhold_since`; #10/#13 also read `question`, `design_round`, `decomposition`,
+ * `artifacts` here as they build out their own screens) — see
+ * `migrations/0003_sync_bridge.sql` and `src/bridge/updates.ts`, which is the
+ * only writer.
+ *
+ * Returns the parsed JSON value, or `null` if the daemon has never pushed this
+ * field for this submission. A value of JSON `null` (explicitly pushed) and "no
+ * row at all" both read back as `null` here — this milestone's screens have no
+ * need to tell them apart yet.
+ */
+export async function getCoordFact(
+  env: Env,
+  submissionReference: string,
+  field: string,
+): Promise<unknown> {
+  const row = await env.DB.prepare(
+    `SELECT value FROM coord_facts WHERE submission_id = ? AND field = ?`,
+  )
+    .bind(submissionReference, field)
+    .first<{ value: string }>()
+  if (!row) return null
+  try {
+    return JSON.parse(row.value)
+  } catch {
+    return null
+  }
 }
