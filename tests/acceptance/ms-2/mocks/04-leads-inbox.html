@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leads — coord-portal</title>
+<!-- MOCK — Gate-A screen state: operator lead inbox. Route: GET /leads
+     Operator-only, per issue #33 ("An operator-facing list of leads with
+     enough of each to decide"). Sits behind Cloudflare Access like the
+     customer surface, but scoped to the operator identity, not a customer's
+     own submissions — see contract.md "Operator access" for how this contract
+     resolves an auth mechanism the issues themselves leave unspecified. -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; gap: 1.25rem;
+    max-width: 48rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; gap: 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+
+  main { max-width: 48rem; }
+  .page-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1.5rem; }
+
+  ul.leads-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+  .lead-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1rem 1.25rem;
+  }
+  .lead-row .row-main { display: grid; gap: 0.3rem; max-width: 32rem; }
+  .lead-row .summary { font-weight: 600; }
+  .lead-row .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  .lead-row .row-side { display: flex; align-items: center; gap: 1rem; }
+
+  .lead-status-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.25em 0.75em; border-radius: 999px;
+    font-size: var(--step--1); font-weight: 600;
+  }
+  .lead-status-pill[data-status="new"]      { background: var(--idle-wash); color: var(--idle); }
+  .lead-status-pill[data-status="promoted"] { background: var(--pass-wash); color: var(--pass); }
+
+  a.button {
+    display: inline-block; text-decoration: none; border-radius: var(--r-md);
+    padding: 0.5rem 0.9rem; font-weight: 600; font-size: var(--step--1);
+    border: 1px solid var(--line-strong); color: var(--text);
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/leads" aria-current="page" data-testid="nav-leads">Leads</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ops@example.test</span>
+</header>
+<main>
+  <div class="page-head">
+    <h1>Leads</h1>
+  </div>
+  <p class="lede">Everything a stranger has sent in through <code>/start</code>. Promote the ones worth doing.</p>
+
+  <ul class="leads-list" data-testid="leads-list">
+    <li>
+      <div class="lead-row" data-testid="lead-row" data-status="new">
+        <div class="row-main">
+          <span class="summary" data-testid="lead-summary">A booking calendar our clients can self-serve, synced to the one we already use.</span>
+          <span class="meta">
+            <span data-testid="lead-contact-email">priya@example.test</span>
+            &middot; LEAD-3C81E2 &middot;
+            <span data-testid="lead-submitted-at">2026-08-07T14:02:11Z</span>
+          </span>
+        </div>
+        <div class="row-side">
+          <span class="lead-status-pill" data-testid="lead-status-pill" data-status="new">New</span>
+          <a class="button" href="/leads/lead_3c81e2" data-testid="review-lead">Review</a>
+        </div>
+      </div>
+    </li>
+    <li>
+      <div class="lead-row" data-testid="lead-row" data-status="new">
+        <div class="row-main">
+          <span class="summary" data-testid="lead-summary">Our returns page confuses people — want it rebuilt as a short guided flow.</span>
+          <span class="meta">
+            <span data-testid="lead-contact-email">noor@example.test</span>
+            &middot; LEAD-9F2A6C &middot;
+            <span data-testid="lead-submitted-at">2026-08-08T09:41:55Z</span>
+          </span>
+        </div>
+        <div class="row-side">
+          <span class="lead-status-pill" data-testid="lead-status-pill" data-status="new">New</span>
+          <a class="button" href="/leads/lead_9f2a6c" data-testid="review-lead">Review</a>
+        </div>
+      </div>
+    </li>
+    <li>
+      <div class="lead-row" data-testid="lead-row" data-status="promoted">
+        <div class="row-main">
+          <span class="summary" data-testid="lead-summary">Need a second brand's storefront copy proofread and shipped before launch.</span>
+          <span class="meta">
+            <span data-testid="lead-contact-email">sam@example.test</span>
+            &middot; LEAD-B4F701 &middot;
+            <span data-testid="lead-submitted-at">2026-08-05T11:16:40Z</span>
+          </span>
+        </div>
+        <div class="row-side">
+          <span class="lead-status-pill" data-testid="lead-status-pill" data-status="promoted">Promoted</span>
+          <a class="button" href="/leads/lead_b4f701" data-testid="review-lead">Review</a>
+        </div>
+      </div>
+    </li>
+  </ul>
+</main>
+</body>
+</html>

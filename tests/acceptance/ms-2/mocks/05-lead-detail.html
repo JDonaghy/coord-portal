@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LEAD-3C81E2 — coord-portal</title>
+<!-- MOCK — Gate-A screen state: lead detail BEFORE promotion. Route: GET /leads/:id
+     data-status="new". This is where issue #33's non-negotiable lives: "the
+     promote surface must tell the operator, in the flow, that the customer
+     cannot log in until their email is added to the Access policy." Shown
+     here BEFORE the operator commits (see also 06 for the confirmation shown
+     AFTER). -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; gap: 1.25rem;
+    max-width: 40rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; gap: 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+
+  main { max-width: 40rem; }
+  .back-link { font-size: var(--step--1); display: inline-block; margin-bottom: 1rem; }
+
+  .lead-status-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.25em 0.75em; border-radius: 999px;
+    font-size: var(--step--1); font-weight: 600;
+  }
+  .lead-status-pill[data-status="new"]      { background: var(--idle-wash); color: var(--idle); }
+  .lead-status-pill[data-status="promoted"] { background: var(--pass-wash); color: var(--pass); }
+
+  .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); margin: 0.35rem 0 1.5rem; }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1.25rem; margin-bottom: 1.25rem;
+  }
+  .card dt { font-weight: 600; font-size: var(--step--1); color: var(--text-dim); margin-top: 0.75rem; }
+  .card dt:first-child { margin-top: 0; }
+  .card dd { margin: 0.2rem 0 0; }
+
+  .access-seat-reminder {
+    background: var(--attn-wash); color: var(--attn); border: 1px solid var(--attn);
+    border-radius: var(--r-md); padding: 0.85rem 1rem; font-size: var(--step--1);
+    margin-bottom: 1.25rem;
+  }
+
+  form.promote { display: flex; justify-content: flex-end; }
+  button.primary {
+    background: var(--accent); color: white; border: none; border-radius: var(--r-md);
+    padding: 0.65rem 1.25rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/leads" aria-current="page" data-testid="nav-leads">Leads</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ops@example.test</span>
+</header>
+<main data-testid="lead-detail" data-status="new">
+  <a class="back-link" href="/leads" data-testid="back-to-leads">&larr; Leads</a>
+
+  <span class="lead-status-pill" data-testid="lead-status-pill" data-status="new">New</span>
+  <h1>A booking calendar our clients can self-serve, synced to the one we already use.</h1>
+  <p class="meta" data-testid="lead-reference">LEAD-3C81E2 &middot; sent <span data-testid="lead-submitted-at">2026-08-07T14:02:11Z</span></p>
+
+  <dl class="card">
+    <dt>What they said</dt>
+    <dd data-testid="lead-summary-full">A booking calendar our clients can self-serve, synced to the one we already use. Right now it's all back-and-forth by phone and it's easy to double-book.</dd>
+    <dt>Contact email</dt>
+    <dd data-testid="lead-contact-email">priya@example.test</dd>
+    <dt>Name</dt>
+    <dd data-testid="lead-name">Priya</dd>
+  </dl>
+
+  <p class="access-seat-reminder" data-testid="access-seat-reminder">
+    Promoting creates a submission — it does not grant sign-in. You'll still need to add
+    priya@example.test to the Access policy by hand before she can log in and see it.
+  </p>
+
+  <form class="promote" method="POST" action="/leads/lead_3c81e2/promote" data-testid="promote-lead-form">
+    <button type="submit" class="primary" data-testid="promote-button">Promote to submission</button>
+  </form>
+</main>
+</body>
+</html>

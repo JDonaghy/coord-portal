@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thanks — coord-portal</title>
+<!-- MOCK — Gate-A screen state: post-submit lead receipt. Route: POST /start
+     (rendered directly in the 200 response — issue #31's Scope names exactly
+     two routes, GET /start and POST /start, so there is no GET /start/:id to
+     redirect to. See contract.md "Route surface" note on this.)
+     Still fully unauthenticated: no identity, no nav, no hint that any other
+     lead or customer exists anywhere. -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar-public {
+    display: flex; align-items: center;
+    max-width: 40rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar-public .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+
+  main { max-width: 40rem; }
+
+  .receipt { text-align: center; padding: 2rem 1rem; }
+  .receipt .ref {
+    font-family: var(--font-mono); color: var(--text-faint); font-size: var(--step--1);
+    margin: 0.5rem 0 1.5rem;
+  }
+  .receipt h1 { margin-bottom: 0.5rem; }
+  .receipt p.lede { max-width: 32rem; margin: 0 auto 1.5rem; }
+  .actions { display: flex; justify-content: center; }
+  a.button {
+    display: inline-block; text-decoration: none; border-radius: var(--r-md);
+    padding: 0.6rem 1.1rem; font-weight: 600; font-size: var(--step--1);
+    border: 1px solid var(--line-strong); color: var(--text);
+  }
+</style>
+</head>
+<body>
+<header class="topbar-public">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+</header>
+<main>
+  <section class="receipt" data-testid="lead-receipt">
+    <h1>Got it — thanks for reaching out</h1>
+    <p class="ref" data-testid="lead-reference">Reference LEAD-9F2A6C</p>
+    <p class="lede">
+      There's no account to check and nothing to log into. If you want to follow up,
+      just quote <strong>LEAD-9F2A6C</strong> in an email and it'll find its way back to this.
+    </p>
+    <div class="actions">
+      <a class="button" href="/" data-testid="back-home">Back home</a>
+    </div>
+  </section>
+</main>
+</body>
+</html>
