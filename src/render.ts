@@ -150,6 +150,14 @@ export function page(title: string, main: string): string {
     border: 1px dashed var(--line-strong); color: var(--text-faint); font-size: var(--step--1);
     border-radius: var(--r-md); padding: 0.6rem 0.85rem; margin-top: 1rem;
   }
+
+  .pause-banner {
+    background: var(--attn-wash); color: var(--attn); font-weight: 600;
+    border: 1px solid var(--attn); border-radius: var(--r-md);
+    padding: 0.75rem 1rem; margin-bottom: 1.25rem;
+  }
+  .question-thread .question-text { white-space: pre-wrap; margin: 0 0 1.25rem; }
+  .answer-form textarea { width: 100%; }
 </style>
 </head>
 <body>

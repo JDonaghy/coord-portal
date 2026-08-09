@@ -1,6 +1,6 @@
 import { submissionsDashboard } from "./routes/dashboard"
 import { intakeForm, submitIntake } from "./routes/intake"
-import { submissionDetail, submissionRounds } from "./routes/submission"
+import { submissionDetail, submissionRounds, submitAnswer } from "./routes/submission"
 import type { Env } from "./types"
 
 const SUBMISSION_ROUNDS_PATH = /^\/submissions\/([^/?#]+)\/rounds$/
@@ -38,9 +38,13 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
   }
 
   const submissionMatch = pathname.match(SUBMISSION_PATH)
-  if (submissionMatch && request.method === "GET") {
+  if (submissionMatch) {
     const id = submissionMatch[1]
-    if (id) return submissionDetail(request, env, id)
+    if (id && request.method === "GET") return submissionDetail(request, env, id)
+    // POST /submissions/:id — answering an open question (issue #11). Same
+    // path as the GET above, same "form posts back to its own route"
+    // convention `/intake` already uses.
+    if (id && request.method === "POST") return submitAnswer(request, env, id)
   }
 
   return null
