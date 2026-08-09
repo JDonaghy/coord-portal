@@ -1,4 +1,6 @@
+import { bridgeUnauthorized, isBridgeAuthorized } from "./bridge/auth"
 import type { Env } from "./types"
+import { bridgeHeartbeat, bridgePull, bridgePush } from "./routes/bridge"
 import { health } from "./routes/health"
 import { whoami } from "./routes/whoami"
 
@@ -7,7 +9,14 @@ export type Handler = (request: Request, env: Env) => Promise<Response> | Respon
 const ROUTES: Record<string, Partial<Record<string, Handler>>> = {
   "/api/health": { GET: health },
   "/api/whoami": { GET: whoami },
+  // The sync bridge (#15). Three routes, and there is deliberately no fourth:
+  // nothing here lets the daemon register an address for this side to call.
+  "/api/bridge/pull": { GET: bridgePull },
+  "/api/bridge/push": { POST: bridgePush },
+  "/api/bridge/heartbeat": { POST: bridgeHeartbeat },
 }
+
+const BRIDGE_PREFIX = "/api/bridge"
 
 export function json(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers)
@@ -20,6 +29,16 @@ export function json(body: unknown, init: ResponseInit = {}): Response {
 
 export async function handleApi(request: Request, env: Env): Promise<Response> {
   const { pathname } = new URL(request.url)
+
+  // The service-token gate covers the whole `/api/bridge` prefix, not just the
+  // three routes under it, and runs before routing. Two reasons: an
+  // unauthenticated caller learns nothing about which bridge paths exist (a 404
+  // is a yes/no answer), and a route added here later cannot be published
+  // unauthenticated by forgetting a line. `/api/bridge` authorises the bridge
+  // and nothing else — it must never widen into a general Access bypass.
+  if (isBridgePath(pathname) && !isBridgeAuthorized(request, env)) {
+    return bridgeUnauthorized()
+  }
 
   const methods = ROUTES[pathname]
   if (!methods) {
@@ -43,4 +62,8 @@ export async function handleApi(request: Request, env: Env): Promise<Response> {
     console.error(`unhandled error on ${request.method} ${pathname}:`, err)
     return json({ error: "internal_error" }, { status: 500 })
   }
+}
+
+function isBridgePath(pathname: string): boolean {
+  return pathname === BRIDGE_PREFIX || pathname.startsWith(`${BRIDGE_PREFIX}/`)
 }

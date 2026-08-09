@@ -1,6 +1,6 @@
 import { readAccessIdentity } from "../identity"
-import { html, page, topbar } from "../render"
-import { getSubmission } from "../submissions"
+import { escapeHtml, html, page, topbar } from "../render"
+import { getSubmission, statusText, type Submission } from "../submissions"
 import type { Env } from "../types"
 
 /**
@@ -8,13 +8,16 @@ import type { Env } from "../types"
  *
  * Issue #9 ends at "a reviewed draft round exists": the decomposition a
  * daemon-side agent proposes is reviewed by an engineer *before* it reaches
- * the customer (publishing it is #13). So at `describing` — the only status
- * this issue's write path can ever produce — there is no design-round surface
- * to render at all, matching the contract's `02-intake-received.html` mock
+ * the customer (publishing it is #13). So there is no design-round surface to
+ * render here at all, matching the contract's `02-intake-received.html` mock
  * exactly rather than the later `submission-detail` rollup template (`04`).
  *
- * A later status here is #13's job to render; nothing in this milestone can
- * move a submission past `describing`, so that branch does not exist yet.
+ * The richer per-status templates (the rollup timeline, the sign-off actions)
+ * are #10's and #13's job. What #15 changes here is narrower and unavoidable:
+ * the coordinator can now move `status` over the sync bridge, so the pill has
+ * to report what the row actually says. A hard-coded "Describing" on a
+ * submission the fleet has already shipped is exactly the confidently-stale
+ * screen the bridge's heartbeat exists to prevent.
  */
 export async function submissionDetail(
   request: Request,
@@ -30,14 +33,11 @@ export async function submissionDetail(
   return html(page(`${submission.reference} — coord-portal`, receipt(identity.email, submission)))
 }
 
-function receipt(
-  email: string | null,
-  submission: { id: string; reference: string },
-): string {
+function receipt(email: string | null, submission: Submission): string {
   return `${topbar(email, "none")}
 <main>
   <section class="receipt" data-testid="intake-receipt">
-    <p class="status-pill" data-testid="status-pill" data-status="describing">Describing</p>
+    <p class="status-pill" data-testid="status-pill" data-status="${escapeHtml(submission.status)}">${escapeHtml(statusText(submission.status))}</p>
     <h1>Got it — we're on it</h1>
     <p class="ref" data-testid="submission-reference">Reference ${submission.reference}</p>
     <p class="lede">
