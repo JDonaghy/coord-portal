@@ -22,6 +22,16 @@ issues:
     - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › a submission is a durable record, not a live session"
     - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › a fresh submission shows the customer no design round"
     - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › no engineer-side identifier reaches the intake surface"
+  10:
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › every customer status renders its pinned wording on the detail screen"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › no status outside the fixed vocabulary ever reaches the customer"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › only the two customer-actionable states ask the customer for anything"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › the four rollup states share one read-only template"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › internal churn stays hidden inside the rollup states"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › the dashboard renders each status with the same wording as its detail"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › a submission shows exactly one status at a time"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › the portal renders the status it is given and derives none of its own"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › On hold surfaces with the pinned wording or not at all"
   12:
     - "[chromium] ms-1/12-access-auth.spec.ts › ms-1 issue 12 access auth › the signed-in identity comes from Cloudflare Access, not from a portal login"
     - "[chromium] ms-1/12-access-auth.spec.ts › ms-1 issue 12 access auth › every authenticated screen names the signed-in customer"
