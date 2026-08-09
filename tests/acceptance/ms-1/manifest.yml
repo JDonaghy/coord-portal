@@ -32,6 +32,18 @@ issues:
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › a submission shows exactly one status at a time"
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › the portal renders the status it is given and derives none of its own"
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › On hold surfaces with the pinned wording or not at all"
+  11:
+    - "[chromium] ms-1/11-question-channel.spec.ts › ms-1 issue 11 question channel › a raised question pauses the submission at Needs your input"
+    - "[chromium] ms-1/11-question-channel.spec.ts › ms-1 issue 11 question channel › the customer is shown the question the team actually raised"
+    - "[chromium] ms-1/11-question-channel.spec.ts › ms-1 issue 11 question channel › no other customer action is offered while a question is open"
+    - "[chromium] ms-1/11-question-channel.spec.ts › ms-1 issue 11 question channel › answering sends the answer to coord as a question.answered event"
+    - "[chromium] ms-1/11-question-channel.spec.ts › ms-1 issue 11 question channel › the portal never resumes the thread by itself — only coord's status push does"
+    - "[chromium] ms-1/11-question-channel.spec.ts › ms-1 issue 11 question channel › an answered question is durable, and its event replays from a cursor"
+    - "[chromium] ms-1/11-question-channel.spec.ts › ms-1 issue 11 question channel › coord may never write the customer's answer"
+    - "[chromium] ms-1/11-question-channel.spec.ts › ms-1 issue 11 question channel › a submission with no open question offers no answer channel"
+    - "[chromium] ms-1/11-question-channel.spec.ts › ms-1 issue 11 question channel › a second question re-opens the pause and is answerable in turn"
+    - "[chromium] ms-1/11-question-channel.spec.ts › ms-1 issue 11 question channel › an empty answer does not end the pause"
+    - "[chromium] ms-1/11-question-channel.spec.ts › ms-1 issue 11 question channel › the question screen shows no engineer-side identifier"
   12:
     - "[chromium] ms-1/12-access-auth.spec.ts › ms-1 issue 12 access auth › the signed-in identity comes from Cloudflare Access, not from a portal login"
     - "[chromium] ms-1/12-access-auth.spec.ts › ms-1 issue 12 access auth › every authenticated screen names the signed-in customer"
