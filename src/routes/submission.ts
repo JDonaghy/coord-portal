@@ -1,4 +1,5 @@
 import { readAccessIdentity } from "../identity"
+import { getOpenQuestion, recordAnswer, type OpenQuestion } from "../questions"
 import { escapeHtml, html, page, topbar } from "../render"
 import {
   getCoordFact,
@@ -46,6 +47,61 @@ export async function submissionDetail(
 }
 
 /**
+ * POST /submissions/:id — answering an open question (issue #11).
+ *
+ * Same URL as the `GET` above, same pattern `POST /intake` already uses: a
+ * plain form post, no client-side script required, a 303 back to the same
+ * page so a reload never resubmits the answer.
+ *
+ * The question being answered is derived server-side from `getOpenQuestion`,
+ * never taken from the submitted form — same reasoning `src/ids.ts` gives for
+ * never accepting an id from the caller: which question this answer belongs
+ * to is not something a request gets to assert about itself. If nothing is
+ * open by the time this lands (already answered by a previous submit, a race
+ * with a fresh coordinator push, or a question that was never raised), the
+ * current screen is re-rendered rather than silently accepting a stray write.
+ */
+export async function submitAnswer(request: Request, env: Env, id: string): Promise<Response> {
+  const identity = readAccessIdentity(request)
+  const submission = await getSubmission(env, id)
+  if (!submission || !isOwnedBy(submission, identity.email)) {
+    return html(page("Not found — coord-portal", notFound()), { status: 404 })
+  }
+
+  const open = submission.status === "needs-input" ? await getOpenQuestion(env, submission.reference) : null
+  if (!open) {
+    const main = await detailFor(env, identity.email, submission)
+    return html(page(`${submission.reference} — coord-portal`, main), { status: 409 })
+  }
+
+  const form = await request.formData()
+  const answer = stringField(form, "answer")
+  if (!answer) {
+    // "an empty answer does not end the pause": nothing is recorded, and the
+    // same open question is redisplayed so the composer stays reachable.
+    return html(
+      page(
+        `${submission.reference} — coord-portal`,
+        pausedDetail(identity.email, submission, open, "Please write an answer before sending."),
+      ),
+      { status: 400 },
+    )
+  }
+
+  await recordAnswer(env, submission.reference, open.revision, answer)
+
+  return new Response(null, {
+    status: 303,
+    headers: { location: `/submissions/${submission.id}` },
+  })
+}
+
+function stringField(form: FormData, name: string): string {
+  const value = form.get(name)
+  return typeof value === "string" ? value.trim() : ""
+}
+
+/**
  * GET /submissions/:id/rounds
  *
  * The design-round loop itself is issue #13 and is not built yet — a
@@ -84,16 +140,18 @@ function isOwnedBy(submission: Submission, email: string | null): boolean {
  * branch renders the same `submission-detail` root and `status-pill` (the
  * hooks the contract pins as present "all statuses") — what changes below it
  * is what issue #10 says is allowed to change: the rollup timeline for the
- * four read-only states, the pinned copy for on-hold and shipped, and nothing
- * at all yet for the two actionable states, which belong to #13 and #11.
+ * four read-only states, the pinned copy for on-hold and shipped; `needs-input`
+ * additionally owns the question channel (#11); `awaiting-signoff` still asks
+ * for nothing yet — the sign-off round is #13's surface.
  */
 async function detailFor(env: Env, email: string | null, submission: Submission): Promise<string> {
   if (submission.status === "describing") return receipt(email, submission)
   if (isRollupStatus(submission.status)) return rollupDetail(email, submission)
   if (submission.status === "on-hold") return onHoldDetail(env, email, submission)
   if (submission.status === "shipped") return shippedDetail(email, submission)
-  // awaiting-signoff, needs-input: customer-actionable, but the actions
-  // themselves are #13's and #11's surfaces — see the doc comment above.
+  if (submission.status === "needs-input") return needsInputDetail(env, email, submission)
+  // awaiting-signoff: customer-actionable, but the sign-off round itself is
+  // #13's surface — see the doc comment above.
   return actionableDetail(email, submission)
 }
 
@@ -191,13 +249,12 @@ ${steps}
 }
 
 /**
- * `awaiting-signoff` and `needs-input`: customer-actionable per the pinned
- * vocabulary table, but the design-round sign-off (#13) and the question
- * thread (#11) are the other two milestone slices' surfaces, not this one's.
- * This renders only what #10 owns — the pinned pill and reference — and
- * deliberately nothing that asks the customer for anything yet, so this
- * screen does not ship half of another issue's UI ahead of that issue's own
- * contract.
+ * `awaiting-signoff` (always) and `needs-input` (when there is no open
+ * question to answer — see `needsInputDetail` below): customer-actionable per
+ * the pinned vocabulary table, but the design-round sign-off itself is #13's
+ * surface, not this one's. Renders only the pinned pill and reference, and
+ * deliberately nothing that asks the customer for anything, so this screen
+ * does not ship half of #13's UI ahead of #13's own contract.
  */
 function actionableDetail(email: string | null, submission: Submission): string {
   return `${topbar(email, "none")}
@@ -210,6 +267,91 @@ function actionableDetail(email: string | null, submission: Submission): string 
     <p>We'll email you the moment this is ready to look at.</p>
   </section>
 </main>`
+}
+
+/**
+ * `needs-input` — issue #11's question channel.
+ *
+ * `question` arrives coord-owned, in the same push that sets
+ * `status: needs-input` (contract § Question channel), and stays in
+ * `coord_facts` at whatever revision the daemon last wrote it — see
+ * `src/questions.ts`. Whether the pause composer renders depends on that
+ * question actually being *open*: a `needs-input` submission with no question
+ * on record at all, or whose most recent question the customer has already
+ * answered, falls back to `actionableDetail`'s quiet "nothing to do" card —
+ * "a submission with no open question offers no answer channel" is a
+ * black-box guarantee, not an oversight.
+ */
+async function needsInputDetail(env: Env, email: string | null, submission: Submission): Promise<string> {
+  const open = await getOpenQuestion(env, submission.reference)
+  if (!open) return actionableDetail(email, submission)
+  return pausedDetail(email, submission, open)
+}
+
+/**
+ * The pause screen itself: `pause-banner`, `question-thread` /
+ * `question-text`, and the `answer-field` / `submit-answer` composer, exactly
+ * the hooks `08-submission-needs-input.html` pins. Per the contract, "no other
+ * customer action should be available on that screen while a question is
+ * open" — this renders the pill, the reference, the banner and one form, and
+ * nothing else.
+ *
+ * `error`, when present, redisplays the same open question with a message
+ * instead of advancing anything — the one path that reaches this is a blank
+ * answer, which must not end the pause (see `submitAnswer`).
+ */
+function pausedDetail(
+  email: string | null,
+  submission: Submission,
+  question: OpenQuestion,
+  error?: string,
+): string {
+  const errorBlock = error
+    ? `<p class="async-note" data-testid="answer-error" role="alert">${escapeHtml(error)}</p>`
+    : ""
+
+  return `${topbar(email, "none")}
+<main data-testid="submission-detail" data-status="${escapeHtml(submission.status)}">
+  ${statusPill(submission.status)}
+  <h1>${escapeHtml(titleOf(submission))}</h1>
+  ${referenceLine(submission)}
+
+  <p class="pause-banner" data-testid="pause-banner">Work is paused until you answer.</p>
+
+  <section class="card question-thread" data-testid="question-thread">
+    <p class="question-text" data-testid="question-text">${escapeHtml(questionText(question.value))}</p>
+    ${errorBlock}
+
+    <form class="answer-form" method="POST" action="/submissions/${submission.id}" data-testid="answer-form">
+      <div class="field">
+        <label for="answer">Your answer</label>
+        <textarea id="answer" name="answer" rows="4" required
+          data-testid="answer-field"
+          placeholder="Write your answer here."></textarea>
+      </div>
+      <div class="actions">
+        <button type="submit" class="primary" data-testid="submit-answer">Send answer</button>
+      </div>
+    </form>
+  </section>
+</main>`
+}
+
+/**
+ * The question's value type is deliberately unpinned by the contract — the
+ * daemon may push a string today and something richer later. Rendered
+ * verbatim when it already is one (the expected case); otherwise serialised
+ * defensively rather than dropped, so a shape this screen does not anticipate
+ * still shows the customer *something* instead of a blank question.
+ */
+function questionText(value: unknown): string {
+  if (typeof value === "string") return value
+  if (value === null || value === undefined) return ""
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return ""
+  }
 }
 
 /**

@@ -276,32 +276,57 @@ export function titleOf(submission: Submission): string {
   return firstLine.length > 80 ? `${firstLine.slice(0, 79)}…` : firstLine
 }
 
+/** A coord-owned fact together with the revision it was last pushed at. */
+export interface CoordFact {
+  value: unknown
+  revision: number
+}
+
 /**
  * One coord-owned fact this milestone has no dedicated column for (issue #10:
- * `onhold_since`; #10/#13 also read `question`, `design_round`, `decomposition`,
- * `artifacts` here as they build out their own screens) — see
- * `migrations/0003_sync_bridge.sql` and `src/bridge/updates.ts`, which is the
- * only writer.
+ * `onhold_since`; #10/#13/#11 also read `question`, `design_round`,
+ * `decomposition`, `artifacts` here as they build out their own screens) —
+ * see `migrations/0003_sync_bridge.sql` and `src/bridge/updates.ts`, which is
+ * the only writer.
  *
- * Returns the parsed JSON value, or `null` if the daemon has never pushed this
- * field for this submission. A value of JSON `null` (explicitly pushed) and "no
- * row at all" both read back as `null` here — this milestone's screens have no
- * need to tell them apart yet.
+ * Returns the parsed value and the `coord_facts.revision` it was pushed at, or
+ * `null` if the daemon has never pushed this field for this submission. The
+ * revision is what lets a caller (issue #11's question channel) tell "the
+ * daemon pushed a new value for this field" apart from "nothing changed" —
+ * `getCoordFact` below throws it away for callers that only ever care about
+ * the latest value.
+ */
+export async function getCoordFactRecord(
+  env: Env,
+  submissionReference: string,
+  field: string,
+): Promise<CoordFact | null> {
+  const row = await env.DB.prepare(
+    `SELECT value, revision FROM coord_facts WHERE submission_id = ? AND field = ?`,
+  )
+    .bind(submissionReference, field)
+    .first<{ value: string; revision: number }>()
+  if (!row) return null
+  try {
+    return { value: JSON.parse(row.value), revision: row.revision }
+  } catch {
+    return { value: null, revision: row.revision }
+  }
+}
+
+/**
+ * As `getCoordFactRecord`, but just the value — for the (more common) callers
+ * that only ever render the latest push and have no use for its revision.
+ *
+ * A value of JSON `null` (explicitly pushed) and "no row at all" both read
+ * back as `null` here — this milestone's screens have no need to tell them
+ * apart yet.
  */
 export async function getCoordFact(
   env: Env,
   submissionReference: string,
   field: string,
 ): Promise<unknown> {
-  const row = await env.DB.prepare(
-    `SELECT value FROM coord_facts WHERE submission_id = ? AND field = ?`,
-  )
-    .bind(submissionReference, field)
-    .first<{ value: string }>()
-  if (!row) return null
-  try {
-    return JSON.parse(row.value)
-  } catch {
-    return null
-  }
+  const record = await getCoordFactRecord(env, submissionReference, field)
+  return record ? record.value : null
 }
