@@ -36,14 +36,62 @@ this feeds, not the intake surface.
 | `src/index.ts` | one Worker: `/api/*` to the router, everything else to the static site |
 | `src/routes/health.ts` | `GET /api/health` — touches D1 **and** R2, so a missing binding fails here rather than in the first feature that needs one. 503 when a probe fails. |
 | `src/routes/whoami.ts` | `GET /api/whoami` — echoes the Cloudflare Access identity so the Access config can be confirmed from a browser. **Not authentication** (see below). |
-| `migrations/0001_init.sql` | the migration harness. Deliberately *not* the record model — that is #830. |
+| `src/routes/bridge.ts` | `/api/bridge/{pull,push,heartbeat}` — the outbound sync bridge (#15). See below. |
+| `migrations/` | `0001` the harness, `0002` submissions (#9), `0003` the bridge's event stream, coord mirror and daemon last-seen |
 | `public/` | placeholder page with a live health readout, and the token layer |
-| `test/` | 20 unit tests over routing, health probes and identity parsing |
-| `e2e/` | 8 Playwright specs driving the real Worker with real local D1/R2 |
+| `test/` | 46 unit tests over routing, health probes, identity parsing and the bridge's decidable parts |
+| `e2e/` | 18 Playwright specs driving the real Worker with real local D1/R2 |
 
 **`/api/whoami` is a diagnostic, not a session.** It reads the headers Access injects but does not
 verify the JWT against the team JWKS, so `verified` is hard-coded `false` and nothing may make an
 authorization decision from it. Verification is #1981; the shape is there so that lands additively.
+
+## The sync bridge
+
+The portal half of the outbound-only bridge (issue #15; the daemon half is coordinator #1982). Three
+routes under `/api/bridge`, all JSON, **all pulled or pushed by the daemon — never called by this
+side**:
+
+| | |
+|---|---|
+| `GET /api/bridge/pull` | customer-authored events since an opaque `cursor` (`limit` 1–200, default 50). Ordered by a monotonic `revision`; replaying a cursor returns the same events, so a daemon outage queues rather than loses. |
+| `POST /api/bridge/push` | coord-owned facts coming back. Idempotent by `(submission_id, revision)`; one result per update, in order. |
+| `POST /api/bridge/heartbeat` | last-seen, so a dead daemon is distinguishable from a slow one. |
+
+`submission_id` on the wire is the customer-visible `SUB-XXXXXX` reference, never the URL id.
+
+**Ownership is sole-writer per fact** (`src/bridge/ownership.ts`). The portal owns `outcome`,
+`audience`, `done_definition`, `constraints`, `project_scope`, `signoff_verdict`, `signoff_comment`,
+`answer`; the coordinator owns `status`, `decomposition`, `question`, `design_round`, `artifacts`.
+A push touching a portal-owned field is `rejected` with `reason: "not_owned:<field>"` — **at 200**,
+because that is a per-item outcome in a batch, not a transport failure — and *nothing else in that
+update is applied either*. Only a missing or invalid service token produces a status code (401).
+
+**There is no fourth route, and there must never be one.** No webhook, no callback URL, no endpoint
+for the daemon to register an address with — not even behind a shared secret. If latency feels bad,
+the daemon polls faster. See CLAUDE.md rule 2.
+
+### Authorising the daemon
+
+The daemon cannot complete an interactive Access login, so it presents a **service token** as
+`CF-Access-Client-Id` / `CF-Access-Client-Secret`. That needs a **third Access application**, scoped
+to `intake.heurontech.com/api/bridge` with a **Service Auth** policy — see the Access table below.
+That path authorises the bridge and nothing else; it must never widen into a general bypass.
+
+⚠ **The Worker also checks the token itself, and fails closed.** Set both halves as secrets when the
+service token is created:
+
+```bash
+wrangler secret put BRIDGE_CLIENT_ID       # the token's Client ID
+wrangler secret put BRIDGE_CLIENT_SECRET   # the token's Client Secret
+```
+
+Until they are set, every request that arrives through Cloudflare's edge gets a flat 401 no matter
+what Access says. That is deliberate: the alternative — trusting any well-formed pair — turns a
+misconfigured or deleted Access application into a world-readable inbox of customer submissions.
+Locally there is no edge and no Access, so `wrangler dev` honours any well-formed pair; the Worker
+tells the two apart by `CF-Ray`, which only the edge can set (`src/deployment.ts`). It cannot use the
+hostname: `wrangler dev` serves the custom domain from a laptop.
 
 ## Development
 
@@ -101,12 +149,17 @@ scoped to `heurontech.com` only. That last one is required by the custom domain 
 
 Configured 2026-08-08. Team domain `heurontech.cloudflareaccess.com`; login by one-time PIN.
 
-Two applications, not one — Cloudflare matches most-specific-first:
+Three applications, not one — Cloudflare matches most-specific-first:
 
 | Application | Path | Policy |
 |---|---|---|
 | `intake.heurontech.com/api/health` | health only | **Bypass** — everyone |
+| `intake.heurontech.com/api/bridge` | the sync bridge only | **Service Auth** — the daemon's service token |
 | `intake.heurontech.com` | everything else | **Allow** — permitted emails |
+
+The bridge application is **not yet created** — it is an account-setup step for whoever mints the
+daemon's service token, alongside the two `wrangler secret put` calls above. Until then the bridge
+sits behind the site's Allow policy, which a daemon cannot satisfy.
 
 The bypass is **required, not a convenience**: without it CI's post-deploy health check receives a
 login page and every deploy fails. Health exposes a version and a schema version, nothing about any
@@ -124,6 +177,10 @@ API route public while health looks identical. Check a path that must be *closed
 curl -sS -o /dev/null -w "%{http_code} %{url_effective}\n" -L https://intake.heurontech.com/api/whoami
 # must land on heurontech.cloudflareaccess.com/cdn-cgi/access/login/...
 curl -sS https://intake.heurontech.com/ | grep -c "coord-portal"    # must be 0
+
+# and the bridge, which must answer nobody without a service token
+curl -sS -o /dev/null -w "%{http_code}\n" https://intake.heurontech.com/api/bridge/pull
+# 401 from the Worker, or an Access login redirect — never 200, never a JSON event list
 ```
 
 `Deploy` triggers on `push: main` and `workflow_dispatch` **only — never `pull_request`**, so a fork

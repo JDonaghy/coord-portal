@@ -14,7 +14,7 @@ test("the landing page renders and reports a healthy stack", async ({ page }) =>
   // This assertion is the whole reason the readout exists: it is only green if
   // the Worker booted, D1 answered with an applied migration, and R2 answered.
   await expect(page.locator("#overall")).toHaveText("all systems ok")
-  await expect(page.locator("#d1")).toHaveText(/schema 0002/)
+  await expect(page.locator("#d1")).toHaveText(/schema 0003/)
   await expect(page.locator("#r2")).toHaveText("ok")
 })
 

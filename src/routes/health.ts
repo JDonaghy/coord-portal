@@ -1,3 +1,4 @@
+import { deploymentOf } from "../deployment"
 import { json } from "../router"
 import type { Env, ProbeResult } from "../types"
 import { VERSION } from "../version"
@@ -27,23 +28,6 @@ export async function health(request: Request, env: Env): Promise<Response> {
     },
     { status: ok ? 200 : 503 },
   )
-}
-
-/**
- * Which deployment is answering, derived from the hostname rather than a
- * configured var.
- *
- * A hand-set `PORTAL_ENV` is a thing that can be wrong — the local dev server
- * cheerfully calling itself "production" is exactly the false signal this
- * endpoint exists to avoid. The hostname cannot lie about which deployment you
- * reached, and it answers the more useful question: *which* one is this.
- */
-export function deploymentOf(request: Request): string {
-  const { hostname } = new URL(request.url)
-  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]") {
-    return "local"
-  }
-  return hostname
 }
 
 async function probeD1(env: Env): Promise<ProbeResult> {

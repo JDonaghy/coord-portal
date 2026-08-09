@@ -23,6 +23,18 @@ export function generateSubmissionReference(): string {
   return `SUB-${randomHex(6).toUpperCase()}`
 }
 
+/**
+ * `evt_` + 24 lowercase hex chars — the opaque id on a sync-bridge event.
+ *
+ * Deliberately NOT derived from the event's revision. The revision is the
+ * stream's ordering and the daemon's cursor; the id is a stable handle for one
+ * event. Tying them together would mean a change to how the stream is ordered
+ * silently renames every event the daemon has already recorded.
+ */
+export function generateEventId(): string {
+  return `evt_${randomHex(24)}`
+}
+
 function randomHex(length: number): string {
   const bytes = crypto.getRandomValues(new Uint8Array(Math.ceil(length / 2)))
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0"))

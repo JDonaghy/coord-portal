@@ -1,0 +1,54 @@
+/**
+ * The sole-writer table, in code.
+ *
+ * Every fact belongs to exactly one side. Nothing is co-written, which is why
+ * there is no merge rule anywhere in this bridge and no last-writer-wins tie
+ * break to get subtly wrong: a field either arrives from the side that owns it
+ * or it does not arrive at all.
+ *
+ * Enforcement of this table is issue #8's remit; the bridge is simply the place
+ * a violation actually shows up, because it is the only place the other side
+ * can write at all.
+ *
+ * Keep this in step with the table in `docs/CUSTOMER_PORTAL.md` (§ The sync
+ * bridge) and issue #15. Neither side may change it unilaterally.
+ */
+
+/** Customer-authored. Coord may never write these. */
+export const PORTAL_OWNED_FIELDS = [
+  "outcome",
+  "audience",
+  "done_definition",
+  "constraints",
+  "project_scope",
+  "signoff_verdict",
+  "signoff_comment",
+  "answer",
+] as const
+
+/** Engineer-authored. The portal mirrors these read-only. */
+export const COORD_OWNED_FIELDS = [
+  "status",
+  "decomposition",
+  "question",
+  "design_round",
+  "artifacts",
+] as const
+
+export type PortalOwnedField = (typeof PORTAL_OWNED_FIELDS)[number]
+export type CoordOwnedField = (typeof COORD_OWNED_FIELDS)[number]
+
+export type Ownership = "portal" | "coord" | "unknown"
+
+const PORTAL = new Set<string>(PORTAL_OWNED_FIELDS)
+const COORD = new Set<string>(COORD_OWNED_FIELDS)
+
+export function ownerOf(field: string): Ownership {
+  if (PORTAL.has(field)) return "portal"
+  if (COORD.has(field)) return "coord"
+  return "unknown"
+}
+
+export function isCoordOwnedField(field: string): field is CoordOwnedField {
+  return COORD.has(field)
+}
