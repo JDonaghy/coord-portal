@@ -190,6 +190,27 @@ export async function getSubmission(env: Env, id: string): Promise<Submission | 
 }
 
 /**
+ * All submissions belonging to one customer, newest first.
+ *
+ * This is the query behind `GET /submissions` — issue #12's "a customer can
+ * only ever see their own submissions" — so it takes an email, never an
+ * optional one. There is no "list everything" caller in this module; a route
+ * with no verified-enough identity has nothing to bind here and must not call
+ * this with a borrowed or guessed address.
+ */
+export async function listSubmissionsForCustomer(
+  env: Env,
+  customerEmail: string,
+): Promise<Submission[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM submissions WHERE customer_email = ? ORDER BY created_at DESC`,
+  )
+    .bind(customerEmail)
+    .all<SubmissionRow>()
+  return (results ?? []).map(fromRow)
+}
+
+/**
  * Lookup by the customer-visible `SUB-XXXXXX` reference — the identifier the
  * sync bridge addresses submissions by.
  */

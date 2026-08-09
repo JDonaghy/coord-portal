@@ -24,13 +24,50 @@ export async function submissionDetail(
   env: Env,
   id: string,
 ): Promise<Response> {
+  const identity = readAccessIdentity(request)
   const submission = await getSubmission(env, id)
-  if (!submission) {
+  if (!submission || !isOwnedBy(submission, identity.email)) {
+    // Same 404 either way (issue #12: "a customer can only ever see their own
+    // submissions"). Knowing the URL is not authorisation, and a 404 that only
+    // fires for someone else's id would itself confirm the id exists.
     return html(page("Not found — coord-portal", notFound()), { status: 404 })
   }
 
-  const identity = readAccessIdentity(request)
   return html(page(`${submission.reference} — coord-portal`, receipt(identity.email, submission)))
+}
+
+/**
+ * GET /submissions/:id/rounds
+ *
+ * The design-round loop itself is issue #13 and is not built yet — a
+ * submission created by this milestone's intake form never leaves
+ * `describing`, so there is no round to render. What issue #12 requires here
+ * is narrower and already true today: the same ownership gate as the detail
+ * route, so this second door onto the record leaks nothing either.
+ */
+export async function submissionRounds(
+  request: Request,
+  env: Env,
+  id: string,
+): Promise<Response> {
+  const identity = readAccessIdentity(request)
+  const submission = await getSubmission(env, id)
+  if (!submission || !isOwnedBy(submission, identity.email)) {
+    return html(page("Not found — coord-portal", notFound()), { status: 404 })
+  }
+
+  return html(
+    page(`Round history — ${submission.reference} — coord-portal`, rounds(identity.email, submission)),
+  )
+}
+
+/**
+ * The one ownership check this file needs, in one place. `null` never owns
+ * anything — an unidentified caller and a submission with no recorded
+ * customer (should one ever exist) both fail closed, not open.
+ */
+function isOwnedBy(submission: Submission, email: string | null): boolean {
+  return email !== null && submission.customerEmail === email
 }
 
 function receipt(email: string | null, submission: Submission): string {
@@ -50,6 +87,17 @@ function receipt(email: string | null, submission: Submission): string {
       <a class="button secondary" href="/submissions" data-testid="back-to-dashboard">My requests</a>
     </div>
   </section>
+</main>`
+}
+
+function rounds(email: string | null, submission: Submission): string {
+  return `${topbar(email, "none")}
+<main>
+  <a class="back-link" href="/submissions/${submission.id}" data-testid="back-to-submission">&larr; ${escapeHtml(submission.reference)}</a>
+  <h1>Round history</h1>
+  <div data-testid="round-history">
+    <p class="lede">No design round has been published for this request yet.</p>
+  </div>
 </main>`
 }
 
