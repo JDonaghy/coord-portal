@@ -1,6 +1,6 @@
 import { readAccessIdentity } from "../identity"
 import { escapeHtml, html, page, topbar } from "../render"
-import { listSubmissionsForCustomer, statusText, type Submission } from "../submissions"
+import { listSubmissionsForCustomer, statusText, titleOf, type Submission } from "../submissions"
 import type { Env } from "../types"
 
 /**
@@ -51,17 +51,6 @@ function row(submission: Submission): string {
         <span class="status-pill" data-testid="status-pill" data-status="${escapeHtml(submission.status)}">${escapeHtml(statusText(submission.status))}</span>
       </a>
     </li>`
-}
-
-/**
- * The intake form collects an outcome, not a title (contract note 3: no
- * portal-internal field schema is pinned). The first line of the outcome text
- * is close enough to a title for a list row, truncated so one very long
- * paragraph cannot blow out the layout.
- */
-function titleOf(submission: Submission): string {
-  const firstLine = submission.outcome.split("\n")[0]?.trim() || submission.outcome
-  return firstLine.length > 80 ? `${firstLine.slice(0, 79)}…` : firstLine
 }
 
 function empty(): string {

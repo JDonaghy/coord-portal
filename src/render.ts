@@ -131,6 +131,25 @@ export function page(title: string, main: string): string {
   .status-pill[data-status="on-hold"]          { background: var(--idle-wash);   color: var(--idle); }
 
   .back-link { font-size: var(--step--1); display: inline-block; margin-bottom: 1rem; }
+
+  main[data-testid="submission-detail"] .meta {
+    color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); margin: 0.35rem 0 1.5rem;
+  }
+  main[data-testid="submission-detail"] .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 1.25rem;
+  }
+  ol.timeline {
+    list-style: none; margin: 0 0 2rem; padding: 0; display: flex; flex-wrap: wrap; gap: 0 0.5rem;
+  }
+  ol.timeline li {
+    font-size: var(--step--1); color: var(--text-faint); padding: 0.3em 0; position: relative;
+  }
+  ol.timeline li:not(:last-child)::after { content: "→"; margin: 0 0.5em; color: var(--line-strong); }
+  ol.timeline li[data-current="true"] { color: var(--accent-dim); font-weight: 700; }
+  .provisional-flag {
+    border: 1px dashed var(--line-strong); color: var(--text-faint); font-size: var(--step--1);
+    border-radius: var(--r-md); padding: 0.6rem 0.85rem; margin-top: 1rem;
+  }
 </style>
 </head>
 <body>

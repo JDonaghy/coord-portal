@@ -33,6 +33,10 @@ export const COORD_OWNED_FIELDS = [
   "question",
   "design_round",
   "artifacts",
+  // Issue #10: the business-time On-hold threshold is computed daemon-side;
+  // this is the instant it decided the clock crossed it, rendered verbatim as
+  // `onhold-since` on the On-hold screen if the daemon ever pushes it.
+  "onhold_since",
 ] as const
 
 export type PortalOwnedField = (typeof PORTAL_OWNED_FIELDS)[number]
