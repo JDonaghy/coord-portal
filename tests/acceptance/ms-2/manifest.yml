@@ -1,0 +1,26 @@
+# ms-2 — sealed acceptance manifest: test id -> issue slice.
+#
+# Ids are the `web-playwright` driver's node ids, exactly as
+# `coord.acceptance_drivers.parse_playwright_json_report` builds them:
+#
+#   [{project}] {file relative to testDir} › {describe path} › {test title}
+#
+# They must match character-for-character (including the `›` separators) —
+# `coord acceptance run --issue N` filters by exact id, and an id that matches
+# nothing is reported as a missing test, not as a pass.
+#
+# One block per issue. Later slices MERGE into this file; do not rewrite
+# another issue's block.
+
+issues:
+  31:
+    - "[chromium] ms-2/31-public-lead-form.spec.ts › ms-2 issue 31 public lead form › the start form is public — a stranger with no account reaches it"
+    - "[chromium] ms-2/31-public-lead-form.spec.ts › ms-2 issue 31 public lead form › the form asks only what first contact needs"
+    - "[chromium] ms-2/31-public-lead-form.spec.ts › ms-2 issue 31 public lead form › sending the form returns a receipt with a quotable reference"
+    - "[chromium] ms-2/31-public-lead-form.spec.ts › ms-2 issue 31 public lead form › the name field really is optional"
+    - "[chromium] ms-2/31-public-lead-form.spec.ts › ms-2 issue 31 public lead form › an incomplete form creates no lead and redisplays the form"
+    - "[chromium] ms-2/31-public-lead-form.spec.ts › ms-2 issue 31 public lead form › each lead gets its own reference"
+    - "[chromium] ms-2/31-public-lead-form.spec.ts › ms-2 issue 31 public lead form › the receipt is the response to POST /start, not a redirect to a lead page"
+    - "[chromium] ms-2/31-public-lead-form.spec.ts › ms-2 issue 31 public lead form › the public surface exposes nothing about submissions, customers, or the fleet"
+    - "[chromium] ms-2/31-public-lead-form.spec.ts › ms-2 issue 31 public lead form › a lead is inert — it creates no submission and enters no pipeline"
+    - "[chromium] ms-2/31-public-lead-form.spec.ts › ms-2 issue 31 public lead form › an Access identity changes nothing on the public route"
