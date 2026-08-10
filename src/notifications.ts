@@ -137,11 +137,15 @@ function isSendType(value: string): value is SendType {
  * stated as a black-box invariant by the Gate-A contract: "no other status
  * transition produces `email-preview` output."
  *
- * Called from `src/bridge/updates.ts` once per applied push that sets
- * `status`, after the same push's own writes (the status column, and — for
- * `awaiting-signoff` — the design round it just published) have already
- * landed, so the content below can read what was just written rather than
- * racing it.
+ * Called from `src/bridge/updates.ts` once per push that sets `status` *and*
+ * whose own guarded status write actually won (see the `meta.changes` check
+ * there — a push whose write lost to a concurrent newer revision must not
+ * report on a status the submission never actually reached). Run after the
+ * same push's own writes (the status column, and — for `awaiting-signoff` —
+ * the design round it just published) have already landed, so the content
+ * below can read what was just written rather than racing it, and deferred
+ * via `ctx.waitUntil` so that a failure here — or the D1 round trips it costs
+ * — can never fail the request whose real write already committed.
  *
  * Idempotent in two layers: the bridge's own `(submission_id, revision)`
  * watermark means a replayed push never reaches this function a second time

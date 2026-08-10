@@ -20,13 +20,15 @@
 -- lives on the customer side of the wall, not the daemon's.
 --
 -- The write site is `src/bridge/updates.ts`: one push that sets `status` to a
--- sending value produces at most one row, in the same request that applied the
--- status write. `UNIQUE (submission_id, coord_revision)` is the second line of
--- defence behind the bridge's own `(submission_id, revision)` idempotency
--- watermark (a push already `already_applied` never reaches the insert at
--- all) — belt and braces against a daemon retry ever producing two emails for
--- one transition, which is exactly how "digest-first, not instant" would fail
--- in practice.
+-- sending value, and whose own guarded status write actually lands (not
+-- superseded by a concurrent push for a newer revision — see the
+-- `meta.changes` check there), produces at most one row, deferred via
+-- `ctx.waitUntil` past the same request that applied the status write.
+-- `UNIQUE (submission_id, coord_revision)` is the second line of defence
+-- behind the bridge's own `(submission_id, revision)` idempotency watermark (a
+-- push already `already_applied` never reaches the insert at all) — belt and
+-- braces against a daemon retry ever producing two emails for one transition,
+-- which is exactly how "digest-first, not instant" would fail in practice.
 CREATE TABLE IF NOT EXISTS outbox (
   id             TEXT PRIMARY KEY,
   submission_id  TEXT NOT NULL,

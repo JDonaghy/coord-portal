@@ -68,7 +68,11 @@ export async function bridgePull(request: Request, env: Env): Promise<Response> 
  * per-item outcomes, not transport failures. The semantics that make this safe
  * to retry blindly live in `src/bridge/updates.ts`.
  */
-export async function bridgePush(request: Request, env: Env): Promise<Response> {
+export async function bridgePush(
+  request: Request,
+  env: Env,
+  ctx?: ExecutionContext,
+): Promise<Response> {
   const body = await readJsonBody(request)
   if (body === null || !isPlainObject(body) || !Array.isArray(body["updates"])) {
     // A body that is not a batch has no per-item outcome to report — there are
@@ -86,7 +90,7 @@ export async function bridgePush(request: Request, env: Env): Promise<Response> 
     )
   }
 
-  const results = await applyUpdates(env, updates)
+  const results = await applyUpdates(env, updates, ctx)
   return json({ results })
 }
 
