@@ -1,4 +1,9 @@
+# Both forms on purpose: the trailing-slash pattern matches only a directory,
+# so a `node_modules` SYMLINK (mode 120000) slips past it and can be committed
+# by a `git add -A` — which happened once, embedding an absolute machine-local
+# path in a public repo.
 node_modules/
+node_modules
 .wrangler/
 dist/
 .dev.vars
