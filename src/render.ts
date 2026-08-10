@@ -15,11 +15,14 @@ export function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;")
 }
 
-export type NavCurrent = "dashboard" | "new" | "none"
+export type NavCurrent = "dashboard" | "new" | "outbox" | "none"
 
 /**
  * The header every authenticated screen carries, per the contract's global
  * hook list: `brand-home`, `nav-dashboard`, `nav-new`, `identity-email`.
+ * `nav-outbox` (issue #14) is additive — the contract's list is not stated as
+ * exhaustive, and without it a customer has no in-product link to the emails
+ * that were sent about their own requests.
  *
  * `email` is deliberately not asserted as verified here or anywhere else —
  * see `src/identity.ts`. It is display copy, not an authorization decision.
@@ -27,6 +30,7 @@ export type NavCurrent = "dashboard" | "new" | "none"
 export function topbar(email: string | null, current: NavCurrent): string {
   const dashboardCurrent = current === "dashboard" ? ' aria-current="page"' : ""
   const newCurrent = current === "new" ? ' aria-current="page"' : ""
+  const outboxCurrent = current === "outbox" ? ' aria-current="page"' : ""
   const identity = email ? escapeHtml(email) : "unknown"
 
   return `<header class="topbar">
@@ -34,6 +38,7 @@ export function topbar(email: string | null, current: NavCurrent): string {
   <nav aria-label="primary">
     <a href="/submissions" data-testid="nav-dashboard"${dashboardCurrent}>My requests</a>
     <a href="/intake" data-testid="nav-new"${newCurrent}>New request</a>
+    <a href="/outbox" data-testid="nav-outbox"${outboxCurrent}>Sent emails</a>
   </nav>
   <span class="identity" data-testid="identity-email">signed in as ${identity}</span>
 </header>`
