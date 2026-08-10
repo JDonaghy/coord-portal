@@ -24,6 +24,13 @@ issues:
     - "[chromium] ms-2/31-public-lead-form.spec.ts › ms-2 issue 31 public lead form › the public surface exposes nothing about submissions, customers, or the fleet"
     - "[chromium] ms-2/31-public-lead-form.spec.ts › ms-2 issue 31 public lead form › a lead is inert — it creates no submission and enters no pipeline"
     - "[chromium] ms-2/31-public-lead-form.spec.ts › ms-2 issue 31 public lead form › an Access identity changes nothing on the public route"
+  32:
+    - "[chromium] ms-2/32-bot-gate-rate-limit.spec.ts › ms-2 issue 32 bot gate and rate limit › the widget's sitekey is public and rendered; the secret reaches neither the caller nor the repo"
+    - "[chromium] ms-2/32-bot-gate-rate-limit.spec.ts › ms-2 issue 32 bot gate and rate limit › a POST carrying no Turnstile token creates no lead — the gate is in the Worker, not the browser"
+    - "[chromium] ms-2/32-bot-gate-rate-limit.spec.ts › ms-2 issue 32 bot gate and rate limit › a token the Worker cannot verify creates no lead"
+    - "[chromium] ms-2/32-bot-gate-rate-limit.spec.ts › ms-2 issue 32 bot gate and rate limit › the rejection redisplays the form and says so plainly, explaining nothing"
+    - "[chromium] ms-2/32-bot-gate-rate-limit.spec.ts › ms-2 issue 32 bot gate and rate limit › every refusal renders the same page — nothing tells a caller which check it tripped"
+    - "[chromium] ms-2/32-bot-gate-rate-limit.spec.ts › ms-2 issue 32 bot gate and rate limit › a burst of submissions from one IP is cut off, and the cutoff is per-IP"
   33:
     - "[chromium] ms-2/33-lead-triage-promotion.spec.ts › ms-2 issue 33 lead triage and promotion › the leads inbox gives an operator enough of each lead to decide"
     - "[chromium] ms-2/33-lead-triage-promotion.spec.ts › ms-2 issue 33 lead triage and promotion › the inbox is ordered newest first"
