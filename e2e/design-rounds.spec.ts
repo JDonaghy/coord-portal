@@ -266,7 +266,9 @@ test("requesting changes opens round N+1 and never mutates round N", async ({ pa
   await expect(second).toHaveAttribute("data-round", "1")
   await expect(second).toHaveAttribute("data-verdict", "changes-requested")
   await expect(second).toContainText(ROUND_ONE.outcome_definition)
-  await expect(second.getByTestId("round-comment")).toContainText("silently dropping them")
+  await expect(second.getByTestId("round-comment")).toHaveText(
+    "Tell me which rows failed — silently dropping them is worse than not having it.",
+  )
   await expect(page.getByTestId("verdict-pill").nth(1)).toHaveText("Changes requested")
   await expect(page.getByTestId("back-to-submission")).toBeVisible()
 })

@@ -263,9 +263,12 @@ export function page(title: string, main: string): string {
   .verdict-pill[data-verdict="pending"]           { background: var(--attn-wash); color: var(--attn); }
   .round-date { color: var(--text-faint); font-size: var(--step--1); margin-left: auto; }
   .round-entry .outcome-definition { margin: 0 0 0.5rem; }
+  /* The rule, the indent and the dimmed colour do the work the quotation marks
+     do in the mock. They are deliberately not glyphs in the markup: this
+     element holds the customer's own words and reads back verbatim. */
   .round-entry blockquote {
     margin: 0.75rem 0 0; padding: 0.6rem 0.9rem; border-left: 3px solid var(--line-strong);
-    color: var(--text-dim); font-size: var(--step--1);
+    color: var(--text-dim); font-size: var(--step--1); font-style: italic;
   }
 </style>
 </head>
