@@ -39,6 +39,21 @@ export function topbar(email: string | null, current: NavCurrent): string {
 </header>`
 }
 
+/**
+ * The header every UNauthenticated public screen carries — issue #31's
+ * `/start`. Deliberately not `topbar()`: no nav, no identity, because there is
+ * no signed-in customer to name and no dashboard for a stranger to reach.
+ * Reusing `topbar()` even for a signed-in caller who happens to hit `/start`
+ * would leak that they're "signed in" as someone — see the Gate-A contract's
+ * "`01`, `02`, `03` all share: `brand-home` in a header that carries nothing
+ * else."
+ */
+export function publicHeader(): string {
+  return `<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+</header>`
+}
+
 /** Wraps a `<main>` body in the shared document shell and token stylesheet. */
 export function page(title: string, main: string): string {
   return `<!doctype html>
@@ -61,7 +76,7 @@ export function page(title: string, main: string): string {
   header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
   main { max-width: 44rem; margin: 0 auto; padding: 0 1rem 3rem; }
 
-  form.intake { display: grid; gap: 1.25rem; }
+  form.intake, form.lead { display: grid; gap: 1.25rem; }
   .field { display: grid; gap: 0.4rem; }
   .field label { font-weight: 600; font-size: var(--step--1); color: var(--text); }
   .field .hint { color: var(--text-faint); font-size: var(--step--1); font-weight: 400; }
@@ -84,6 +99,11 @@ export function page(title: string, main: string): string {
   .async-note {
     background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md);
     padding: 0.85rem 1rem; font-size: var(--step--1); color: var(--text-dim); margin-bottom: 1.5rem;
+  }
+  .lead-error {
+    background: var(--fail-wash); color: var(--fail); border: 1px solid var(--fail);
+    border-radius: var(--r-md); padding: 0.85rem 1rem; font-size: var(--step--1);
+    margin-bottom: 1.5rem; font-weight: 600;
   }
 
   .status-pill {

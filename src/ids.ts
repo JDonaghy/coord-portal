@@ -23,6 +23,23 @@ export function generateSubmissionReference(): string {
   return `SUB-${randomHex(6).toUpperCase()}`
 }
 
+/** `lead_` + 12 lowercase hex chars. Portal-internal; no route exposes it yet (#33 owns that). */
+export function generateLeadId(): string {
+  return `lead_${randomHex(12)}`
+}
+
+/**
+ * `LEAD-XXXXXX` where `XXXXXX` is six upper-case hex characters — same shape
+ * as `generateSubmissionReference`, and independently generated from the
+ * lead's own id for the same reason: a stranger who quotes this back in an
+ * email never leaks the row id, and it is never mistakable for a `SUB-XXXXXX`
+ * submission reference (issue #31's rule that a public screen must carry no
+ * submission reference).
+ */
+export function generateLeadReference(): string {
+  return `LEAD-${randomHex(6).toUpperCase()}`
+}
+
 /**
  * `evt_` + 24 lowercase hex chars — the opaque id on a sync-bridge event.
  *
