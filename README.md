@@ -38,7 +38,8 @@ this feeds, not the intake surface.
 | `src/routes/whoami.ts` | `GET /api/whoami` — echoes the Cloudflare Access identity so the Access config can be confirmed from a browser. **Not authentication** (see below). |
 | `src/routes/bridge.ts` | `/api/bridge/{pull,push,heartbeat}` — the outbound sync bridge (#15). See below. |
 | `src/routes/leads.ts` | `/leads`, `/leads/:id`, `POST /leads/:id/promote` — the operator's triage inbox and the one gate a stranger's request crosses to become a submission. Operator-only; see below. |
-| `migrations/` | `0001` the harness, `0002` submissions (#9), `0003` the bridge's event stream, coord mirror and daemon last-seen, `0005` public leads (#31), `0007` what a promoted lead records (#33) |
+| `src/routes/outbox.ts` | `GET /outbox` — a customer's read-back of the emails the portal decided to send them (#14). Scoped to their own sends, same as the dashboard. |
+| `migrations/` | `0001` the harness, `0002` submissions (#9), `0003` the bridge's event stream, coord mirror and daemon last-seen, `0005` public leads (#31), `0007` what a promoted lead records (#33), `0008` the customer outbox (#14) |
 | `public/` | placeholder page with a live health readout, and the token layer |
 | `test/` | 46 unit tests over routing, health probes, identity parsing and the bridge's decidable parts |
 | `e2e/` | 18 Playwright specs driving the real Worker with real local D1/R2 |

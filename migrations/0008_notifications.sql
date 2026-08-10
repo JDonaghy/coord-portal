@@ -1,4 +1,4 @@
--- 0007_notifications — the customer's inbox half of issue #14.
+-- 0008_notifications — the customer's inbox half of issue #14.
 --
 -- "The async loop only works if 'come back later' actually reaches the
 -- customer." Digest-first, not instant: transactional email for exactly the
@@ -49,5 +49,5 @@ CREATE TABLE IF NOT EXISTS outbox (
 -- request.
 CREATE INDEX IF NOT EXISTS idx_outbox_to_email ON outbox (to_email);
 
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '0007')
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '0008')
   ON CONFLICT(key) DO UPDATE SET value = excluded.value;
