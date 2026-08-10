@@ -111,6 +111,45 @@ test("a customer cannot open another customer's submission or round history by U
   await boContext.close()
 })
 
+/**
+ * Issue #46: `request.formData()` throws a raw `TypeError` — an unhandled
+ * 500 — when a POST carries no `Content-Type` at all (a bot, a broken
+ * client, a redirect replayed as a bare POST). That is a malformed request,
+ * not a server error, and per the fix it has to be indistinguishable from
+ * the non-owner refusal just above: same status, same body, never a 5xx
+ * that would tell a prober "the id exists, the body was just wrong."
+ */
+test("a POST with no Content-Type gets the same 404 a non-owner gets, never a 500", async ({
+  browser,
+  baseURL,
+  request,
+}) => {
+  const ada = uniqueEmail("ada-e2e-ct")
+  const adaContext = await browser.newContext({
+    baseURL,
+    extraHTTPHeaders: { [ACCESS_HEADER]: ada },
+  })
+  const adaPage = await adaContext.newPage()
+  const adaSubmission = await createSubmission(adaPage, "ADA-E2E-CT")
+  await adaContext.close()
+
+  // The owner themself, but with a bodyless / content-type-less POST — the
+  // exact repro from the issue.
+  const ownerResponse = await request.post(adaSubmission.url, {
+    headers: { [ACCESS_HEADER]: ada },
+  })
+  expect(ownerResponse.status()).toBe(404)
+
+  // A stranger posting the same way gets byte-for-byte the same refusal —
+  // no oracle that distinguishes "your body was wrong" from "not your id".
+  const bo = uniqueEmail("bo-e2e-ct")
+  const strangerResponse = await request.post(adaSubmission.url, {
+    headers: { [ACCESS_HEADER]: bo },
+  })
+  expect(strangerResponse.status()).toBe(404)
+  expect(await strangerResponse.text()).toBe(await ownerResponse.text())
+})
+
 test("an identity-less request to /submissions or a submission URL gets no customer data", async ({
   browser,
   baseURL,
