@@ -92,16 +92,36 @@ export function page(title: string, main: string): string {
 <title>${escapeHtml(title)}</title>
 <link rel="stylesheet" href="/tokens.css">
 <style>
+  /* The topbar WRAPS, and its identity may break mid-token. Both are load-
+     bearing, not cosmetic. A phone is 412 CSS px wide (the e2e suite's Pixel 7
+     project), the body reserves 1.25rem either side, and the brand + three nav
+     links + a monospace "signed in as name@example.com" do not fit in what is
+     left. As a nowrap flex row this header did not clip — it pushed the
+     *document* wider than the layout viewport, and mobile Chrome answers a
+     document wider than device-width by scaling the whole page down. Once page
+     scale != 1, the CSS-pixel coordinates a test computes for a control and
+     the screen coordinates its click lands on drift apart, so a click aimed at
+     submit-intake lands on whatever sits ~70px above it (the
+     label[for=projectScope]) and the form is never submitted. Wrapping keeps
+     scrollWidth <= clientWidth, which keeps page scale at 1. Nothing here
+     changes the desktop layout: at >=44rem it all still fits on one line. */
   header.topbar {
-    display: flex; align-items: center; gap: 1.25rem;
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1.25rem;
     max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
     border-bottom: 1px solid var(--line);
   }
   header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
-  header.topbar nav { display: flex; gap: 1rem; margin-right: auto; }
+  header.topbar nav { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-right: auto; min-width: 0; }
   header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
   header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
-  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  /* overflow-wrap: anywhere (NOT break-word) so the break opportunity is taken
+     into account when the flex item's min-content size is resolved —
+     break-word would let the item claim its unbroken width first and overflow
+     anyway. An email address has no space in it to break at. */
+  header.topbar .identity {
+    color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono);
+    min-width: 0; overflow-wrap: anywhere;
+  }
   main { max-width: 44rem; margin: 0 auto; padding: 0 1rem 3rem; }
 
   form.intake, form.lead { display: grid; gap: 1.25rem; }
