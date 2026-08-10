@@ -178,6 +178,95 @@ export function page(title: string, main: string): string {
   }
   .question-thread .question-text { white-space: pre-wrap; margin: 0 0 1.25rem; }
   .answer-form textarea { width: 100%; }
+
+  /* ── The design round and its sign-off loop (issue #13) ──────────────────
+     mocks/05-submission-awaiting-signoff.html, 06-request-changes.html and
+     07-round-history.html.
+
+     The composer opens with no JavaScript: .composer-toggle is a
+     visually-hidden checkbox that sits ahead of both the round card and the
+     composer, and the two label[role=button] controls (request-changes-button,
+     cancel-changes) toggle it. Everything below is the sibling-selector
+     consequence of that one checkbox. Do not replace this with a script — "no
+     build step, no framework" (CLAUDE.md), and every other control on this
+     portal already works without one. */
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  .composer-toggle { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+
+  .round-card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 1.5rem;
+  }
+  .round-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+  .round-badge {
+    font-family: var(--font-mono); font-size: var(--step--1); color: var(--text-dim);
+    background: var(--surface-2); border-radius: 999px; padding: 0.2em 0.7em;
+  }
+  .round-history-link { font-size: var(--step--1); }
+  .round-history-aside { font-size: var(--step--1); margin-top: 1.5rem; }
+  .round-card h2 {
+    font-size: var(--step-0); text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-dim); margin: 1.25rem 0 0.5rem;
+  }
+  .round-card h2:first-of-type { margin-top: 0; }
+  .outcome-definition { white-space: pre-line; }
+  ul.decomposition-list { margin: 0; padding-left: 1.25rem; display: grid; gap: 0.4rem; }
+  .mock-bundle-link {
+    display: inline-flex; align-items: center; gap: 0.5em; margin-top: 0.5rem;
+    color: var(--accent); text-decoration: none; font-weight: 600; font-size: var(--step--1);
+  }
+  .round-actions { display: flex; gap: 0.75rem; margin-top: 1.75rem; align-items: center; }
+  .round-actions form.inline-form { margin: 0; }
+  .round-actions button.primary { background: var(--pass); }
+  .round-actions button.primary:hover { background: var(--pass); filter: brightness(0.92); }
+  label.secondary, label.ghost {
+    display: inline-block; border-radius: var(--r-md); padding: 0.65rem 1.25rem;
+    font-weight: 600; font-size: inherit; cursor: pointer; user-select: none;
+  }
+  label.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); }
+  label.ghost { background: transparent; color: var(--text-dim); border: 1px solid var(--line-strong); }
+  label.secondary:focus-visible, label.ghost:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  form.composer { display: none; }
+  .composer-toggle:checked ~ form.composer { display: block; }
+  .composer-toggle:checked ~ .round-card { opacity: 0.55; }
+  .composer-toggle:checked ~ .round-card .round-actions { display: none; }
+  form.composer {
+    background: var(--surface); border: 1px solid var(--attn); border-radius: var(--r-lg);
+    padding: 1.5rem; margin-top: 1rem; box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+  }
+  form.composer h2 { margin-top: 0; font-size: var(--step-1); }
+  form.composer .hint { color: var(--text-dim); font-size: var(--step--1); margin-bottom: 1rem; }
+  form.composer textarea {
+    width: 100%; font: inherit; padding: 0.65rem 0.75rem; border-radius: var(--r-md);
+    border: 1px solid var(--line-strong); background: var(--ground); color: var(--text); resize: vertical;
+  }
+  form.composer .actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem; }
+  form.composer button.primary { background: var(--attn); }
+  .next-round-note { font-size: var(--step--1); color: var(--text-faint); margin-top: 0.75rem; }
+  .composer-error {
+    background: var(--fail-wash); color: var(--fail); border: 1px solid var(--fail);
+    border-radius: var(--r-md); padding: 0.75rem 1rem; font-size: var(--step--1);
+    font-weight: 600; margin-bottom: 1rem;
+  }
+
+  .round-entry {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1.25rem 1.5rem; margin-bottom: 1rem;
+  }
+  .round-entry-head { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+  .verdict-pill { font-size: var(--step--1); font-weight: 600; padding: 0.2em 0.7em; border-radius: 999px; }
+  .verdict-pill[data-verdict="changes-requested"] { background: var(--fail-wash); color: var(--fail); }
+  .verdict-pill[data-verdict="approved"]          { background: var(--pass-wash); color: var(--pass); }
+  .verdict-pill[data-verdict="pending"]           { background: var(--attn-wash); color: var(--attn); }
+  .round-date { color: var(--text-faint); font-size: var(--step--1); margin-left: auto; }
+  .round-entry .outcome-definition { margin: 0 0 0.5rem; }
+  .round-entry blockquote {
+    margin: 0.75rem 0 0; padding: 0.6rem 0.9rem; border-left: 3px solid var(--line-strong);
+    color: var(--text-dim); font-size: var(--step--1);
+  }
 </style>
 </head>
 <body>
