@@ -88,12 +88,23 @@ export async function submitSubmissionAction(
   // refusal has to look exactly like the ownership check just above it: a
   // POST with no body content-type gets the same 404 a non-owner gets, never
   // a 5xx that would tell a prober "the id exists, the body was just wrong."
+  //
+  // The content-type pre-check below only rules out the common case (no
+  // header at all, or a plainly non-form one). It cannot rule out a
+  // `multipart/form-data` header with a missing or malformed `boundary=` —
+  // that still throws inside the actual parse. So the parse itself is also
+  // wrapped: any failure there gets the same 404, not a 5xx.
   const contentType = request.headers.get("content-type") ?? ""
   if (!isFormContentType(contentType)) {
     return html(page("Not found — coord-portal", notFound()), { status: 404 })
   }
 
-  const form = await request.formData()
+  let form: FormData
+  try {
+    form = await request.formData()
+  } catch {
+    return html(page("Not found — coord-portal", notFound()), { status: 404 })
+  }
   const action = stringField(form, "action")
 
   if (action === "approve" || action === "request-changes") {
@@ -207,9 +218,13 @@ function stringField(form: FormData, name: string): string {
 }
 
 /**
- * The two content types `request.formData()` can actually parse. Matched by
- * prefix, not equality, so `multipart/form-data; boundary=...` — which every
- * real multipart POST carries — still passes.
+ * A cheap pre-check for the two content types `request.formData()` might be
+ * able to parse. Matched by prefix, not equality, so
+ * `multipart/form-data; boundary=...` — which every real multipart POST
+ * carries — still passes. This does not guarantee the parse will succeed
+ * (a `multipart/form-data` header with a missing or malformed `boundary=`
+ * still passes here and throws in `request.formData()`); that failure mode
+ * is handled separately, by wrapping the parse itself in try/catch.
  */
 function isFormContentType(contentType: string): boolean {
   const value = contentType.toLowerCase()
