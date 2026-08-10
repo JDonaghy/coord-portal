@@ -49,6 +49,21 @@ export function sendTypeForStatus(status: string): SendType | null {
 }
 
 /**
+ * NOTE (v2 quiet-hours refinement, issue #14): a push that re-sets `status` to
+ * the *same* sending value it is already at — e.g. coord proposes design round
+ * 2 with another `awaiting-signoff` push while round 1 is still awaiting
+ * sign-off — reads as a fresh transition here and sends a second email. The
+ * sealed acceptance suite (`tests/acceptance/ms-1/14-notifications.spec.ts`,
+ * "a re-applied push does not re-send an email") deliberately leaves this
+ * ambiguous: what it pins is that an `already_applied` replay (same or stale
+ * revision) never re-sends, not that re-entering a sending state at a genuinely
+ * newer revision is silent. Re-proposing a round or raising a second question
+ * is plausibly real news, so this is left as-is rather than guessed at; a
+ * future per-recipient quiet-hours pass is the right place to decide whether
+ * same-state-to-same-state should coalesce.
+ */
+
+/**
  * The sending address every email carries. Matches the three pinned mocks
  * (`mocks/11-13-email-*.html`) — the contract pins `email-from` as a hook, not
  * this literal string (a test may only assert "looks like an address"), so
@@ -86,14 +101,21 @@ interface OutboxRow {
   sent_at: string
 }
 
-function fromRow(row: OutboxRow): OutboxEmail {
+/**
+ * A row can only ever have been written by `recordNotificationForStatus`
+ * below, which validates against `SENDING_TYPES` before it writes — the
+ * `CHECK` constraint on `outbox.email_type` (`migrations/0007_notifications.sql`)
+ * backstops that further. `null` here means a row this code has no business
+ * ever seeing (a hand edit, a future migration widening the column); skipping
+ * it from the read-back is safer than fabricating a specific type it was never
+ * sent as.
+ */
+function fromRow(row: OutboxRow): OutboxEmail | null {
+  if (!isSendType(row.email_type)) return null
   return {
     id: row.id,
     submissionId: row.submission_id,
-    // A row can only ever have been written by `recordNotificationForStatus`
-    // below, which validates against `SENDING_TYPES` before it writes — this
-    // fallback exists only so a hand-edited row cannot crash the outbox page.
-    type: isSendType(row.email_type) ? row.email_type : "shipped",
+    type: row.email_type,
     to: row.to_email,
     from: row.from_email,
     subject: row.subject,
@@ -167,7 +189,7 @@ export async function recordNotificationForStatus(
     .run()
 }
 
-interface EmailContent {
+export interface EmailContent {
   subject: string
   preheader: string
   body: string
@@ -186,7 +208,7 @@ interface EmailContent {
  * rides in the body: `title` comes from `titleOf`, the customer's own words
  * from the intake form, never coord-authored text.
  */
-async function emailContent(env: Env, submission: Submission, type: SendType): Promise<EmailContent> {
+export async function emailContent(env: Env, submission: Submission, type: SendType): Promise<EmailContent> {
   const title = titleOf(submission)
   const ctaHref = `/submissions/${submission.id}`
 
@@ -234,5 +256,7 @@ export async function listOutboxForCustomer(env: Env, email: string): Promise<Ou
   )
     .bind(email)
     .all<OutboxRow>()
-  return (results ?? []).map(fromRow)
+  return (results ?? [])
+    .map(fromRow)
+    .filter((email): email is OutboxEmail => email !== null)
 }

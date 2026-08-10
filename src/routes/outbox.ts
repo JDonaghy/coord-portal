@@ -35,7 +35,7 @@ function outboxPage(email: string | null, emails: OutboxEmail[]): string {
       ? emails.map(emailPreview).join("\n")
       : `    <p class="lede" data-testid="outbox-empty">Nothing sent yet.</p>`
 
-  return `${topbar(email, "none")}
+  return `${topbar(email, "outbox")}
 <main>
   <h1>Sent emails</h1>
   <div data-testid="outbox-list">
