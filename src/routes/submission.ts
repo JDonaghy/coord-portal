@@ -81,6 +81,18 @@ export async function submitSubmissionAction(
     return html(page("Not found — coord-portal", notFound()), { status: 404 })
   }
 
+  // `request.formData()` throws a raw `TypeError` — an unhandled 500 — when
+  // the request carries no `Content-Type` at all, or one it can't parse as a
+  // form (issue #46: a bot, a broken client, or a redirect replayed as a
+  // bare POST). That is a malformed request, not a server error, and this
+  // refusal has to look exactly like the ownership check just above it: a
+  // POST with no body content-type gets the same 404 a non-owner gets, never
+  // a 5xx that would tell a prober "the id exists, the body was just wrong."
+  const contentType = request.headers.get("content-type") ?? ""
+  if (!isFormContentType(contentType)) {
+    return html(page("Not found — coord-portal", notFound()), { status: 404 })
+  }
+
   const form = await request.formData()
   const action = stringField(form, "action")
 
@@ -192,6 +204,18 @@ async function submitSignoff(
 function stringField(form: FormData, name: string): string {
   const value = form.get(name)
   return typeof value === "string" ? value.trim() : ""
+}
+
+/**
+ * The two content types `request.formData()` can actually parse. Matched by
+ * prefix, not equality, so `multipart/form-data; boundary=...` — which every
+ * real multipart POST carries — still passes.
+ */
+function isFormContentType(contentType: string): boolean {
+  const value = contentType.toLowerCase()
+  return (
+    value.startsWith("application/x-www-form-urlencoded") || value.startsWith("multipart/form-data")
+  )
 }
 
 /**
