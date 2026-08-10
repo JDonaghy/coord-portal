@@ -33,12 +33,17 @@ import { isCoordOwnedField, ownerOf } from "./ownership"
  * The most updates one push may carry.
  *
  * Not a contract term — the contract says nothing about batch size — but a
- * Worker limit made visible. Each update costs two D1 calls (a lookup and a
- * write), and D1 calls are subrequests, which Workers caps per request. An
- * uncapped batch fails somewhere in the middle with a platform error and no
- * per-item results, which is the least useful possible answer for a daemon
- * that then has to work out what landed. 50 mirrors the pull page size; a
- * daemon with more than that to say makes another request.
+ * Worker limit made visible. Each update costs at least two D1 calls (a
+ * lookup and a write), and D1 calls are subrequests, which Workers caps per
+ * request. A status-setting update that lands (see `recordNotificationForStatus`
+ * below) can cost more still — one more for the outbox insert, and, for
+ * `awaiting-signoff`, one more again to read back the design round. That extra
+ * work is deferred via `ctx.waitUntil` so it never blocks the response, but it
+ * still runs inside this request's lifetime and so still counts against its
+ * subrequest budget. An uncapped batch fails somewhere in the middle with a
+ * platform error and no per-item results, which is the least useful possible
+ * answer for a daemon that then has to work out what landed. 50 mirrors the
+ * pull page size; a daemon with more than that to say makes another request.
  */
 export const MAX_PUSH_UPDATES = 50
 
@@ -64,15 +69,19 @@ export interface PushUpdate {
  * the second must see what the first did. Concurrency here would make the
  * result order a coin toss on state, not just on timing.
  */
-export async function applyUpdates(env: Env, rawUpdates: unknown[]): Promise<PushResult[]> {
+export async function applyUpdates(
+  env: Env,
+  rawUpdates: unknown[],
+  ctx?: ExecutionContext,
+): Promise<PushResult[]> {
   const results: PushResult[] = []
   for (const raw of rawUpdates) {
-    results.push(await applyUpdate(env, raw))
+    results.push(await applyUpdate(env, raw, ctx))
   }
   return results
 }
 
-async function applyUpdate(env: Env, raw: unknown): Promise<PushResult> {
+async function applyUpdate(env: Env, raw: unknown, ctx?: ExecutionContext): Promise<PushResult> {
   const parsed = parseUpdate(raw)
   if ("error" in parsed) {
     return { submission_id: parsed.submissionId, outcome: "rejected", reason: parsed.error }
@@ -170,15 +179,50 @@ async function applyUpdate(env: Env, raw: unknown): Promise<PushResult> {
   // No event is emitted here, ever. The portal only publishes customer-authored
   // facts; echoing the daemon's own write back at it is how two synced systems
   // talk themselves into an infinite loop. See src/bridge/events.ts.
-  await env.DB.batch(statements)
+  const batchResults = await env.DB.batch(statements)
 
   // Issue #14: exactly the three customer-actionable-or-terminal statuses
   // generate an email, and only a push that actually names `status` counts —
   // the round/decomposition/artifact churn a submission accumulates between
-  // sends must never itself trigger one. Run after the batch above so a fresh
-  // `awaiting-signoff` push can read the design round it just published.
-  if (typeof status === "string") {
-    await recordNotificationForStatus(env, submission, status, update.revision, updatedAt)
+  // sends must never itself trigger one.
+  //
+  // `statements[0]` is always the watermark UPDATE above, guarded by
+  // `coord_revision IS NULL OR coord_revision < ?`. If a concurrent push for
+  // this same submission landed a newer revision between the lookup and this
+  // batch, that guard makes our own write a no-op — `meta.changes` is `0` —
+  // and `status` here is this (losing) request's now-stale value, not
+  // whatever the submission actually ended up at. Recording a notification
+  // for it would send an email for a status the customer's screen never
+  // showed, so a loss is treated exactly like a rejection: no send. The
+  // daemon still hears `applied`; only the notification is skipped.
+  if (typeof status === "string" && (batchResults[0]?.meta.changes ?? 0) > 0) {
+    // Deferred rather than awaited: this is a second, un-batched D1 round
+    // trip (a third and fourth for `awaiting-signoff`, which reads back the
+    // design round it just published — see `emailContent`), and it must
+    // never be able to fail a request whose real, authoritative write already
+    // committed above. `ctx.waitUntil` keeps it alive past the response
+    // without holding the response open for it; the sealed acceptance suite
+    // and `e2e/notifications.spec.ts` already poll the outbox rather than
+    // expect it populated synchronously ("digest-first, not instant"). Where
+    // no `ExecutionContext` is available (unit tests calling this directly),
+    // fall back to awaiting it inline — still guarded by the same `catch`.
+    const notify = recordNotificationForStatus(
+      env,
+      submission,
+      status,
+      update.revision,
+      updatedAt,
+    ).catch((err) => {
+      console.error(
+        `notification write failed for ${submissionId} rev ${update.revision}:`,
+        err,
+      )
+    })
+    if (ctx) {
+      ctx.waitUntil(notify)
+    } else {
+      await notify
+    }
   }
 
   return { submission_id: submissionId, outcome: "applied" }

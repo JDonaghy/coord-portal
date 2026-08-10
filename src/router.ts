@@ -4,7 +4,11 @@ import { bridgeHeartbeat, bridgePull, bridgePush } from "./routes/bridge"
 import { health } from "./routes/health"
 import { whoami } from "./routes/whoami"
 
-export type Handler = (request: Request, env: Env) => Promise<Response> | Response
+export type Handler = (
+  request: Request,
+  env: Env,
+  ctx?: ExecutionContext,
+) => Promise<Response> | Response
 
 const ROUTES: Record<string, Partial<Record<string, Handler>>> = {
   "/api/health": { GET: health },
@@ -27,7 +31,11 @@ export function json(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body, null, 2) + "\n", { ...init, headers })
 }
 
-export async function handleApi(request: Request, env: Env): Promise<Response> {
+export async function handleApi(
+  request: Request,
+  env: Env,
+  ctx?: ExecutionContext,
+): Promise<Response> {
   const { pathname } = new URL(request.url)
 
   // The service-token gate covers the whole `/api/bridge` prefix, not just the
@@ -55,7 +63,7 @@ export async function handleApi(request: Request, env: Env): Promise<Response> {
   }
 
   try {
-    return await handler(request, env)
+    return await handler(request, env, ctx)
   } catch (err) {
     // Never leak an internal message to the public internet; the real error
     // goes to the Workers log, which [observability] keeps.

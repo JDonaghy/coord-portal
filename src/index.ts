@@ -14,11 +14,11 @@ import type { Env } from "./types"
  * page falls through to when `handlePages` does not own the path (e.g. `/`).
  */
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const { pathname } = new URL(request.url)
 
     if (pathname === "/api" || pathname.startsWith("/api/")) {
-      return handleApi(request, env)
+      return handleApi(request, env, ctx)
     }
 
     const page = await handlePages(request, env)
