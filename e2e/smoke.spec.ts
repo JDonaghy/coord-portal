@@ -14,7 +14,10 @@ test("the landing page renders and reports a healthy stack", async ({ page }) =>
   // This assertion is the whole reason the readout exists: it is only green if
   // the Worker booted, D1 answered with an applied migration, and R2 answered.
   await expect(page.locator("#overall")).toHaveText("all systems ok")
-  await expect(page.locator("#d1")).toHaveText(/schema 0005/)
+  // Pinned to the migration head on purpose: it moves in the same commit that
+  // adds a migration, so a migration that silently failed to apply shows up
+  // here rather than as a confusing 500 three screens later.
+  await expect(page.locator("#d1")).toHaveText(/schema 0006/)
   await expect(page.locator("#r2")).toHaveText("ok")
 })
 

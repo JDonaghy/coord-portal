@@ -1,6 +1,13 @@
 import { readAccessIdentity } from "../identity"
 import { escapeHtml, html, page, topbar } from "../render"
-import { listSubmissionsForCustomer, statusText, titleOf, type Submission } from "../submissions"
+import { derivedStatus, loadSignoffStates } from "../rounds"
+import {
+  listSubmissionsForCustomer,
+  statusText,
+  titleOf,
+  type Submission,
+  type SubmissionStatus,
+} from "../submissions"
 import type { Env } from "../types"
 
 /**
@@ -18,37 +25,56 @@ export async function submissionsDashboard(request: Request, env: Env): Promise<
     ? await listSubmissionsForCustomer(env, identity.email)
     : []
 
-  return html(page("My requests — coord-portal", dashboard(identity.email, submissions)))
+  // The same derived status the detail screen shows (`src/rounds.ts`), so a
+  // request the customer has just sent back for changes does not sit on this
+  // list still claiming to be waiting on them. One query for every row, not one
+  // per row — see `loadSignoffStates`.
+  const states = await loadSignoffStates(
+    env,
+    submissions
+      .filter((submission) => submission.status === "awaiting-signoff")
+      .map((submission) => submission.reference),
+  )
+  const rows = submissions.map((submission) => ({
+    submission,
+    display: derivedStatus(submission.status, states.get(submission.reference) ?? null),
+  }))
+
+  return html(page("My requests — coord-portal", dashboard(identity.email, rows)))
 }
 
-function dashboard(email: string | null, submissions: Submission[]): string {
+interface DashboardRow {
+  submission: Submission
+  display: SubmissionStatus
+}
+
+function dashboard(email: string | null, rows: DashboardRow[]): string {
   return `${topbar(email, "dashboard")}
 <main>
   <div class="page-head">
     <h1>My requests</h1>
     <a class="button primary" href="/intake" data-testid="nav-new-cta">New request</a>
   </div>
-  ${submissions.length > 0 ? list(submissions) : empty()}
+  ${rows.length > 0 ? list(rows) : empty()}
 </main>`
 }
 
-function list(submissions: Submission[]): string {
-  const rows = submissions.map(row).join("\n")
+function list(rows: DashboardRow[]): string {
   return `<ul class="submission-list" data-testid="submission-list">
-${rows}
+${rows.map(row).join("\n")}
   </ul>`
 }
 
-function row(submission: Submission): string {
+function row({ submission, display }: DashboardRow): string {
   const title = titleOf(submission)
   return `    <li>
-      <a class="submission-row" data-testid="submission-row" data-status="${escapeHtml(submission.status)}"
+      <a class="submission-row" data-testid="submission-row" data-status="${escapeHtml(display)}"
          href="/submissions/${submission.id}">
         <div class="row-main">
           <span class="title">${escapeHtml(title)}</span>
           <span class="meta">${submission.reference} &middot; ${escapeHtml(submission.createdAt)}</span>
         </div>
-        <span class="status-pill" data-testid="status-pill" data-status="${escapeHtml(submission.status)}">${escapeHtml(statusText(submission.status))}</span>
+        <span class="status-pill" data-testid="status-pill" data-status="${escapeHtml(display)}">${escapeHtml(statusText(display))}</span>
       </a>
     </li>`
 }

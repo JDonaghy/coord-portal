@@ -1,7 +1,8 @@
 import { submissionsDashboard } from "./routes/dashboard"
 import { intakeForm, submitIntake } from "./routes/intake"
+import { matchMockBundlePath, mockBundle } from "./routes/mocks"
 import { startForm, submitStart } from "./routes/start"
-import { submissionDetail, submissionRounds, submitAnswer } from "./routes/submission"
+import { submissionDetail, submissionRounds, submitSubmissionAction } from "./routes/submission"
 import type { Env } from "./types"
 
 const SUBMISSION_ROUNDS_PATH = /^\/submissions\/([^/?#]+)\/rounds$/
@@ -47,14 +48,22 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
     if (id) return submissionRounds(request, env, id)
   }
 
+  // The round's mock bundle, out of R2 (issue #13). GET only — there is no
+  // upload half on this side; see `routes/mocks.ts`.
+  const bundleMatch = matchMockBundlePath(pathname)
+  if (bundleMatch && request.method === "GET") {
+    return mockBundle(request, env, bundleMatch.id, bundleMatch.round, bundleMatch.rest)
+  }
+
   const submissionMatch = pathname.match(SUBMISSION_PATH)
   if (submissionMatch) {
     const id = submissionMatch[1]
     if (id && request.method === "GET") return submissionDetail(request, env, id)
-    // POST /submissions/:id — answering an open question (issue #11). Same
-    // path as the GET above, same "form posts back to its own route"
-    // convention `/intake` already uses.
-    if (id && request.method === "POST") return submitAnswer(request, env, id)
+    // POST /submissions/:id — answering an open question (#11), approving a
+    // design round or requesting changes on it (#13). Same path as the GET
+    // above, same "form posts back to its own route" convention `/intake`
+    // already uses; the `action` field says which.
+    if (id && request.method === "POST") return submitSubmissionAction(request, env, id)
   }
 
   return null

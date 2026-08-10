@@ -1,3 +1,4 @@
+import { roundStatementsForPush } from "../rounds"
 import { getSubmissionByReference, isSubmissionStatus } from "../submissions"
 import type { Env } from "../types"
 import { isCoordOwnedField, ownerOf } from "./ownership"
@@ -155,6 +156,15 @@ async function applyUpdate(env: Env, raw: unknown): Promise<PushResult> {
       ).bind(submissionId, field, JSON.stringify(value ?? null), update.revision, updatedAt),
     )
   }
+
+  // `design_round` / `decomposition` / `artifacts` additionally land in the
+  // versioned round archive (#13). `coord_facts` above keeps only the *current*
+  // value of each field — a second push replaces the first — and issue #13's
+  // whole point is that every previous round stays readable. Same batch, so a
+  // round can never exist without the push that authorised it.
+  statements.push(
+    ...(await roundStatementsForPush(env, submissionId, update.fields, update.revision, updatedAt)),
+  )
 
   // No event is emitted here, ever. The portal only publishes customer-authored
   // facts; echoing the daemon's own write back at it is how two synced systems
