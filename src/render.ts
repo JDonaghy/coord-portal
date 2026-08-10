@@ -54,6 +54,29 @@ export function publicHeader(): string {
 </header>`
 }
 
+/**
+ * The header every OPERATOR screen carries — issue #33's `/leads*`.
+ *
+ * Deliberately not `topbar()`. That one's nav points at `/submissions` and
+ * `/intake`, which are the *customer's* screens: `/submissions` is scoped to
+ * the caller's own submissions (#12), and an operator's own is always empty, so
+ * offering it would be a link to a permanently blank page. An operator is a
+ * different kind of identity, not a customer with extra buttons.
+ *
+ * `identity-email` reuses the customer topbar's hook name and copy on purpose —
+ * "who does this page say is signed in" is the same question on both, and one
+ * name for it is one thing to learn.
+ */
+export function operatorTopbar(email: string): string {
+  return `<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/leads" aria-current="page" data-testid="nav-leads">Leads</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ${escapeHtml(email)}</span>
+</header>`
+}
+
 /** Wraps a `<main>` body in the shared document shell and token stylesheet. */
 export function page(title: string, main: string): string {
   return `<!doctype html>
@@ -296,6 +319,59 @@ export function page(title: string, main: string): string {
     margin: 0.75rem 0 0; padding: 0.6rem 0.9rem; border-left: 3px solid var(--line-strong);
     color: var(--text-dim); font-size: var(--step--1); font-style: italic;
   }
+
+  /* ── The operator's lead inbox and lead detail (issue #33) ───────────────
+     tests/acceptance/ms-2/mocks/04-leads-inbox.html, 05-lead-detail.html and
+     06-lead-promoted.html. These are the only screens a customer never sees. */
+  ul.leads-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+  .lead-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1rem 1.25rem;
+  }
+  .lead-row .row-main { display: grid; gap: 0.3rem; min-width: 0; }
+  .lead-row .summary { font-weight: 600; }
+  .lead-row .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  .lead-row .row-side { display: flex; align-items: center; gap: 1rem; flex-shrink: 0; }
+
+  .lead-status-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.25em 0.75em; border-radius: 999px;
+    font-size: var(--step--1); font-weight: 600;
+  }
+  .lead-status-pill[data-status="new"]      { background: var(--idle-wash); color: var(--idle); }
+  .lead-status-pill[data-status="promoted"] { background: var(--pass-wash); color: var(--pass); }
+
+  main[data-testid="lead-detail"] .meta {
+    color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); margin: 0.35rem 0 1.5rem;
+  }
+  dl.card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1.25rem; margin-bottom: 1.25rem;
+  }
+  dl.card dt { font-weight: 600; font-size: var(--step--1); color: var(--text-dim); margin-top: 0.75rem; }
+  dl.card dt:first-child { margin-top: 0; }
+  dl.card dd { margin: 0.2rem 0 0; white-space: pre-wrap; }
+
+  /* The seat warning, before the operator acts and after. Both are loud on
+     purpose: a promoted customer who was never added to the Access policy is
+     accepted and never told, and nobody finds out until they ask why they
+     heard nothing (issue #33). */
+  .access-seat-reminder {
+    background: var(--attn-wash); color: var(--attn); border: 1px solid var(--attn);
+    border-radius: var(--r-md); padding: 0.85rem 1rem; font-size: var(--step--1);
+    margin-bottom: 1.25rem;
+  }
+  .access-seat-manual-step {
+    background: var(--attn-wash); color: var(--attn); border: 1px solid var(--attn);
+    border-radius: var(--r-md); padding: 0.85rem 1rem; font-weight: 600;
+    margin-bottom: 1rem;
+  }
+  .promoted-ref {
+    font-family: var(--font-mono); font-size: var(--step--1); color: var(--text-dim);
+    margin: 0 0 1.5rem;
+  }
+  form.promote { display: flex; justify-content: flex-end; }
 </style>
 </head>
 <body>

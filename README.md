@@ -37,7 +37,8 @@ this feeds, not the intake surface.
 | `src/routes/health.ts` | `GET /api/health` — touches D1 **and** R2, so a missing binding fails here rather than in the first feature that needs one. 503 when a probe fails. |
 | `src/routes/whoami.ts` | `GET /api/whoami` — echoes the Cloudflare Access identity so the Access config can be confirmed from a browser. **Not authentication** (see below). |
 | `src/routes/bridge.ts` | `/api/bridge/{pull,push,heartbeat}` — the outbound sync bridge (#15). See below. |
-| `migrations/` | `0001` the harness, `0002` submissions (#9), `0003` the bridge's event stream, coord mirror and daemon last-seen |
+| `src/routes/leads.ts` | `/leads`, `/leads/:id`, `POST /leads/:id/promote` — the operator's triage inbox and the one gate a stranger's request crosses to become a submission. Operator-only; see below. |
+| `migrations/` | `0001` the harness, `0002` submissions (#9), `0003` the bridge's event stream, coord mirror and daemon last-seen, `0005` public leads (#31), `0007` what a promoted lead records (#33) |
 | `public/` | placeholder page with a live health readout, and the token layer |
 | `test/` | 46 unit tests over routing, health probes, identity parsing and the bridge's decidable parts |
 | `e2e/` | 18 Playwright specs driving the real Worker with real local D1/R2 |
@@ -177,6 +178,38 @@ nothing about any customer.
 Until #1981 verifies the Access JWT in the Worker, **Access is the only control** — deleting or
 misconfiguring that policy silently reopens the site, because the Worker cannot currently tell a
 genuine Access request from a forged one. See `src/identity.ts`.
+
+### The operator surface, and the seat that is issued by hand
+
+`/leads` is the operator's triage inbox: every lead the public form has taken, and the one action
+that turns one into a customer. It sits behind the same site-wide Allow policy as everything else —
+there is no fifth Access application — and the Worker additionally checks the Access identity
+against an allowlist:
+
+```bash
+wrangler secret put OPERATOR_EMAILS   # comma- or whitespace-separated addresses
+```
+
+**Unset means nobody**, in production: `/leads` is a 404 for every caller, including whoever
+deployed it. That is the same fail-closed position the bridge's service token takes, and for the
+same reason — a deploy that forgets the setting should have no operator surface at all rather than
+one that answers to whatever address the Allow policy happens to admit. A caller who is not on the
+list gets exactly the response a missing lead gets: a 404, never a 403, so nobody who guesses the
+URL learns the surface exists. `wrangler dev` and every test tier honour a single synthetic
+development operator instead — see `src/operators.ts`.
+
+**Promotion does not issue the Access seat.** Nothing in this application can add an address to an
+Access policy, and nothing should: the thing that grants access to customer data must not be
+reachable from the application that serves it. So after promoting a lead, add that customer's email
+to the site's Allow policy **by hand** — the screen says so, in the flow, and names the exact
+address. Skipping it produces the worst available failure: a customer who was accepted, never told,
+and whose sign-in either bounces at the edge or lands them in an empty portal under a different
+identity. Neither shows an error to anybody.
+
+That address is load-bearing beyond the policy: every authenticated screen is scoped by the email
+Access returns, so the address entered at promotion **is** the customer's identity. One-time PIN
+cannot fragment it — the inbox that receives the PIN is the identity — but a federated provider
+returns whatever address that account carries, which may not be the one that was typed in.
 
 **Verifying a policy change did what you meant.** Checking that `/api/health` still answers proves
 nothing about the rest — a bypass mistakenly scoped to `api` instead of `api/health` leaves every
