@@ -1,5 +1,12 @@
 import { submissionsDashboard } from "./routes/dashboard"
 import { intakeForm, submitIntake } from "./routes/intake"
+import {
+  leadDetail,
+  leadsInbox,
+  leadsNotFound,
+  matchLeadsPath,
+  promoteLeadAction,
+} from "./routes/leads"
 import { matchMockBundlePath, mockBundle } from "./routes/mocks"
 import { startForm, submitStart } from "./routes/start"
 import { submissionDetail, submissionRounds, submitSubmissionAction } from "./routes/submission"
@@ -40,6 +47,27 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
 
   if (pathname === "/submissions" && request.method === "GET") {
     return submissionsDashboard(request, env)
+  }
+
+  // The operator's lead triage surface (#33). Owned here for every method, not
+  // just the ones it answers: falling through to `ASSETS.fetch` on, say, a GET
+  // of `/leads/:id/promote` would hand an unauthenticated caller the static
+  // site's response for a path this contract says is operator-only. `null` from
+  // here means "not mine"; `/leads…` is always mine.
+  const leadsMatch = matchLeadsPath(pathname)
+  if (leadsMatch) {
+    if (leadsMatch.kind === "index" && request.method === "GET") {
+      return leadsInbox(request, env)
+    }
+    if (leadsMatch.kind === "detail" && request.method === "GET") {
+      return leadDetail(request, env, leadsMatch.id)
+    }
+    if (leadsMatch.kind === "promote" && request.method === "POST") {
+      return promoteLeadAction(request, env, leadsMatch.id)
+    }
+    // Any other method on a `/leads…` path gets the same 404 a non-operator
+    // gets — see `src/operators.ts`. A 405 would confirm the path exists.
+    return leadsNotFound()
   }
 
   const roundsMatch = pathname.match(SUBMISSION_ROUNDS_PATH)

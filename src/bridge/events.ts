@@ -65,17 +65,28 @@ export const MAX_PULL_LIMIT = 200
  * `DB.batch()` as the write it describes. An event committed without its fact —
  * or a fact committed without its event — is how the daemon ends up building
  * something nobody asked for, or never hearing about something somebody did.
+ *
+ * `guard` makes the append conditional on some other row's state, evaluated
+ * inside the same transaction — for a write that may legitimately turn out to
+ * be a no-op (promoting an already-promoted lead, #33). The fact and its event
+ * must share the guard, or the pair stops being all-or-nothing.
  */
-export function appendEventStatement(env: Env, event: NewBridgeEvent): D1PreparedStatement {
+export function appendEventStatement(
+  env: Env,
+  event: NewBridgeEvent,
+  guard?: { clause: string; bindings: unknown[] },
+): D1PreparedStatement {
   return env.DB.prepare(
     `INSERT INTO bridge_events (id, type, submission_id, occurred_at, payload)
-     VALUES (?, ?, ?, ?, ?)`,
+     SELECT ?, ?, ?, ?, ?
+     ${guard ? guard.clause : ""}`,
   ).bind(
     generateEventId(),
     event.type,
     event.submissionReference,
     event.occurredAt,
     JSON.stringify(event.payload),
+    ...(guard ? guard.bindings : []),
   )
 }
 

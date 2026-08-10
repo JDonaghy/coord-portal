@@ -16,6 +16,18 @@ export interface Env {
    */
   BRIDGE_CLIENT_ID?: string
   BRIDGE_CLIENT_SECRET?: string
+  /**
+   * Who may reach the operator surface (`/leads*`, issue #33) — a comma- or
+   * whitespace-separated allowlist of Access identities.
+   *
+   * Optional, and unset means "nobody" in production: see `src/operators.ts`
+   * for why it fails closed there and what stands in for it locally. A secret
+   * (`wrangler secret put OPERATOR_EMAILS`), never `wrangler.toml` — this repo
+   * is public and the list of people who can read leads is not for publishing.
+   * `OPERATOR_EMAIL` is the singular spelling, accepted for the same setting.
+   */
+  OPERATOR_EMAILS?: string
+  OPERATOR_EMAIL?: string
 }
 
 export interface ProbeResult {

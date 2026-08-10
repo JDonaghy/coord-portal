@@ -142,30 +142,65 @@ function fromRow(row: SubmissionRow): Submission {
 }
 
 /**
- * Inserts a new submission at `describing`, and the `submission.created` event
- * that tells the coordinator about it — in one `DB.batch()`, which D1 runs as a
- * single transaction.
+ * A `FROM … WHERE …` tail appended to the two statements below, so a caller can
+ * make creating a submission conditional on some other row's state *inside the
+ * same transaction* — see `promoteLead` in `src/leads.ts`, which uses it to make
+ * a second promote of the same lead a no-op rather than a second submission.
  *
- * The batch is the point. A submission stored without its event is a request
- * the fleet never hears about; an event stored without its submission is work
- * proposed against a row that does not exist. The customer pressed the button
- * once, so exactly one of "both" or "neither" is an acceptable outcome.
- *
- * Ids and references are generated here, not accepted from the caller —
- * nothing about "which submission this is" should ever be client-supplied.
+ * A SQL fragment rather than a value because the condition is about a row this
+ * module knows nothing about. It is never built from request input: the only
+ * caller passes a literal string and binds its parameters, same as everywhere
+ * else here.
  */
-export async function createSubmission(
+export interface CreateGuard {
+  /** e.g. `FROM leads WHERE leads.id = ? AND leads.promoted_at IS NULL` */
+  clause: string
+  bindings: unknown[]
+}
+
+export interface CreateSubmissionOptions {
+  /**
+   * Pre-minted identifiers, for a caller that must record where a submission
+   * *will* live in the same transaction that creates it. Still portal-minted
+   * (`src/ids.ts`) and still never client-supplied — the rule is that nothing
+   * about "which submission this is" comes off the wire, not that only this
+   * function may call the generator.
+   */
+  id?: string
+  reference?: string
+  guard?: CreateGuard
+}
+
+/**
+ * The statements that create one submission at `describing` and the
+ * `submission.created` event that tells the coordinator about it — returned
+ * rather than executed, so a caller can put them in a batch alongside its own
+ * writes. `createSubmission` below is the ordinary "just do it" wrapper.
+ *
+ * Every submission this portal has ever created goes through here, which is
+ * what makes issue #33's "promotion must produce exactly the same event shape,
+ * from the daemon's point of view, as if the customer had filled out /intake
+ * directly" true by construction rather than by two code paths agreeing.
+ */
+export function createSubmissionStatements(
   env: Env,
   input: NewSubmissionInput,
-): Promise<Submission> {
-  const id = generateSubmissionId()
-  const reference = generateSubmissionReference()
+  options: CreateSubmissionOptions = {},
+): { submission: Submission; statements: D1PreparedStatement[] } {
+  const id = options.id ?? generateSubmissionId()
+  const reference = options.reference ?? generateSubmissionReference()
   const createdAt = new Date().toISOString()
+  const guard = options.guard
 
+  // `INSERT … SELECT` rather than `INSERT … VALUES` so the guarded and
+  // unguarded forms are one statement with one column list, not two that can
+  // drift apart. With no guard the SELECT has no FROM and yields exactly one
+  // row, which is what VALUES did.
   const insertSubmission = env.DB.prepare(
     `INSERT INTO submissions
        (id, reference, status, customer_email, outcome, audience, done_definition, constraints, project_scope, created_at)
-     VALUES (?, ?, 'describing', ?, ?, ?, ?, ?, ?, ?)`,
+     SELECT ?, ?, 'describing', ?, ?, ?, ?, ?, ?, ?
+     ${guard ? guard.clause : ""}`,
   ).bind(
     id,
     reference,
@@ -176,11 +211,12 @@ export async function createSubmission(
     input.constraints,
     input.projectScope,
     createdAt,
+    ...(guard ? guard.bindings : []),
   )
 
-  await env.DB.batch([
-    insertSubmission,
-    appendEventStatement(env, {
+  const appendEvent = appendEventStatement(
+    env,
+    {
       type: "submission.created",
       submissionReference: reference,
       occurredAt: createdAt,
@@ -201,22 +237,48 @@ export async function createSubmission(
         project_scope: input.projectScope,
         created_at: createdAt,
       },
-    }),
-  ])
+    },
+    guard,
+  )
 
   return {
-    id,
-    reference,
-    status: "describing",
-    customerEmail: input.customerEmail,
-    outcome: input.outcome,
-    audience: input.audience,
-    doneDefinition: input.doneDefinition,
-    constraints: input.constraints,
-    projectScope: input.projectScope,
-    createdAt,
-    coordRevision: null,
+    submission: {
+      id,
+      reference,
+      status: "describing",
+      customerEmail: input.customerEmail,
+      outcome: input.outcome,
+      audience: input.audience,
+      doneDefinition: input.doneDefinition,
+      constraints: input.constraints,
+      projectScope: input.projectScope,
+      createdAt,
+      coordRevision: null,
+    },
+    statements: [insertSubmission, appendEvent],
   }
+}
+
+/**
+ * Inserts a new submission at `describing`, and the `submission.created` event
+ * that tells the coordinator about it — in one `DB.batch()`, which D1 runs as a
+ * single transaction.
+ *
+ * The batch is the point. A submission stored without its event is a request
+ * the fleet never hears about; an event stored without its submission is work
+ * proposed against a row that does not exist. The customer pressed the button
+ * once, so exactly one of "both" or "neither" is an acceptable outcome.
+ *
+ * Ids and references are generated here, not accepted from the caller —
+ * nothing about "which submission this is" should ever be client-supplied.
+ */
+export async function createSubmission(
+  env: Env,
+  input: NewSubmissionInput,
+): Promise<Submission> {
+  const { submission, statements } = createSubmissionStatements(env, input)
+  await env.DB.batch(statements)
+  return submission
 }
 
 /** A durable lookup by row id — not tied to any session or request. */
