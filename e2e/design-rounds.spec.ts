@@ -1,5 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test"
 
+import { seedR2Object } from "./r2-fixtures"
+
 /**
  * Black-box coverage for issue #13 ([portal] Design rounds + versioned sign-off
  * loop), driving the real Worker under `wrangler dev` with real local D1 — see
@@ -213,6 +215,33 @@ test("the request-changes composer opens and cancels without leaving the page", 
   await expect(page.getByTestId("design-round")).toHaveAttribute("data-verdict", "pending")
 })
 
+/**
+ * The composer toggle is a real checkbox precisely so a keyboard-only user (no
+ * mouse, no screen reader) can open and close it with nothing but Tab and
+ * Space — a `<label role="button" tabindex="0">` alone does not get that for
+ * free (see the doc comment on `awaitingSignoffDetail` in
+ * `src/routes/submission.ts`). This drives it the way that user actually
+ * would: focus the control, press Space, never click anything.
+ */
+test("the request-changes composer opens and closes with only Tab and Space", async ({
+  page,
+  request,
+}) => {
+  const seeded = await seedSubmission(page, uniqueEmail("e2e-keyboard"))
+  await publishRound(request, seeded.reference, 1, ROUND_ONE)
+  await page.goto(seeded.url)
+
+  const toggle = page.locator("#request-changes-toggle")
+  await expect(page.getByTestId("request-changes-form")).toBeHidden()
+
+  await toggle.focus()
+  await page.keyboard.press("Space")
+  await expect(page.getByTestId("request-changes-form")).toBeVisible()
+
+  await page.keyboard.press("Space")
+  await expect(page.getByTestId("request-changes-form")).toBeHidden()
+})
+
 test("requesting changes opens round N+1 and never mutates round N", async ({ page, request }) => {
   const seeded = await seedSubmission(page, uniqueEmail("e2e-loop"))
   const before = await pullAll(request)
@@ -383,4 +412,182 @@ test("the dashboard row follows the same derived status as the detail screen", a
   await page.goto("/submissions")
   await expect(page.getByTestId("submission-row")).toHaveAttribute("data-status", "in-design")
   await expect(page.getByTestId("status-pill")).toHaveText("In design")
+})
+
+/**
+ * `roundStatementsForPush` (`src/rounds.ts`): a stale, out-of-order coord push
+ * that explicitly names an already-decided round while a *newer* round is
+ * still open and pending must land on that newer round rather than opening
+ * yet another one on top of it — the latter would silently orphan the round
+ * the customer is actually looking at, forever unreachable via
+ * `getCurrentRound`. Only the implicit "coord names no round" path was
+ * exercised before this test; this covers the explicit, out-of-order one.
+ */
+test("a push naming an already-decided round redirects to the newer pending round instead of orphaning it", async ({
+  page,
+  request,
+}) => {
+  const seeded = await seedSubmission(page, uniqueEmail("e2e-stale-round"))
+  await publishRound(request, seeded.reference, 1, ROUND_ONE)
+  await page.goto(seeded.url)
+  await page.getByTestId("approve-button").click()
+  await expect(page.getByTestId("submission-detail")).toHaveAttribute("data-status", "planned")
+
+  // Coord's next push names no round — this opens round 2, still pending.
+  await publishRound(request, seeded.reference, 2, ROUND_TWO)
+
+  // A stale push, naming round 1 (already decided) explicitly, as if coord's
+  // own state had not yet caught up with the approval.
+  const stale = await push(request, seeded.reference, 3, {
+    design_round: {
+      round: 1,
+      outcome_definition: "A stale revision of round 1, pushed after it was approved.",
+      decomposition: ["Whatever round 1 used to say"],
+    },
+    status: "awaiting-signoff",
+  })
+  expect(stale.outcome).toBe("applied")
+
+  await page.goto(`/submissions/${seeded.id}/rounds`)
+  // Still exactly two rounds — the stale push landed on round 2, not a new
+  // round 3, and round 2 is still there to receive a real verdict later.
+  await expect(page.getByTestId("round-entry")).toHaveCount(2)
+  const newest = page.getByTestId("round-entry").first()
+  await expect(newest).toHaveAttribute("data-round", "2")
+  await expect(newest).toHaveAttribute("data-verdict", "pending")
+  await expect(newest).toContainText("A stale revision of round 1, pushed after it was approved.")
+  const oldest = page.getByTestId("round-entry").nth(1)
+  await expect(oldest).toHaveAttribute("data-round", "1")
+  await expect(oldest).toHaveAttribute("data-verdict", "approved")
+})
+
+/**
+ * `routes/mocks.ts`'s `mockBundle` — the R2-backed route the earlier tests
+ * above never touch, because every `mock_bundle` they push is an absolute
+ * external URL and `mockBundleHref` links straight to those without going near
+ * this route. Here `mock_bundle` is a bare R2 key instead, which is what
+ * routes it through `/submissions/:id/rounds/:n/mock` for real: the ownership
+ * gate, `resolveBundleKey` wired to an actual request, the R2 `.get()`, and
+ * the CSP / nosniff / cache-control headers the route's own doc comment
+ * promises. `e2e/r2-fixtures.ts` seeds the objects via the same
+ * `wrangler r2 object put --local` CLI that populates the real bucket,
+ * against the same local R2 `wrangler dev` is already serving (see
+ * `playwright.config.ts`).
+ */
+test.describe("the mock bundle route (routes/mocks.ts)", () => {
+  test("serves a real R2 object, resolves a sibling asset beside it, and carries the pinned security headers", async ({
+    page,
+    request,
+  }) => {
+    const email = uniqueEmail("e2e-mock")
+    const seeded = await seedSubmission(page, email)
+    const indexKey = `rounds/${seeded.reference}/1/index.html`
+    const cssKey = `rounds/${seeded.reference}/1/tokens.css`
+    seedR2Object(
+      indexKey,
+      "<!doctype html><title>synthetic mock</title><p>hello from the mock bundle</p>",
+      "text/html; charset=utf-8",
+    )
+    seedR2Object(cssKey, "body { color: red }", "text/css; charset=utf-8")
+    await publishRound(request, seeded.reference, 1, { ...ROUND_ONE, mock_bundle: indexKey })
+
+    const identity = { "Cf-Access-Authenticated-User-Email": email }
+    const bundlePath = `/submissions/${seeded.id}/rounds/1/mock`
+
+    const doc = await request.get(bundlePath, { headers: identity })
+    expect(doc.status()).toBe(200)
+    expect(doc.headers()["content-type"]).toBe("text/html; charset=utf-8")
+    expect(doc.headers()["x-content-type-options"]).toBe("nosniff")
+    expect(doc.headers()["content-security-policy"]).toBe(
+      "default-src 'self'; script-src 'none'; frame-ancestors 'self'",
+    )
+    // Customer material behind Access — never a shared cache.
+    expect(doc.headers()["cache-control"]).toBe("private, no-store")
+    expect(await doc.text()).toContain("hello from the mock bundle")
+
+    // A self-contained page's own stylesheet link resolves beside it — the
+    // "single-document bundle" shape `resolveBundleKey`'s doc comment describes.
+    const css = await request.get(`${bundlePath}/tokens.css`, { headers: identity })
+    expect(css.status()).toBe(200)
+    expect(css.headers()["content-type"]).toBe("text/css; charset=utf-8")
+    expect(await css.text()).toBe("body { color: red }")
+  })
+
+  test("a stranger, a missing round, and a signed-out caller all get the exact same 404 a real bundle would give a non-owner", async ({
+    page,
+    request,
+  }) => {
+    const ownerEmail = uniqueEmail("e2e-mock-owner")
+    const seeded = await seedSubmission(page, ownerEmail)
+    const indexKey = `rounds/${seeded.reference}/1/index.html`
+    seedR2Object(indexKey, "<!doctype html><p>owner-only content</p>", "text/html; charset=utf-8")
+    await publishRound(request, seeded.reference, 1, { ...ROUND_ONE, mock_bundle: indexKey })
+
+    const bundlePath = `/submissions/${seeded.id}/rounds/1/mock`
+    const strangerEmail = uniqueEmail("e2e-mock-stranger")
+
+    // A stranger who guesses the URL — the bundle exists, but not for them.
+    const stranger = await request.get(bundlePath, {
+      headers: { "Cf-Access-Authenticated-User-Email": strangerEmail },
+    })
+    // The owner, but a round number nothing was ever published under.
+    const missingRound = await request.get(`/submissions/${seeded.id}/rounds/99/mock`, {
+      headers: { "Cf-Access-Authenticated-User-Email": ownerEmail },
+    })
+    // No identity at all.
+    const signedOut = await request.get(bundlePath)
+
+    for (const res of [stranger, missingRound, signedOut]) expect(res.status()).toBe(404)
+
+    // Byte-identical, per the route's own comment: "a 404 that only fires for
+    // someone else's bundle would itself confirm it exists."
+    const bodies = await Promise.all([stranger.text(), missingRound.text(), signedOut.text()])
+    expect(new Set(bodies).size).toBe(1)
+    for (const body of bodies) expect(body).not.toContain("owner-only content")
+  })
+
+  test("refuses to serve a mock_bundle that tries to climb out of its own subtree, even once the push has landed", async ({
+    page,
+    request,
+  }) => {
+    const email = uniqueEmail("e2e-mock-traversal")
+    const seeded = await seedSubmission(page, email)
+
+    // `asBundle` does not validate the shape — only `resolveBundleKey`, inside
+    // the route, does. This proves the route itself is the backstop, not just
+    // the unit test against the pure function in `test/rounds.test.ts`.
+    const result = await push(request, seeded.reference, 1, {
+      design_round: {
+        round: 1,
+        outcome_definition: "A synthetic outcome.",
+        decomposition: ["A single work item"],
+        mock_bundle: "../outside/secret.html",
+      },
+      status: "awaiting-signoff",
+    })
+    expect(result.outcome).toBe("applied")
+
+    const res = await request.get(`/submissions/${seeded.id}/rounds/1/mock`, {
+      headers: { "Cf-Access-Authenticated-User-Email": email },
+    })
+    expect(res.status()).toBe(404)
+  })
+
+  test("an unknown file extension inside a bundle is served as a download, never guessed as HTML", async ({
+    page,
+    request,
+  }) => {
+    const email = uniqueEmail("e2e-mock-contenttype")
+    const seeded = await seedSubmission(page, email)
+    const bundlePrefix = `rounds/${seeded.reference}/1`
+    seedR2Object(`${bundlePrefix}/index.html`, "<!doctype html><p>index</p>", "text/html; charset=utf-8")
+    seedR2Object(`${bundlePrefix}/data.bin`, "not markup, just bytes", "application/octet-stream")
+    await publishRound(request, seeded.reference, 1, { ...ROUND_ONE, mock_bundle: bundlePrefix })
+
+    const res = await request.get(`/submissions/${seeded.id}/rounds/1/mock/data.bin`, {
+      headers: { "Cf-Access-Authenticated-User-Email": email },
+    })
+    expect(res.status()).toBe(200)
+    expect(res.headers()["content-type"]).toBe("application/octet-stream")
+  })
 })

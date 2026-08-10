@@ -1,6 +1,7 @@
 import { readAccessIdentity } from "../identity"
 import { html, page } from "../render"
 import { listRounds } from "../rounds"
+import { isOwnedBy } from "./submission"
 import { getSubmission } from "../submissions"
 import type { Env } from "../types"
 
@@ -54,7 +55,7 @@ export async function mockBundle(
 ): Promise<Response> {
   const identity = readAccessIdentity(request)
   const submission = await getSubmission(env, id)
-  if (!submission || identity.email === null || submission.customerEmail !== identity.email) {
+  if (!submission || !isOwnedBy(submission, identity.email)) {
     return notFound()
   }
 
