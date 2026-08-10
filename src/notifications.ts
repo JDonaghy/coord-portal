@@ -16,7 +16,7 @@ import type { Env } from "./types"
  * produces no row here at all. Per-recipient quiet hours are an explicit v2
  * refinement (issue #14) and are not modeled here.
  *
- * This module decides WHAT to send and records it; `migrations/0007_notifications.sql`
+ * This module decides WHAT to send and records it; `migrations/0008_notifications.sql`
  * is the durable store, and `src/routes/outbox.ts` is the only reader
  * (`GET /outbox`, scoped to the caller's own sends, same as the dashboard is
  * scoped to the caller's own submissions). Actually dispatching the message —
@@ -104,7 +104,7 @@ interface OutboxRow {
 /**
  * A row can only ever have been written by `recordNotificationForStatus`
  * below, which validates against `SENDING_TYPES` before it writes — the
- * `CHECK` constraint on `outbox.email_type` (`migrations/0007_notifications.sql`)
+ * `CHECK` constraint on `outbox.email_type` (`migrations/0008_notifications.sql`)
  * backstops that further. `null` here means a row this code has no business
  * ever seeing (a hand edit, a future migration widening the column); skipping
  * it from the read-back is safer than fabricating a specific type it was never
