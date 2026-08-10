@@ -149,11 +149,12 @@ scoped to `heurontech.com` only. That last one is required by the custom domain 
 
 Configured 2026-08-08. Team domain `heurontech.cloudflareaccess.com`; login by one-time PIN.
 
-Three applications, not one — Cloudflare matches most-specific-first:
+Four applications, not one — Cloudflare matches most-specific-first:
 
 | Application | Path | Policy |
 |---|---|---|
 | `intake.heurontech.com/api/health` | health only | **Bypass** — everyone |
+| `intake.heurontech.com/start` | the public lead form (issue #31) | **Bypass** — everyone |
 | `intake.heurontech.com/api/bridge` | the sync bridge only | **Service Auth** — the daemon's service token |
 | `intake.heurontech.com` | everything else | **Allow** — permitted emails |
 
@@ -161,9 +162,17 @@ The bridge application is **not yet created** — it is an account-setup step fo
 daemon's service token, alongside the two `wrangler secret put` calls above. Until then the bridge
 sits behind the site's Allow policy, which a daemon cannot satisfy.
 
-The bypass is **required, not a convenience**: without it CI's post-deploy health check receives a
-login page and every deploy fails. Health exposes a version and a schema version, nothing about any
-customer.
+The `/start` bypass is an **account-setup step, same as the bridge application above — not yet
+created**. The Worker itself never authenticates that route (`src/routes/start.ts` never reads an
+Access identity), but until the dashboard policy exists, Access's own edge still intercepts the
+path in production and shows a login page before the Worker ever sees the request. Local dev,
+`wrangler dev`, and every test tier in this repo have no Access in front of them at all, so they
+exercise the route as public today regardless of this policy's state — only the live deployment
+needs it.
+
+The `/api/health` bypass is **required, not a convenience**: without it CI's post-deploy health
+check receives a login page and every deploy fails. Health exposes a version and a schema version,
+nothing about any customer.
 
 Until #1981 verifies the Access JWT in the Worker, **Access is the only control** — deleting or
 misconfiguring that policy silently reopens the site, because the Worker cannot currently tell a
