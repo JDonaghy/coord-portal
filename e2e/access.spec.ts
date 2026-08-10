@@ -150,6 +150,38 @@ test("a POST with no Content-Type gets the same 404 a non-owner gets, never a 50
   expect(await strangerResponse.text()).toBe(await ownerResponse.text())
 })
 
+/**
+ * Issue #46 follow-up: a `Content-Type: multipart/form-data` header with no
+ * (or a malformed) `boundary=` passes the cheap prefix pre-check but still
+ * throws inside `request.formData()` itself. Only the real owner can reach
+ * this — the ownership check runs first — but it is the same "never a 5xx"
+ * bar the issue sets, so it still has to come back as the house-style 404,
+ * not a 500.
+ */
+test("a POST with a malformed multipart boundary gets a 404, never a 500", async ({
+  browser,
+  baseURL,
+  request,
+}) => {
+  const ada = uniqueEmail("ada-e2e-boundary")
+  const adaContext = await browser.newContext({
+    baseURL,
+    extraHTTPHeaders: { [ACCESS_HEADER]: ada },
+  })
+  const adaPage = await adaContext.newPage()
+  const adaSubmission = await createSubmission(adaPage, "ADA-E2E-BOUNDARY")
+  await adaContext.close()
+
+  const response = await request.post(adaSubmission.url, {
+    headers: {
+      [ACCESS_HEADER]: ada,
+      "content-type": "multipart/form-data",
+    },
+    data: "this is not valid multipart data",
+  })
+  expect(response.status()).toBe(404)
+})
+
 test("an identity-less request to /submissions or a submission URL gets no customer data", async ({
   browser,
   baseURL,
