@@ -462,6 +462,15 @@ export function scrubEngineerIdentifiers(value: string): string {
  * once in SQL by the `WHERE NOT EXISTS (... signoffs ...)` on the upsert, so a
  * concurrent verdict landing between the read and the write still cannot rewrite
  * history.
+ *
+ * One more wrinkle in that first bullet: coord may explicitly name a round
+ * that has a verdict while a *newer* round is already open and still pending
+ * (stale coord-side state pointing at an old round, most plausibly). Landing
+ * on `named round + 1` there would silently orphan the pending round already
+ * in front of the customer — it would never receive a verdict and would sit,
+ * unreachable via `getCurrentRound`, in the history forever. So that case
+ * redirects to the current pending round instead, exactly as if coord had
+ * named no round at all.
  */
 export async function roundStatementsForPush(
   env: Env,
@@ -486,10 +495,22 @@ export async function roundStatementsForPush(
   }
 
   if (base !== null && base.verdict !== "pending") {
-    // Coord aimed at a round the customer has already decided. Open the next one
-    // instead of editing the record of what was agreed.
-    target = Math.max(current?.round ?? base.round, base.round) + 1
-    base = null
+    // Coord aimed at a round the customer has already decided.
+    if (current !== null && current.round !== base.round && current.verdict === "pending") {
+      // But a newer round is already open and still waiting on the customer —
+      // land there instead, exactly as the implicit "coord named no round"
+      // path above would have. Opening yet another round on top of it would
+      // silently orphan the one already in front of the customer: it would
+      // never receive a verdict and would sit, unreachable via
+      // `getCurrentRound`, in the history forever.
+      target = current.round
+      base = current
+    } else {
+      // No newer pending round to redirect to — open the next one instead of
+      // editing the record of what was agreed.
+      target = Math.max(current?.round ?? base.round, base.round) + 1
+      base = null
+    }
   }
 
   if (target === null) target = (current?.round ?? 0) + 1

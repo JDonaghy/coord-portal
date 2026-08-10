@@ -183,10 +183,13 @@ export function page(title: string, main: string): string {
      mocks/05-submission-awaiting-signoff.html, 06-request-changes.html and
      07-round-history.html.
 
-     The composer opens with no JavaScript: .composer-toggle is a
-     visually-hidden checkbox that sits ahead of both the round card and the
-     composer, and the two label[role=button] controls (request-changes-button,
-     cancel-changes) toggle it. Everything below is the sibling-selector
+     The composer opens with no JavaScript: .composer-toggle is the real,
+     keyboard-focusable checkbox that sits ahead of both the round card and the
+     composer; the two label[role=button][for] controls (request-changes-button,
+     cancel-changes) toggle it by click, and native Space-to-toggle on the
+     checkbox itself is what a keyboard-only user actually reaches — see the
+     doc comment on awaitingSignoffDetail in src/routes/submission.ts for why
+     the labels alone cannot do that. Everything below is the sibling-selector
      consequence of that one checkbox. Do not replace this with a script — "no
      build step, no framework" (CLAUDE.md), and every other control on this
      portal already works without one. */
@@ -194,7 +197,13 @@ export function page(title: string, main: string): string {
     position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
     overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
   }
-  .composer-toggle { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+  /* Same visually-hidden technique as .visually-hidden above (not the
+     off-screen "left: -9999px" kind) — focusing it must not shove the
+     viewport sideways to reveal an invisible box. */
+  .composer-toggle {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
 
   .round-card {
     background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 1.5rem;
@@ -227,12 +236,29 @@ export function page(title: string, main: string): string {
   }
   label.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); }
   label.ghost { background: transparent; color: var(--text-dim); border: 1px solid var(--line-strong); }
-  label.secondary:focus-visible, label.ghost:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* The checkbox, not the label, is what actually receives focus (see the
+     .composer-toggle comment above) — so its focus ring is painted onto
+     whichever label is currently the visible, live action for it. Exactly one
+     of the two is ever visible at a time (.round-actions and form.composer
+     are each display:none in the other state), so this never double-paints. */
+  .composer-toggle:focus-visible ~ .round-card .round-actions label.secondary,
+  .composer-toggle:focus-visible ~ form.composer .actions label.ghost {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
 
   form.composer { display: none; }
   .composer-toggle:checked ~ form.composer { display: block; }
   .composer-toggle:checked ~ .round-card { opacity: 0.55; }
   .composer-toggle:checked ~ .round-card .round-actions { display: none; }
+  /* mocks/06-request-changes.html marks this card aria-hidden="true" while the
+     composer is open, on top of the dimming. Pure CSS cannot toggle an ARIA
+     attribute (that needs script, which this composer deliberately has none
+     of, or a duplicated copy of the round content to swap via display — which
+     would give decomposition-item/outcome-definition a second DOM instance and
+     break every getByTestId that pins them as singular). So this is a known,
+     accepted fidelity gap versus the mock: the now-inert content stays exposed
+     to assistive tech while the composer is open. Not contract-enforced by any
+     test. */
   form.composer {
     background: var(--surface); border: 1px solid var(--attn); border-radius: var(--r-lg);
     padding: 1.5rem; margin-top: 1rem; box-shadow: 0 4px 20px rgba(0,0,0,0.06);

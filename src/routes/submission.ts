@@ -224,11 +224,15 @@ export async function submissionRounds(
 }
 
 /**
- * The one ownership check this file needs, in one place. `null` never owns
- * anything — an unidentified caller and a submission with no recorded
- * customer (should one ever exist) both fail closed, not open.
+ * The one ownership check a submission needs. `null` never owns anything — an
+ * unidentified caller and a submission with no recorded customer (should one
+ * ever exist) both fail closed, not open.
+ *
+ * Exported so `routes/mocks.ts`'s bundle route uses this exact check rather
+ * than a second copy of it — a mock bundle is gated on the same fact as the
+ * submission it belongs to, and two copies of "same fact" is how they drift.
  */
-function isOwnedBy(submission: Submission, email: string | null): boolean {
+export function isOwnedBy(submission: Submission, email: string | null): boolean {
   return email !== null && submission.customerEmail === email
 }
 
@@ -437,9 +441,24 @@ interface ComposerState {
  * is not cleverness for its own sake — CLAUDE.md pins "no build step, no
  * framework", every other form in this portal is a plain server-rendered POST,
  * and a disclosure that depends on script would be the one control on the
- * screen that stops working when script does. The labels carry `role="button"`
- * and `tabindex` so they are still buttons to a screen reader and to the
- * keyboard.
+ * screen that stops working when script does.
+ *
+ * The checkbox itself, not the labels, is the keyboard's tab stop
+ * (`aria-label` gives it a name, since it has no visible text of its own).
+ * That is deliberate, not incidental: a `<label>` given `role="button"` and
+ * `tabindex="0"` gains no native Enter/Space-to-activate behaviour — that
+ * translation from keydown to a click is built into native interactive
+ * elements (`button`, `a[href]`, form controls) and otherwise only exists if
+ * script adds it, which this composer does not have. A real checkbox gets
+ * Space-to-toggle for free from the browser, zero script required, so it — not
+ * a label wearing a button costume — is what a keyboard-only user actually
+ * reaches. The two labels stay exactly as `mocks/05` and `06` pin them and
+ * keep working by click (the native `for` association needs neither tabindex
+ * nor focus) and keep `role="button"` for a screen-reader's own browse-mode
+ * "activate" affordance, which does not depend on tab focus either. See the
+ * `:focus-visible` rule on `.composer-toggle` in `src/render.ts` for how the
+ * visible label still shows a focus ring even though it is the hidden
+ * checkbox that is actually focused.
  *
  * `checked` is also settable from the server, which is how a rejected blank
  * comment comes back with the composer still open and the customer's place
@@ -463,7 +482,7 @@ function awaitingSignoffDetail(
   <h1>${escapeHtml(titleOf(submission))}</h1>
   ${referenceLine(submission)}
 
-  <input class="composer-toggle" type="checkbox" id="request-changes-toggle" tabindex="-1" aria-hidden="true"${checked}>
+  <input class="composer-toggle" type="checkbox" id="request-changes-toggle" aria-label="Request changes"${checked}>
 
   <section class="round-card" data-testid="design-round" data-round="${round.round}" data-verdict="pending">
     <div class="round-head">
@@ -482,7 +501,7 @@ ${mockBundleSection(submission, round)}
         <input type="hidden" name="action" value="approve">
         <button type="submit" class="primary" data-testid="approve-button">Approve</button>
       </form>
-      <label class="secondary" role="button" tabindex="0" for="request-changes-toggle" data-testid="request-changes-button">Request changes</label>
+      <label class="secondary" role="button" for="request-changes-toggle" data-testid="request-changes-button">Request changes</label>
     </div>
   </section>
 
@@ -498,7 +517,7 @@ ${mockBundleSection(submission, round)}
       placeholder="Tell us what to change and why."></textarea>
     <p class="next-round-note" data-testid="next-round-note">Submitting opens Round ${next} and moves this back to <strong>In design</strong>.</p>
     <div class="actions">
-      <label class="ghost" role="button" tabindex="0" for="request-changes-toggle" data-testid="cancel-changes">Cancel</label>
+      <label class="ghost" role="button" for="request-changes-toggle" data-testid="cancel-changes">Cancel</label>
       <button type="submit" class="primary" data-testid="submit-changes">Submit changes</button>
     </div>
   </form>
