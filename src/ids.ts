@@ -52,6 +52,15 @@ export function generateEventId(): string {
   return `evt_${randomHex(24)}`
 }
 
+/**
+ * `ntf_` + 24 lowercase hex chars — one row in the outbox (issue #14). Same
+ * shape as `generateEventId` and for the same reason: an opaque handle for one
+ * send, independent of the revision that triggered it.
+ */
+export function generateOutboxId(): string {
+  return `ntf_${randomHex(24)}`
+}
+
 function randomHex(length: number): string {
   const bytes = crypto.getRandomValues(new Uint8Array(Math.ceil(length / 2)))
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0"))

@@ -8,6 +8,7 @@ import {
   promoteLeadAction,
 } from "./routes/leads"
 import { matchMockBundlePath, mockBundle } from "./routes/mocks"
+import { outbox } from "./routes/outbox"
 import { startForm, submitStart } from "./routes/start"
 import { submissionDetail, submissionRounds, submitSubmissionAction } from "./routes/submission"
 import type { Env } from "./types"
@@ -47,6 +48,13 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
 
   if (pathname === "/submissions" && request.method === "GET") {
     return submissionsDashboard(request, env)
+  }
+
+  // The outbox (issue #14) — a black-box read-back of what the portal decided
+  // to send, since the Gate-A contract pins the email DOM but no route that
+  // renders it. See `routes/outbox.ts`.
+  if (pathname === "/outbox" && request.method === "GET") {
+    return outbox(request, env)
   }
 
   // The operator's lead triage surface (#33). Owned here for every method, not

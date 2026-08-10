@@ -372,6 +372,24 @@ export function page(title: string, main: string): string {
     margin: 0 0 1.5rem;
   }
   form.promote { display: flex; justify-content: flex-end; }
+
+  /* ── The outbox (issue #14) — mocks/11-13-email-*.html, read back at
+     GET /outbox. Not a live inbox; see src/routes/outbox.ts. */
+  div[data-testid="outbox-list"] { display: grid; gap: 1.5rem; }
+  .email {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    overflow: hidden;
+  }
+  .email-meta { padding: 1rem 1.5rem; border-bottom: 1px solid var(--line); font-size: var(--step--1); color: var(--text-dim); }
+  .email-meta dl { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.75rem; margin: 0; }
+  .email-meta dt { color: var(--text-faint); }
+  .email-subject { padding: 1.25rem 1.5rem 0; font-size: var(--step-1); font-weight: 700; margin: 0; }
+  .email-preheader { padding: 0 1.5rem; color: var(--text-faint); font-size: var(--step--1); margin: 0.35rem 0 1rem; }
+  .email-body { padding: 0 1.5rem 1.5rem; }
+  .email-cta {
+    display: inline-block; margin-top: 1rem; background: var(--accent); color: white !important;
+    text-decoration: none; border-radius: var(--r-md); padding: 0.65rem 1.25rem; font-weight: 600;
+  }
 </style>
 </head>
 <body>

@@ -1,3 +1,4 @@
+import { recordNotificationForStatus } from "../notifications"
 import { roundStatementsForPush } from "../rounds"
 import { getSubmissionByReference, isSubmissionStatus } from "../submissions"
 import type { Env } from "../types"
@@ -170,6 +171,15 @@ async function applyUpdate(env: Env, raw: unknown): Promise<PushResult> {
   // facts; echoing the daemon's own write back at it is how two synced systems
   // talk themselves into an infinite loop. See src/bridge/events.ts.
   await env.DB.batch(statements)
+
+  // Issue #14: exactly the three customer-actionable-or-terminal statuses
+  // generate an email, and only a push that actually names `status` counts —
+  // the round/decomposition/artifact churn a submission accumulates between
+  // sends must never itself trigger one. Run after the batch above so a fresh
+  // `awaiting-signoff` push can read the design round it just published.
+  if (typeof status === "string") {
+    await recordNotificationForStatus(env, submission, status, update.revision, updatedAt)
+  }
 
   return { submission_id: submissionId, outcome: "applied" }
 }
