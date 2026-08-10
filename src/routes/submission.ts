@@ -597,9 +597,16 @@ ${items}
     : ""
   // Only rounds where changes were requested carry a comment — approving asks
   // for none, and a pending round has not been answered yet.
+  //
+  // The quotation marks `mocks/07-round-history.html` draws around this are
+  // decoration, and they stay out of the DOM: this element holds the customer's
+  // own words, verbatim, and anything read back out of it — by a test, by a
+  // screen reader, by a copy-paste — should be exactly what they typed and not
+  // a typeset version of it. The blockquote rule in `src/render.ts` carries the
+  // visual instead.
   const comment =
     round.verdict === "changes-requested" && round.comment
-      ? `      <blockquote data-testid="round-comment">&ldquo;${escapeHtml(round.comment)}&rdquo;</blockquote>`
+      ? `      <blockquote data-testid="round-comment">${escapeHtml(round.comment)}</blockquote>`
       : ""
 
   return `    <section class="round-entry" data-testid="round-entry" data-round="${round.round}" data-verdict="${escapeHtml(round.verdict)}">
