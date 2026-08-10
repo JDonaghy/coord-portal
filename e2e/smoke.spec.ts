@@ -17,7 +17,7 @@ test("the landing page renders and reports a healthy stack", async ({ page }) =>
   // Pinned to the migration head on purpose: it moves in the same commit that
   // adds a migration, so a migration that silently failed to apply shows up
   // here rather than as a confusing 500 three screens later.
-  await expect(page.locator("#d1")).toHaveText(/schema 0008/)
+  await expect(page.locator("#d1")).toHaveText(/schema 0009/)
   await expect(page.locator("#r2")).toHaveText("ok")
 })
 
