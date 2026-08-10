@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test"
+import { expect, test, type Page } from "@playwright/test"
 
 /**
  * Black-box coverage for issue #31 ([portal] Public lead form — first contact
@@ -9,10 +9,21 @@ import { expect, test } from "@playwright/test"
  * (`tests/acceptance/ms-2/31-public-lead-form.spec.ts`) is the acceptance bar
  * for this issue — this file is a lighter smoke pass over the same route.
  *
+ * Issue #32 (server-side Turnstile + rate limit) now sits in front of every
+ * `POST /start` this file drives — see `e2e/start-bot-gate.spec.ts` for that
+ * issue's own coverage. `wrangler dev` runs away from Cloudflare's edge, so
+ * `src/turnstile.ts` falls back to the documented always-pass test pair with
+ * zero setup; a browser-driven submission still has to wait for the real
+ * widget script to mint its token first, the same way the sealed acceptance
+ * slice does.
+ *
  * Every string below is invented — see CLAUDE.md rule 1.
  */
 
 const ACCESS_HEADER = "Cf-Access-Authenticated-User-Email"
+const TURNSTILE_FIELD = "cf-turnstile-response"
+/** Contract, "Bot gate + rate limit": the literal token a test sitekey mints. */
+const TURNSTILE_DUMMY_TOKEN = "XXXX.DUMMY.TOKEN.XXXX"
 
 /**
  * `serve:test` does not wipe `.wrangler/state` between runs (unlike
@@ -22,6 +33,18 @@ const ACCESS_HEADER = "Cf-Access-Authenticated-User-Email"
 function uniqueEmail(local: string): string {
   const tag = Math.random().toString(36).slice(2, 10)
   return `${local}-${tag}@example.test`
+}
+
+/** Wait for the real Turnstile widget to mint its token before submitting. */
+async function settleBotGate(page: Page) {
+  await page.waitForFunction(
+    (field) => {
+      const input = document.querySelector(`input[name="${field}"]`) as HTMLInputElement | null
+      return !!input && input.value.length > 0
+    },
+    TURNSTILE_FIELD,
+    { timeout: 15_000 },
+  )
 }
 
 test("GET /start renders the public form to a stranger with no Access identity", async ({
@@ -52,6 +75,7 @@ test("submitting the form records a lead and shows a receipt with a reference", 
   await page.goto("/start")
   await page.getByTestId("field-lead-summary").fill("A synthetic request for e2e coverage.")
   await page.getByTestId("field-lead-email").fill(email)
+  await settleBotGate(page)
   await page.getByTestId("submit-lead").click()
 
   // Rendered directly at 200 — no redirect, no /start/:id.
@@ -70,9 +94,11 @@ test("an incomplete submission is rejected and creates no lead", async ({ page, 
   await expect(page).toHaveURL(/\/start$/)
   await expect(page.getByTestId("lead-receipt")).toHaveCount(0)
 
-  // The server re-checks too, and never relies on the browser alone.
+  // The server re-checks too, and never relies on the browser alone. The
+  // dummy Turnstile token is included so this exercises #31's own field
+  // validation specifically, not #32's bot gate.
   const response = await request.post("/start", {
-    form: { summary: "Only a summary, no email." },
+    form: { summary: "Only a summary, no email.", [TURNSTILE_FIELD]: TURNSTILE_DUMMY_TOKEN },
     maxRedirects: 0,
     failOnStatusCode: false,
   })
@@ -93,6 +119,7 @@ test("a lead is inert — it never shows up as a submission for its own email", 
   await anonPage.goto("/start")
   await anonPage.getByTestId("field-lead-summary").fill("A synthetic inert-lead request.")
   await anonPage.getByTestId("field-lead-email").fill(email)
+  await settleBotGate(anonPage)
   await anonPage.getByTestId("submit-lead").click()
   await expect(anonPage.getByTestId("lead-receipt")).toBeVisible()
   await anon.close()

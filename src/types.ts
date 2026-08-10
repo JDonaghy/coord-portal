@@ -28,6 +28,26 @@ export interface Env {
    */
   OPERATOR_EMAILS?: string
   OPERATOR_EMAIL?: string
+  /**
+   * Cloudflare Turnstile (issue #32) — the bot gate in front of `POST /start`.
+   *
+   * `TURNSTILE_SITEKEY` is public by design: it is rendered straight into
+   * `GET /start`'s HTML (`turnstile-widget`'s `data-sitekey`), so a `[vars]`
+   * entry would be fine for it, but it lives here as a secret too so a single
+   * `wrangler secret put` pair configures both halves together — see
+   * `src/turnstile.ts` for why mismatching them (a real sitekey with a test
+   * secret, or vice versa) is the one misconfiguration this module cannot
+   * detect on its own.
+   *
+   * `TURNSTILE_SECRET` must never be rendered, logged, or reach `wrangler.toml`
+   * — it is the `siteverify` credential. Optional here for the same reason
+   * `OPERATOR_EMAILS` is: unset must fail closed (issue #32: "refuse the
+   * write ... rather than quietly accepting every submission"), not crash the
+   * Worker. `src/turnstile.ts` is what actually fails closed; this type only
+   * says the binding may be absent.
+   */
+  TURNSTILE_SITEKEY?: string
+  TURNSTILE_SECRET?: string
 }
 
 export interface ProbeResult {

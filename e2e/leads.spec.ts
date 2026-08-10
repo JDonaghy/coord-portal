@@ -29,8 +29,29 @@ const ACCESS_HEADER = "Cf-Access-Authenticated-User-Email"
  */
 const DEV_OPERATOR = "ops@example.test"
 
+/**
+ * Issue #32 puts server-side Turnstile in front of `POST /start`. `wrangler
+ * dev` runs away from Cloudflare's edge, so `src/turnstile.ts` falls back to
+ * the documented always-pass test pair with zero setup — but a browser-driven
+ * submission still has to wait for the real widget script to mint its token
+ * before submitting, same as `e2e/start.spec.ts` and the sealed acceptance
+ * slice.
+ */
+const TURNSTILE_FIELD = "cf-turnstile-response"
+
 function nonce(): string {
   return Math.random().toString(36).slice(2, 10)
+}
+
+async function settleBotGate(page: Page) {
+  await page.waitForFunction(
+    (field) => {
+      const input = document.querySelector(`input[name="${field}"]`) as HTMLInputElement | null
+      return !!input && input.value.length > 0
+    },
+    TURNSTILE_FIELD,
+    { timeout: 15_000 },
+  )
 }
 
 async function contextFor(browser: Browser, baseURL: string | undefined, email: string | null) {
@@ -49,6 +70,7 @@ async function sendLead(
   await page.getByTestId("field-lead-summary").fill(lead.summary)
   await page.getByTestId("field-lead-email").fill(lead.email)
   if (lead.name) await page.getByTestId("field-lead-name").fill(lead.name)
+  await settleBotGate(page)
   await page.getByTestId("submit-lead").click()
   await expect(page.getByTestId("lead-receipt")).toBeVisible()
 

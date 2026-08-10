@@ -1,5 +1,7 @@
 import { createLead } from "../leads"
+import { clientIp, isRateLimited } from "../rateLimit"
 import { escapeHtml, html, page, publicHeader } from "../render"
+import { TURNSTILE_FIELD, publicSitekey, verifySubmission } from "../turnstile"
 import type { Env } from "../types"
 
 /**
@@ -15,19 +17,22 @@ import type { Env } from "../types"
  * see the sealed acceptance slice's "an Access identity changes nothing on
  * the public route".
  *
- * No Turnstile widget and no rate limit here — issue #31's own "Out of scope"
- * names both as #32's issue and says "do not build ahead into them." The one
- * failure mode this route owns is a missing required field, handled the same
- * way `POST /intake` handles it (`src/routes/intake.ts`, `submitIntake`):
- * re-checked server-side, redisplaying the form on a request that skips the
- * browser's own `required` attributes.
- *
- * A lead is inert: `createLead` writes exactly one row (see `src/leads.ts`)
- * — no submission, no bridge event, nothing dispatched. Promotion is a
- * deliberate operator act that is a different issue (#33) entirely.
+ * ── THE BOT GATE AND RATE LIMIT (issue #32) ─────────────────────────────────
+ * `POST /start` is checked, in order, before anything is written:
+ *   1. the coarse per-IP rate limit (`src/rateLimit.ts`) — cheapest check,
+ *      runs first so a sustained flood never reaches `siteverify` or a D1
+ *      write for the lead itself;
+ *   2. Turnstile's `siteverify` (`src/turnstile.ts`) — "verified server-side
+ *      in the Worker, not merely rendered client-side," so this fires for a
+ *      caller who never loaded `/start` and never ran the widget's script;
+ *   3. the pre-existing #31 field validation (missing `summary`/`email`).
+ * The first two share one outcome and one rendered banner, `REJECTION_BANNER`
+ * below — "the response never confirms *which* check a caller tripped."
+ * Validation failures keep their own, different message; that split is the
+ * contract's "two failure families, one rendered shape" for (1)/(2) only.
  */
-export function startForm(_request: Request, _env: Env): Response {
-  return html(page("Get in touch — coord-portal", renderForm()))
+export function startForm(request: Request, env: Env): Response {
+  return html(page("Get in touch — coord-portal", renderForm(request, env)))
 }
 
 interface DraftValues {
@@ -38,10 +43,24 @@ interface DraftValues {
 
 const EMPTY_DRAFT: DraftValues = { summary: "", email: "", name: "" }
 
-function renderForm(draft: DraftValues = EMPTY_DRAFT, error?: string): string {
+/**
+ * The one banner every bot-gate or rate-limit refusal renders — contract.md's
+ * "one generic message for every one of those reasons ... specifically so the
+ * response never confirms *which* check a caller tripped." Never reused for
+ * the validation-failure family, which keeps its own, different wording.
+ */
+const REJECTION_BANNER = "We couldn't send that — please try again."
+
+function renderForm(
+  request: Request,
+  env: Env,
+  draft: DraftValues = EMPTY_DRAFT,
+  error?: string,
+): string {
   const errorBlock = error
     ? `<p class="lead-error" data-testid="lead-error" role="alert">${escapeHtml(error)}</p>`
     : ""
+  const sitekey = publicSitekey(request, env)
 
   return `${publicHeader()}
 <main>
@@ -79,11 +98,16 @@ function renderForm(draft: DraftValues = EMPTY_DRAFT, error?: string): string {
         placeholder="So we know what to call you">
     </div>
 
+    <div class="turnstile-block">
+      <div class="cf-turnstile" data-testid="turnstile-widget" data-sitekey="${escapeHtml(sitekey)}"></div>
+    </div>
+
     <div class="actions">
       <button type="submit" class="primary" data-testid="submit-lead">Send</button>
     </div>
   </form>
-</main>`
+</main>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>`
 }
 
 /**
@@ -92,6 +116,17 @@ function renderForm(draft: DraftValues = EMPTY_DRAFT, error?: string): string {
  * so there is no `GET /start/:id` for a stranger to land on.
  */
 export async function submitStart(request: Request, env: Env): Promise<Response> {
+  // 1. The rate limit — cheapest, coarsest check, so a flood never reaches
+  // `siteverify` or a D1 write for the lead itself. Recorded and checked
+  // before the body is even parsed.
+  const ip = clientIp(request)
+  if (await isRateLimited(env, ip)) {
+    return html(
+      page("Get in touch — coord-portal", renderForm(request, env, EMPTY_DRAFT, REJECTION_BANNER)),
+      { status: 429 },
+    )
+  }
+
   const form = await request.formData()
   const draft: DraftValues = {
     summary: stringField(form, "summary"),
@@ -99,9 +134,25 @@ export async function submitStart(request: Request, env: Env): Promise<Response>
     name: stringField(form, "name"),
   }
 
+  // 2. Turnstile, "before anything is written": a missing, empty, malformed,
+  // reused, or unverifiable token all collapse to the same generic refusal —
+  // "says so plainly without explaining what a valid token would look like."
+  const token = stringField(form, TURNSTILE_FIELD)
+  if (!(await verifySubmission(request, env, token))) {
+    return html(
+      page("Get in touch — coord-portal", renderForm(request, env, draft, REJECTION_BANNER)),
+      { status: 400 },
+    )
+  }
+
+  // 3. Issue #31's own field validation — a different, distinct message, so
+  // this is never merged into the bot-gate banner above.
   if (!draft.summary || !draft.email) {
     return html(
-      page("Get in touch — coord-portal", renderForm(draft, "Please fill in every required field.")),
+      page(
+        "Get in touch — coord-portal",
+        renderForm(request, env, draft, "Please fill in every required field."),
+      ),
       { status: 400 },
     )
   }
