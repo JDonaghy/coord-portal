@@ -85,9 +85,9 @@ const CUSTOMER_SAFE_FAILURE_COPY =
  * conveys nothing actionable to a customer.
  */
 function emailPreview(sent: OutboxEmail): string {
-  return `    <article class="email" data-testid="email-preview" data-email-type="${escapeHtml(sent.type)}" data-status="${sent.status}">
+  return `    <article class="email" data-testid="email-preview" data-email-type="${escapeHtml(sent.type)}" data-status="${escapeHtml(sent.status)}">
       <div class="email-delivery">
-        <span class="delivery-pill" data-testid="delivery-status" data-status="${sent.status}">${DELIVERY_STATUS_TEXT[sent.status]}</span>${deliveryDetail(sent)}
+        <span class="delivery-pill" data-testid="delivery-status" data-status="${escapeHtml(sent.status)}">${DELIVERY_STATUS_TEXT[sent.status]}</span>${deliveryDetail(sent)}
       </div>${deliveryError(sent)}
       <div class="email-meta">
         <dl>
@@ -107,6 +107,14 @@ function emailPreview(sent: OutboxEmail): string {
 /** `delivery-sent-at` on a `sent` row, `delivery-attempts` on a `failed` one, nothing on `queued`. */
 function deliveryDetail(sent: OutboxEmail): string {
   if (sent.status === "sent") {
+    // `sentAt` is documented (`src/notifications.ts`'s `OutboxEmail.sentAt`) as
+    // "present iff `status = \"sent\"`" — nothing in this repo today can
+    // produce a `sent` row with a null `sentAt` (#49's own scope: only #50's
+    // drain will ever write this transition). The `?? sent.queuedAt` fallback
+    // below is defensive only, so a future drain bug that flips `status` to
+    // `sent` without also setting `sent_at` renders a plausible-looking
+    // decision time instead of visibly breaking — worth revisiting once #50
+    // lands and that combination becomes reachable.
     return `
         <span class="delivery-detail" data-testid="delivery-sent-at">Delivered ${escapeHtml(sent.sentAt ?? sent.queuedAt)}</span>`
   }

@@ -1,4 +1,6 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test"
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test"
+
+import { latestOutboxId, markOutboxFailed, markOutboxSent } from "./outbox-fixtures"
 
 /**
  * Black-box coverage for issue #14 ([portal] Customer notifications — email,
@@ -7,6 +9,19 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
  * the sealed acceptance suite under `tests/acceptance/`; per CLAUDE.md this
  * repo still ships its own coverage for behaviour-changing work (this PR adds
  * the `outbox` table, `src/notifications.ts` and `GET /outbox`).
+ *
+ * Extended for issue #49 ([portal] Outbox delivery state — queued / sent /
+ * failed, visible at `/outbox`): the tests below drive `src/routes/outbox.ts`'s
+ * `emailPreview`/`deliveryDetail`/`deliveryError` through the real route —
+ * `data-status`, the `delivery-status` pill text, and the presence/absence
+ * rules for `delivery-sent-at`/`delivery-attempts`/`delivery-last-error` — the
+ * same DOM the sealed acceptance suite (`tests/acceptance/ms-3/49-outbox-delivery-state.spec.ts`)
+ * pins, but that suite is explicit it only ever drives `queued` rows (nothing
+ * black-box in *that* suite can reach `sent`/`failed` before #50's drain and
+ * #51's provider seam exist). `e2e/outbox-fixtures.ts` shells out to `wrangler
+ * d1 execute --local` to move a row past `queued` so this repo's own `e2e/`
+ * tier — unlike the sealed suite — can still exercise every branch of that
+ * rendering code today, not just the one state reachable through HTTP.
  *
  * SHAPE. Issue #14 is one rule with two halves, and both need their own test:
  *
@@ -97,6 +112,23 @@ interface Sent {
   ctaText: string
   ctaHref: string | null
   text: string
+  /** Issue #49: the `email-preview` article's own `data-status`. */
+  status: string | null
+  /** Issue #49: `delivery-status` pill text — always present, one per row. */
+  deliveryPillText: string | null
+  /** Issue #49: `delivery-sent-at` text, or `null` when the hook is absent. */
+  deliverySentAt: string | null
+  /** Issue #49: `delivery-attempts` text, or `null` when the hook is absent. */
+  deliveryAttempts: string | null
+  /** Issue #49: `delivery-last-error` text, or `null` when the hook is absent. */
+  deliveryLastError: string | null
+}
+
+/** `null` when the given testid is absent from this row, its flattened text otherwise. */
+async function textOrNull(preview: Locator, testid: string): Promise<string | null> {
+  const node = preview.getByTestId(testid)
+  if ((await node.count()) === 0) return null
+  return flat(await node.first().innerText())
 }
 
 /** Read every `email-preview` `/outbox` renders for the signed-in caller. */
@@ -120,6 +152,11 @@ async function readOutbox(page: Page, email: string): Promise<Sent[]> {
       ctaText: flat(await cta.innerText()),
       ctaHref: await cta.getAttribute("href"),
       text: flat(await preview.innerText()),
+      status: await preview.getAttribute("data-status"),
+      deliveryPillText: await textOrNull(preview, "delivery-status"),
+      deliverySentAt: await textOrNull(preview, "delivery-sent-at"),
+      deliveryAttempts: await textOrNull(preview, "delivery-attempts"),
+      deliveryLastError: await textOrNull(preview, "delivery-last-error"),
     })
   }
   return sent
@@ -359,5 +396,100 @@ test("the outbox link is reachable from the dashboard's own navigation", async (
   await navLink.click()
   await expect(page).toHaveURL(/\/outbox$/)
   await expect(page.getByTestId("outbox-empty")).toBeVisible()
+})
+
+// ── issue #49: delivery state, rendered by the real route ──────────────────
+//
+// Everything below drives `src/routes/outbox.ts`'s actual `emailPreview` /
+// `deliveryDetail` / `deliveryError` functions through `GET /outbox`, not a
+// fake `DB` — `test/notifications.test.ts` already covers `fromRow` and
+// `listOutboxForCustomer` in isolation, but nothing before this drove the
+// rendering code itself. `queued` is reachable through the ordinary bridge
+// push a customer's own activity would cause; `sent` and `failed` are not
+// reachable through this app's HTTP surface at all until #50's drain and
+// #51's provider seam exist, so those two use `e2e/outbox-fixtures.ts` to
+// move a row past `queued` the same way `e2e/r2-fixtures.ts` seeds R2 —
+// shelling out to the CLI that owns the local persisted state `wrangler dev`
+// is already serving.
+
+test("a freshly decided send renders the queued delivery state, and none of the detail hooks", async ({
+  page,
+  request,
+}) => {
+  const email = uniqueEmail("e2e-delivery-queued")
+  const target = await seedSubmission(page, email)
+
+  expect((await push(request, target.reference, 1, { status: "shipped" })).outcome).toBe("applied")
+  const [row] = await awaitOutbox(page, email, 1)
+
+  expect(row.status, "the email-preview article carries data-status").toBe("queued")
+  expect(row.deliveryPillText, 'the queued pill reads exactly "Queued"').toBe("Queued")
+  expect(row.deliverySentAt, "a queued row has not been delivered").toBeNull()
+  expect(row.deliveryAttempts, "a queued row shows no attempt count").toBeNull()
+  expect(row.deliveryLastError, "a queued row shows no failure copy").toBeNull()
+})
+
+test("a delivered send renders the sent delivery state with a delivery time, and no other detail", async ({
+  page,
+  request,
+}) => {
+  const email = uniqueEmail("e2e-delivery-sent")
+  const target = await seedSubmission(page, email)
+
+  expect((await push(request, target.reference, 1, { status: "shipped" })).outcome).toBe("applied")
+  await awaitOutbox(page, email, 1)
+
+  const id = latestOutboxId(email)
+  markOutboxSent(id, "2026-01-05T12:34:00Z", "provider-msg-e2e-sent")
+
+  const [row] = await readOutbox(page, email)
+  expect(row.status).toBe("sent")
+  expect(row.deliveryPillText, 'the sent pill reads exactly "Sent"').toBe("Sent")
+  expect(row.deliverySentAt, "a sent row must say something").not.toBeNull()
+  expect((row.deliverySentAt as string).length).toBeGreaterThan(0)
+  expect(row.deliveryAttempts, "delivery-attempts renders only on failed rows").toBeNull()
+  expect(row.deliveryLastError, "delivery-last-error renders only on failed rows").toBeNull()
+})
+
+test("a failed send renders the failed state with an attempt count and customer-safe copy, never the raw error", async ({
+  page,
+  request,
+}) => {
+  const email = uniqueEmail("e2e-delivery-failed")
+  const target = await seedSubmission(page, email)
+
+  expect((await push(request, target.reference, 1, { status: "shipped" })).outcome).toBe("applied")
+  await awaitOutbox(page, email, 1)
+
+  const id = latestOutboxId(email)
+  markOutboxFailed(id, 3, "Resend API returned 401")
+
+  const [row] = await readOutbox(page, email)
+  expect(row.status).toBe("failed")
+  expect(row.deliveryPillText, 'the failed pill reads exactly "Delivery failed"').toBe("Delivery failed")
+  expect(row.deliverySentAt, "delivery-sent-at renders only on sent rows").toBeNull()
+  expect(row.deliveryAttempts, "a failed row explains how many attempts were made").toContain("3")
+  expect(row.deliveryAttempts).toMatch(/\btimes\b/)
+  expect(row.deliveryLastError, "a failed row must explain itself to the customer").not.toBeNull()
+  // Customer-safe copy: never the raw operator string this row was seeded with.
+  expect(row.deliveryLastError).not.toMatch(/resend/i)
+  expect(row.deliveryLastError).not.toMatch(/\b401\b/)
+  expect(row.deliveryLastError).not.toContain("Resend API returned 401")
+})
+
+test("a single failed attempt renders the singular 'time', not 'times'", async ({ page, request }) => {
+  const email = uniqueEmail("e2e-delivery-failed-once")
+  const target = await seedSubmission(page, email)
+
+  expect((await push(request, target.reference, 1, { status: "shipped" })).outcome).toBe("applied")
+  await awaitOutbox(page, email, 1)
+
+  const id = latestOutboxId(email)
+  markOutboxFailed(id, 1, "RESEND_API_KEY unset")
+
+  const [row] = await readOutbox(page, email)
+  expect(row.deliveryAttempts).toContain("1")
+  expect(row.deliveryAttempts, "one attempt is singular").toMatch(/\btime\b/)
+  expect(row.deliveryAttempts).not.toMatch(/times/)
 })
 
