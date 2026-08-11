@@ -405,6 +405,22 @@ export function page(title: string, main: string): string {
     background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
     overflow: hidden;
   }
+  /* ── Delivery state (issue #49) — ms-3/contract.md § "data-testid hooks",
+     mocks/01-04-outbox-*.html. Adds a pill (and, per-status, detail text) to
+     every email-preview card above; never replaces the ms-1 email content. */
+  .email-delivery {
+    display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+    padding: 0.85rem 1.5rem; background: var(--surface-2); border-bottom: 1px solid var(--line);
+  }
+  .delivery-pill {
+    display: inline-flex; align-items: center; white-space: nowrap;
+    padding: 0.25em 0.75em; border-radius: 999px; font-size: var(--step--1); font-weight: 600;
+  }
+  .delivery-pill[data-status="queued"] { background: var(--idle-wash); color: var(--idle); }
+  .delivery-pill[data-status="sent"]   { background: var(--pass-wash); color: var(--pass); }
+  .delivery-pill[data-status="failed"] { background: var(--fail-wash); color: var(--fail); }
+  .delivery-detail { font-size: var(--step--1); color: var(--text-dim); }
+  .delivery-note { padding: 0.75rem 1.5rem 0; margin: 0; font-size: var(--step--1); color: var(--text-dim); }
   .email-meta { padding: 1rem 1.5rem; border-bottom: 1px solid var(--line); font-size: var(--step--1); color: var(--text-dim); }
   .email-meta dl { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.75rem; margin: 0; }
   .email-meta dt { color: var(--text-faint); }

@@ -45,13 +45,50 @@ ${body}
 }
 
 /**
+ * Issue #49, Gate-A contract § "Delivery state vocabulary": the fixed
+ * `data-status` slug -> exact `delivery-status` pill text. Three slugs, three
+ * strings, nothing else ever.
+ */
+const DELIVERY_STATUS_TEXT: Record<OutboxEmail["status"], string> = {
+  queued: "Queued",
+  sent: "Sent",
+  failed: "Delivery failed",
+}
+
+/**
+ * Customer-safe, generic copy for `delivery-last-error` — deliberately NOT
+ * `outbox.last_error` verbatim. That column holds whatever raw string the
+ * provider or an unset key produced ("Resend API returned 401",
+ * "RESEND_API_KEY unset", a fetch failure) — operator-debugging material, per
+ * contract § "Customer-safe error copy", not customer copy. Exact wording is
+ * not pinned by that section, only that it must never name the provider, a
+ * transport verb, a bare HTTP status code, "provider" or "endpoint".
+ */
+const CUSTOMER_SAFE_FAILURE_COPY =
+  "We couldn't deliver this message and have stopped trying. You can still check your request below."
+
+/**
  * One `email-preview`, in exactly the DOM `mocks/11-email-signoff-ready.html`,
- * `12-email-needs-input.html` and `13-email-shipped.html` pin: `email-from`,
- * `email-to`, `email-subject`, `email-preheader`, `email-body`, `email-cta`,
- * all inside one element carrying `data-email-type`.
+ * `12-email-needs-input.html` and `13-email-shipped.html` pin (ms-1, issue
+ * #14): `email-from`, `email-to`, `email-subject`, `email-preheader`,
+ * `email-body`, `email-cta`, all inside one element carrying
+ * `data-email-type` — unchanged here, still all present regardless of
+ * delivery status.
+ *
+ * Extended by issue #49 (`tests/acceptance/ms-3/contract.md` § `data-testid`
+ * hooks, mocks `01`-`04`): the article also carries `data-status`, and a new
+ * `.email-delivery` block holds the `delivery-status` pill (always present)
+ * plus, present if and only if the row is in that state, `delivery-sent-at`
+ * (`sent`) or `delivery-attempts` + `delivery-last-error` (`failed`). A
+ * `queued` row renders none of the three detail hooks — "renders identically
+ * regardless of `attempts`", per the contract, because a retry in progress
+ * conveys nothing actionable to a customer.
  */
 function emailPreview(sent: OutboxEmail): string {
-  return `    <article class="email" data-testid="email-preview" data-email-type="${escapeHtml(sent.type)}">
+  return `    <article class="email" data-testid="email-preview" data-email-type="${escapeHtml(sent.type)}" data-status="${sent.status}">
+      <div class="email-delivery">
+        <span class="delivery-pill" data-testid="delivery-status" data-status="${sent.status}">${DELIVERY_STATUS_TEXT[sent.status]}</span>${deliveryDetail(sent)}
+      </div>${deliveryError(sent)}
       <div class="email-meta">
         <dl>
           <dt>From</dt><dd data-testid="email-from">${escapeHtml(sent.from)}</dd>
@@ -65,4 +102,25 @@ function emailPreview(sent: OutboxEmail): string {
         <a class="email-cta" href="${escapeHtml(sent.ctaHref)}" data-testid="email-cta">${escapeHtml(sent.ctaText)}</a>
       </div>
     </article>`
+}
+
+/** `delivery-sent-at` on a `sent` row, `delivery-attempts` on a `failed` one, nothing on `queued`. */
+function deliveryDetail(sent: OutboxEmail): string {
+  if (sent.status === "sent") {
+    return `
+        <span class="delivery-detail" data-testid="delivery-sent-at">Delivered ${escapeHtml(sent.sentAt ?? sent.queuedAt)}</span>`
+  }
+  if (sent.status === "failed") {
+    const times = sent.attempts === 1 ? "time" : "times"
+    return `
+        <span class="delivery-detail" data-testid="delivery-attempts">We tried ${sent.attempts} ${times}</span>`
+  }
+  return ""
+}
+
+/** `delivery-last-error`, present only on a `failed` row — customer-safe copy, never the raw column. */
+function deliveryError(sent: OutboxEmail): string {
+  if (sent.status !== "failed") return ""
+  return `
+      <p class="delivery-note" data-testid="delivery-last-error">${escapeHtml(CUSTOMER_SAFE_FAILURE_COPY)}</p>`
 }

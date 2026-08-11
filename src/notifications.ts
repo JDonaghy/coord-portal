@@ -72,6 +72,23 @@ export function sendTypeForStatus(status: string): SendType | null {
  */
 const EMAIL_FROM = "coord-portal <notify@intake.heurontech.com>"
 
+/**
+ * The delivery state vocabulary — issue #49, Gate-A contract § "Delivery
+ * state vocabulary". `queued` (decided, not yet delivered — fresh or
+ * mid-retry, indistinguishable to the customer), `sent` (the provider
+ * accepted it), `failed` (every retry exhausted, terminal). A row's status
+ * only ever moves `queued -> sent` or `queued -> failed`; nothing in this
+ * module ever writes either of those transitions — that is #50 (the cron
+ * drain) and #51 (the provider seam). This module only ever inserts a row
+ * `queued` (the column's own `DEFAULT`, `migrations/0010_outbox_delivery_state.sql`).
+ */
+export const DELIVERY_STATUSES = ["queued", "sent", "failed"] as const
+export type DeliveryStatus = (typeof DELIVERY_STATUSES)[number]
+
+function isDeliveryStatus(value: string): value is DeliveryStatus {
+  return (DELIVERY_STATUSES as readonly string[]).includes(value)
+}
+
 export interface OutboxEmail {
   id: string
   /** The customer-visible `SUB-XXXXXX` reference this send is about. */
@@ -84,7 +101,25 @@ export interface OutboxEmail {
   body: string
   ctaText: string
   ctaHref: string
-  sentAt: string
+  /**
+   * When the portal decided to send — `migrations/0010_outbox_delivery_state.sql`
+   * renamed this from the original `sent_at` (0009's decision-time column) so
+   * that `sent_at` below could mean actual delivery time instead. List
+   * ordering (`listOutboxForCustomer`) sorts by this, unchanged from ms-1's
+   * "oldest first".
+   */
+  queuedAt: string
+  status: DeliveryStatus
+  /** Set only once `status = "sent"` — issue #49's own words. */
+  providerMessageId: string | null
+  attempts: number
+  /**
+   * The raw provider/operator string, never rendered verbatim to a customer —
+   * see `src/routes/outbox.ts`'s customer-safe copy.
+   */
+  lastError: string | null
+  /** Actual delivery time; present iff `status = "sent"`. Null otherwise. */
+  sentAt: string | null
 }
 
 interface OutboxRow {
@@ -98,20 +133,27 @@ interface OutboxRow {
   body: string
   cta_text: string
   cta_href: string
-  sent_at: string
+  queued_at: string
+  status: string
+  provider_message_id: string | null
+  attempts: number
+  last_error: string | null
+  sent_at: string | null
 }
 
 /**
  * A row can only ever have been written by `recordNotificationForStatus`
  * below, which validates against `SENDING_TYPES` before it writes — the
- * `CHECK` constraint on `outbox.email_type` (`migrations/0009_notifications.sql`)
- * backstops that further. `null` here means a row this code has no business
- * ever seeing (a hand edit, a future migration widening the column); skipping
- * it from the read-back is safer than fabricating a specific type it was never
- * sent as.
+ * `CHECK` constraints on `outbox.email_type` and `outbox.status`
+ * (`migrations/0009_notifications.sql`, `migrations/0010_outbox_delivery_state.sql`)
+ * backstop that further. `null` here means a row this code has no business
+ * ever seeing (a hand edit, a future migration widening either column);
+ * skipping it from the read-back is safer than fabricating a specific type or
+ * status it was never actually in.
  */
 function fromRow(row: OutboxRow): OutboxEmail | null {
   if (!isSendType(row.email_type)) return null
+  if (!isDeliveryStatus(row.status)) return null
   return {
     id: row.id,
     submissionId: row.submission_id,
@@ -123,6 +165,11 @@ function fromRow(row: OutboxRow): OutboxEmail | null {
     body: row.body,
     ctaText: row.cta_text,
     ctaHref: row.cta_href,
+    queuedAt: row.queued_at,
+    status: row.status,
+    providerMessageId: row.provider_message_id,
+    attempts: row.attempts,
+    lastError: row.last_error,
     sentAt: row.sent_at,
   }
 }
@@ -170,9 +217,14 @@ export async function recordNotificationForStatus(
 
   const content = await emailContent(env, submission, type)
 
+  // `status`, `attempts`, `provider_message_id` and `sent_at` are all left to
+  // their column defaults — every row this function writes is born `queued`
+  // (issue #49's own words: "existing rows migrate to queued", and nothing
+  // makes a *new* row start anywhere else either), zero attempts, no
+  // provider id, no delivery time yet.
   await env.DB.prepare(
     `INSERT INTO outbox
-       (id, submission_id, email_type, to_email, from_email, subject, preheader, body, cta_text, cta_href, coord_revision, sent_at)
+       (id, submission_id, email_type, to_email, from_email, subject, preheader, body, cta_text, cta_href, coord_revision, queued_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (submission_id, coord_revision) DO NOTHING`,
   )
@@ -256,7 +308,7 @@ export async function emailContent(env: Env, submission: Submission, type: SendT
  */
 export async function listOutboxForCustomer(env: Env, email: string): Promise<OutboxEmail[]> {
   const { results } = await env.DB.prepare(
-    `SELECT * FROM outbox WHERE to_email = ? ORDER BY sent_at ASC, id ASC`,
+    `SELECT * FROM outbox WHERE to_email = ? ORDER BY queued_at ASC, id ASC`,
   )
     .bind(email)
     .all<OutboxRow>()
