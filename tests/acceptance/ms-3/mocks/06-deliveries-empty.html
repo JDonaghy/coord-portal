@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deliveries — coord-portal</title>
+<!--
+  MOCK — Gate-A screen state: GET /deliveries (issue #55), empty — no outbox
+  rows exist anywhere yet (fresh deploy, or every notification path so far has
+  been a no-op). Same route as 05-deliveries-mixed.html; only the body swaps,
+  same "one template, several data-status values" convention the rest of this
+  contract uses. Distinct from "you are not an operator", which this contract
+  pins as a 404 (see contract.md) rather than this empty-but-200 state.
+-->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1.25rem;
+    max-width: 52rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  main { max-width: 52rem; }
+  .page-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 0.5rem; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/leads" data-testid="nav-leads">Leads</a>
+    <a href="/deliveries" aria-current="page" data-testid="nav-deliveries">Deliveries</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ops@example.test</span>
+</header>
+<main>
+  <div class="page-head">
+    <h1>Deliveries</h1>
+  </div>
+  <p class="lede">Every notification the portal has decided to send, across every customer, most recent activity first. This is the diagnostic view — <code>/outbox</code> is what a customer sees; this is what a stuck one looks like.</p>
+  <p class="lede" data-testid="deliveries-list-empty">Nothing in the outbox yet.</p>
+</main>
+</body>
+</html>

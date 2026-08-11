@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deliveries — coord-portal</title>
+<!--
+  MOCK — Gate-A screen state: GET /deliveries (issue #55), the operator's
+  counterpart to /outbox — every outbox row across ALL customers, not scoped
+  to a single caller's own `to_email`. This is the realistic screen: rows from
+  three different customers, one of each delivery state, most-recent-activity
+  first.
+
+  Reuses the /leads operator-auth precedent (src/operators.ts's readOperator +
+  OPERATOR_EMAILS allowlist, 404-not-403 for anyone else) — see contract.md
+  "The operator delivery view (issue #55)". Reuses the /outbox delivery-status
+  vocabulary (Queued / Sent / Delivery failed) — same pill, same three slugs —
+  but `delivery-last-error` here is the RAW, operator-facing string, not the
+  customer-safe copy /outbox renders. That is the entire point of this screen:
+  see the row that says so, below.
+-->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1.25rem;
+    max-width: 52rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+
+  main { max-width: 52rem; }
+  .page-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 0.5rem; }
+
+  ul.deliveries-list { list-style: none; margin: 1.5rem 0 0; padding: 0; display: grid; gap: 0.75rem; }
+  .delivery-row {
+    display: grid; gap: 0.6rem;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1rem 1.25rem;
+  }
+  .delivery-row .row-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+  .delivery-row .row-main { display: grid; gap: 0.3rem; max-width: 32rem; }
+  .delivery-row .subject { font-weight: 600; }
+  .delivery-row .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  .delivery-row .row-side { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+
+  .delivery-pill {
+    display: inline-flex; align-items: center; white-space: nowrap;
+    padding: 0.25em 0.75em; border-radius: 999px; font-size: var(--step--1); font-weight: 600;
+  }
+  .delivery-pill[data-status="queued"] { background: var(--idle-wash); color: var(--idle); }
+  .delivery-pill[data-status="sent"]   { background: var(--pass-wash); color: var(--pass); }
+  .delivery-pill[data-status="failed"] { background: var(--fail-wash); color: var(--fail); }
+  .delivery-detail { font-size: var(--step--1); color: var(--text-dim); }
+
+  .delivery-error {
+    margin: 0; padding: 0.6rem 0.85rem; background: var(--fail-wash); color: var(--fail);
+    border-radius: var(--r-md); font-size: var(--step--1); font-family: var(--font-mono);
+  }
+  .delivery-provider-id { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/leads" data-testid="nav-leads">Leads</a>
+    <a href="/deliveries" aria-current="page" data-testid="nav-deliveries">Deliveries</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ops@example.test</span>
+</header>
+<main>
+  <div class="page-head">
+    <h1>Deliveries</h1>
+  </div>
+  <p class="lede">Every notification the portal has decided to send, across every customer, most recent activity first. This is the diagnostic view — <code>/outbox</code> is what a customer sees; this is what a stuck one looks like.</p>
+
+  <ul class="deliveries-list" data-testid="deliveries-list">
+    <li>
+      <div class="delivery-row" data-testid="delivery-row" data-status="failed">
+        <div class="row-top">
+          <div class="row-main">
+            <span class="subject" data-testid="delivery-subject">We have a question for you</span>
+            <span class="meta" data-testid="delivery-recipient">noor@example.test</span>
+          </div>
+          <div class="row-side">
+            <span class="delivery-pill" data-testid="delivery-status" data-status="failed">Delivery failed</span>
+            <span class="delivery-detail" data-testid="delivery-attempts">5 attempts</span>
+          </div>
+        </div>
+        <p class="delivery-error" data-testid="delivery-last-error">Resend API returned 401: invalid API key</p>
+      </div>
+    </li>
+    <li>
+      <div class="delivery-row" data-testid="delivery-row" data-status="sent">
+        <div class="row-top">
+          <div class="row-main">
+            <span class="subject" data-testid="delivery-subject">Your design is ready for sign-off</span>
+            <span class="meta" data-testid="delivery-recipient">priya@example.test</span>
+          </div>
+          <div class="row-side">
+            <span class="delivery-pill" data-testid="delivery-status" data-status="sent">Sent</span>
+            <span class="delivery-detail" data-testid="delivery-sent-at">Delivered Aug 8, 2026, 3:41 PM</span>
+          </div>
+        </div>
+        <span class="delivery-provider-id" data-testid="delivery-provider-id">provider id: re_9f2a6c0d</span>
+      </div>
+    </li>
+    <li>
+      <div class="delivery-row" data-testid="delivery-row" data-status="queued">
+        <div class="row-top">
+          <div class="row-main">
+            <span class="subject" data-testid="delivery-subject">Your work has shipped</span>
+            <span class="meta" data-testid="delivery-recipient">sam@example.test</span>
+          </div>
+          <div class="row-side">
+            <span class="delivery-pill" data-testid="delivery-status" data-status="queued">Queued</span>
+          </div>
+        </div>
+      </div>
+    </li>
+  </ul>
+</main>
+</body>
+</html>
