@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sent emails — coord-portal</title>
+<!--
+  MOCK — Gate-A screen state: GET /outbox, one row in `queued` delivery state
+  (ms-3 issue #49). This is the state a row is born into the instant the
+  portal decides to send (unchanged from ms-1 issue #14's behavior) and BEFORE
+  the #50 drain has ever claimed it.
+
+  A `queued` row that has already failed one or more attempts (mid-retry,
+  `attempts > 0`, `last_error` set) renders IDENTICALLY to this — see
+  contract.md "Delivery state vocabulary". There is deliberately no separate
+  mock for that case; the DOM does not distinguish it, only the terminal
+  `failed` state (mock 03) surfaces attempts/error to the customer.
+-->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1.25rem;
+    max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  main { max-width: 44rem; }
+
+  div[data-testid="outbox-list"] { display: grid; gap: 1.5rem; }
+  .email {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    overflow: hidden;
+  }
+  .email-delivery {
+    display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+    padding: 0.85rem 1.5rem; background: var(--surface-2); border-bottom: 1px solid var(--line);
+  }
+  .delivery-pill {
+    display: inline-flex; align-items: center; white-space: nowrap;
+    padding: 0.25em 0.75em; border-radius: 999px; font-size: var(--step--1); font-weight: 600;
+  }
+  .delivery-pill[data-status="queued"] { background: var(--idle-wash); color: var(--idle); }
+  .delivery-pill[data-status="sent"]   { background: var(--pass-wash); color: var(--pass); }
+  .delivery-pill[data-status="failed"] { background: var(--fail-wash); color: var(--fail); }
+  .delivery-detail { font-size: var(--step--1); color: var(--text-dim); }
+  .delivery-note { padding: 0.75rem 1.5rem 0; margin: 0; font-size: var(--step--1); color: var(--text-dim); }
+
+  .email-meta { padding: 1rem 1.5rem; border-bottom: 1px solid var(--line); font-size: var(--step--1); color: var(--text-dim); }
+  .email-meta dl { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.75rem; margin: 0; }
+  .email-meta dt { color: var(--text-faint); }
+  .email-subject { padding: 1.25rem 1.5rem 0; font-size: var(--step-1); font-weight: 700; margin: 0; }
+  .email-preheader { padding: 0 1.5rem; color: var(--text-faint); font-size: var(--step--1); margin: 0.35rem 0 1rem; }
+  .email-body { padding: 0 1.5rem 1.5rem; }
+  .email-cta {
+    display: inline-block; margin-top: 1rem; background: var(--accent); color: white !important;
+    text-decoration: none; border-radius: var(--r-md); padding: 0.65rem 1.25rem; font-weight: 600;
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/submissions" data-testid="nav-dashboard">My requests</a>
+    <a href="/intake" data-testid="nav-new">New request</a>
+    <a href="/outbox" aria-current="page" data-testid="nav-outbox">Sent emails</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ada@example.test</span>
+</header>
+<main>
+  <h1>Sent emails</h1>
+  <div data-testid="outbox-list">
+    <article class="email" data-testid="email-preview" data-email-type="shipped" data-status="queued">
+      <div class="email-delivery">
+        <span class="delivery-pill" data-testid="delivery-status" data-status="queued">Queued</span>
+      </div>
+      <div class="email-meta">
+        <dl>
+          <dt>From</dt><dd data-testid="email-from">coord-portal &lt;notify@intake.heurontech.com&gt;</dd>
+          <dt>To</dt><dd data-testid="email-to">ada@example.test</dd>
+        </dl>
+      </div>
+      <h2 class="email-subject" data-testid="email-subject">Your work has shipped</h2>
+      <p class="email-preheader" data-testid="email-preheader">Bulk CSV import for contacts</p>
+      <div class="email-body" data-testid="email-body">
+        <p>&ldquo;Bulk CSV import for contacts&rdquo; is live.</p>
+        <a class="email-cta" href="/submissions/sub_2b91ee" data-testid="email-cta">View the result</a>
+      </div>
+    </article>
+  </div>
+</main>
+</body>
+</html>
