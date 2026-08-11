@@ -1,0 +1,28 @@
+# ms-3 — sealed acceptance manifest: test id -> issue slice.
+#
+# Ids are the `web-playwright` driver's node ids, exactly as
+# `coord.acceptance_drivers.parse_playwright_json_report` builds them:
+#
+#   [{project}] {file relative to testDir} › {describe path} › {test title}
+#
+# They must match character-for-character (including the `›` separators) —
+# `coord acceptance run --issue N` filters by exact id, and an id that matches
+# nothing is reported as a missing test, not as a pass.
+#
+# One block per issue. Later slices MERGE into this file; do not rewrite
+# another issue's block.
+#
+# ms-3's remaining issues, for whoever extends this file next:
+#   #50 the cron drain (`GET /__scheduled`), #51 the provider seam and its
+#   `mailfail` fake, #55 the operator view `GET /deliveries`. #52 is
+#   `oracle:exempt` by its own issue text (contract.md, Notes item 7) and gets
+#   no block here.
+
+issues:
+  49:
+    - "[chromium] ms-3/49-outbox-delivery-state.spec.ts › ms-3 issue 49 outbox delivery state › a decided send is born queued, and the outbox says so"
+    - "[chromium] ms-3/49-outbox-delivery-state.spec.ts › ms-3 issue 49 outbox delivery state › a queued row shows no delivery time, attempt count, or failure copy"
+    - "[chromium] ms-3/49-outbox-delivery-state.spec.ts › ms-3 issue 49 outbox delivery state › every outbox row carries exactly one delivery state from the pinned vocabulary"
+    - "[chromium] ms-3/49-outbox-delivery-state.spec.ts › ms-3 issue 49 outbox delivery state › the delivery state is added to the ms-1 email, not substituted for it"
+    - "[chromium] ms-3/49-outbox-delivery-state.spec.ts › ms-3 issue 49 outbox delivery state › the delivery state a customer can read leaks no provider or engineer-side vocabulary"
+    - "[chromium] ms-3/49-outbox-delivery-state.spec.ts › ms-3 issue 49 outbox delivery state › the delivery-state columns arrive as a numbered migration past the ms-1 head"
