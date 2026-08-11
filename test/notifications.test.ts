@@ -180,7 +180,7 @@ describe("recordNotificationForStatus", () => {
     await recordNotificationForStatus(env, submission(), "needs-input", 4, "2026-01-03T00:00:00Z")
     expect(inserted).toHaveLength(1)
 
-    const [id, submissionId, type, to, from, subject, , , , , revision, sentAt] = inserted[0] as [
+    const [id, submissionId, type, to, from, subject, , , , , revision, queuedAt] = inserted[0] as [
       string,
       string,
       string,
@@ -201,7 +201,11 @@ describe("recordNotificationForStatus", () => {
     expect(from).toContain("@")
     expect(subject.length).toBeGreaterThan(0)
     expect(revision).toBe(4)
-    expect(sentAt).toBe("2026-01-03T00:00:00Z")
+    // Issue #49: a freshly-decided send is born `queued` — `status`,
+    // `attempts`, `provider_message_id` and `sent_at` (delivery time) are all
+    // left to their column defaults, never bound explicitly here. This column
+    // is `queued_at` (decision time), not delivery time.
+    expect(queuedAt).toBe("2026-01-03T00:00:00Z")
   })
 })
 
@@ -226,7 +230,12 @@ describe("listOutboxForCustomer", () => {
                       body: "It is live.",
                       cta_text: "View the result",
                       cta_href: "/submissions/sub_000001",
-                      sent_at: "2026-01-04T00:00:00Z",
+                      queued_at: "2026-01-04T00:00:00Z",
+                      status: "queued",
+                      provider_message_id: null,
+                      attempts: 0,
+                      last_error: null,
+                      sent_at: null,
                     },
                     {
                       id: "ntf_2",
@@ -239,7 +248,12 @@ describe("listOutboxForCustomer", () => {
                       body: "corrupt row",
                       cta_text: "corrupt row",
                       cta_href: "/submissions/sub_000001",
-                      sent_at: "2026-01-05T00:00:00Z",
+                      queued_at: "2026-01-05T00:00:00Z",
+                      status: "queued",
+                      provider_message_id: null,
+                      attempts: 0,
+                      last_error: null,
+                      sent_at: null,
                     },
                   ],
                 }
@@ -253,5 +267,106 @@ describe("listOutboxForCustomer", () => {
     const emails = await listOutboxForCustomer({ DB } as unknown as Env, "customer@example.test")
     expect(emails).toHaveLength(1)
     expect(emails[0]?.id).toBe("ntf_1")
+  })
+
+  /** A fake D1 answering `SELECT * FROM outbox WHERE to_email = ?` with fixed rows. */
+  function dbWithRows(results: unknown[]) {
+    return {
+      DB: {
+        prepare(_sql: string) {
+          return {
+            bind(_email: string) {
+              return { async all() { return { results } } }
+            },
+          }
+        },
+      },
+    } as unknown as Env
+  }
+
+  it("skips a row whose status is not one of the pinned delivery states — issue #49's CHECK backstop", async () => {
+    const env = dbWithRows([
+      {
+        id: "ntf_1",
+        submission_id: "SUB-000001",
+        email_type: "shipped",
+        to_email: "customer@example.test",
+        from_email: "coord-portal <notify@example.test>",
+        subject: "Your work has shipped",
+        preheader: "A rota",
+        body: "It is live.",
+        cta_text: "View the result",
+        cta_href: "/submissions/sub_000001",
+        queued_at: "2026-01-04T00:00:00Z",
+        status: "a-hand-edited-value",
+        provider_message_id: null,
+        attempts: 0,
+        last_error: null,
+        sent_at: null,
+      },
+    ])
+
+    const emails = await listOutboxForCustomer(env, "customer@example.test")
+    expect(emails).toHaveLength(0)
+  })
+
+  it("maps a sent row's delivery fields straight through", async () => {
+    const env = dbWithRows([
+      {
+        id: "ntf_1",
+        submission_id: "SUB-000001",
+        email_type: "signoff-ready",
+        to_email: "customer@example.test",
+        from_email: "coord-portal <notify@example.test>",
+        subject: "Your design is ready for sign-off",
+        preheader: "A rota",
+        body: "Take a look.",
+        cta_text: "Review the design",
+        cta_href: "/submissions/sub_000001",
+        queued_at: "2026-01-04T00:00:00Z",
+        status: "sent",
+        provider_message_id: "prov_abc123",
+        attempts: 1,
+        last_error: null,
+        sent_at: "2026-01-04T00:05:00Z",
+      },
+    ])
+
+    const [email] = await listOutboxForCustomer(env, "customer@example.test")
+    expect(email?.status).toBe("sent")
+    expect(email?.providerMessageId).toBe("prov_abc123")
+    expect(email?.sentAt).toBe("2026-01-04T00:05:00Z")
+    expect(email?.queuedAt).toBe("2026-01-04T00:00:00Z")
+  })
+
+  it("maps a failed row's attempts and raw last_error straight through", async () => {
+    const env = dbWithRows([
+      {
+        id: "ntf_1",
+        submission_id: "SUB-000001",
+        email_type: "needs-input",
+        to_email: "customer@example.test",
+        from_email: "coord-portal <notify@example.test>",
+        subject: "We have a question for you",
+        preheader: "A rota",
+        body: "Work is paused.",
+        cta_text: "Answer the question",
+        cta_href: "/submissions/sub_000001",
+        queued_at: "2026-01-04T00:00:00Z",
+        status: "failed",
+        provider_message_id: null,
+        attempts: 5,
+        last_error: "Resend API returned 401",
+        sent_at: null,
+      },
+    ])
+
+    const [email] = await listOutboxForCustomer(env, "customer@example.test")
+    expect(email?.status).toBe("failed")
+    expect(email?.attempts).toBe(5)
+    // The raw column — src/routes/outbox.ts, not this module, is responsible
+    // for never rendering this verbatim to a customer.
+    expect(email?.lastError).toBe("Resend API returned 401")
+    expect(email?.sentAt).toBeNull()
   })
 })
