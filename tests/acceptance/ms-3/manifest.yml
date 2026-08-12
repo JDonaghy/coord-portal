@@ -13,9 +13,8 @@
 # another issue's block.
 #
 # ms-3's remaining issues, for whoever extends this file next:
-#   #51 the provider seam and its `mailfail` fake, #55 the operator view
-#   `GET /deliveries`. #52 is `oracle:exempt` by its own issue text (contract.md,
-#   Notes item 7) and gets no block here.
+#   #55 the operator view `GET /deliveries`. #52 is `oracle:exempt` by its own
+#   issue text (contract.md, Notes item 7) and gets no block here.
 #
 # NOTE for #51's author: #50's block below already exercises the fake's pinned
 # black-box behaviour end to end (a `mailfail` recipient always fails, everyone
@@ -39,3 +38,15 @@ issues:
     - "[chromium] ms-3/50-drain.spec.ts › ms-3 issue 50 the drain › one provider failure is a retry, not a give-up"
     - "[chromium] ms-3/50-drain.spec.ts › ms-3 issue 50 the drain › a permanently failing send gives up visibly, and stays given up"
     - "[chromium] ms-3/50-drain.spec.ts › ms-3 issue 50 the drain › two overlapping drain runs leave exactly one send behind"
+  # #51 takes the note above at its word: nothing here re-asserts the fake's
+  # `mailfail` hook or the drain's transitions. The `mailfail` recipients below
+  # are instruments for #51's own fail-closed clause ("never silently succeed,
+  # and never crash the scheduled handler"), which #50's one-recipient-at-a-time
+  # tests cannot see — plus the two config clauses (`EMAIL_FROM` as a var,
+  # `RESEND_API_KEY` nowhere in git) that contract.md's preamble names as part of
+  # this milestone's black-box surface and that have no rendered representation.
+  51:
+    - "[chromium] ms-3/51-mail-provider.spec.ts › ms-3 issue 51 the mail provider seam › the sending address is configuration and the Resend key is nowhere in the repository"
+    - "[chromium] ms-3/51-mail-provider.spec.ts › ms-3 issue 51 the mail provider seam › the address a customer reads is the configured one, in every delivery state"
+    - "[chromium] ms-3/51-mail-provider.spec.ts › ms-3 issue 51 the mail provider seam › a recipient the provider can never accept is never reported as delivered"
+    - "[chromium] ms-3/51-mail-provider.spec.ts › ms-3 issue 51 the mail provider seam › a provider that never works wedges neither the scheduled handler nor another customer's mail"
