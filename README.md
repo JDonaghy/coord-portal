@@ -39,6 +39,7 @@ this feeds, not the intake surface.
 | `src/routes/bridge.ts` | `/api/bridge/{pull,push,heartbeat}` — the outbound sync bridge (#15). See below. |
 | `src/routes/leads.ts` | `/leads`, `/leads/:id`, `POST /leads/:id/promote` — the operator's triage inbox and the one gate a stranger's request crosses to become a submission. Operator-only; see below. |
 | `src/routes/outbox.ts` | `GET /outbox` — a customer's read-back of the emails the portal decided to send them (#14). Scoped to their own sends, same as the dashboard. |
+| `src/routes/deliveries.ts` | `GET /deliveries` — the operator's counterpart to `/outbox`: every outbox row, every customer, including the raw delivery error `/outbox` redacts (#55). Operator-only, same gate as `/leads`; see below. |
 | `migrations/` | `0001` the harness, `0002` submissions (#9), `0003` the bridge's event stream, coord mirror and daemon last-seen, `0004` question answers (#11), `0005` public leads (#31), `0006` design rounds and sign-off (#13), `0007` what a promoted lead records (#33), `0008` per-IP start attempts for the rate limit (#32), `0009` the customer outbox (#14) |
 | `public/` | placeholder page with a live health readout, and the token layer |
 | `test/` | 46 unit tests over routing, health probes, identity parsing and the bridge's decidable parts |
@@ -183,21 +184,24 @@ genuine Access request from a forged one. See `src/identity.ts`.
 ### The operator surface, and the seat that is issued by hand
 
 `/leads` is the operator's triage inbox: every lead the public form has taken, and the one action
-that turns one into a customer. It sits behind the same site-wide Allow policy as everything else —
-there is no fifth Access application — and the Worker additionally checks the Access identity
-against an allowlist:
+that turns one into a customer. `/deliveries` (#55) is the same kind of screen for a different job:
+every outbox row across every customer, the operator's counterpart to the customer-scoped `/outbox`,
+including the raw provider error a stuck send left behind — the one field `/outbox` never shows.
+Both sit behind the same site-wide Allow policy as everything else — there is no fifth Access
+application — and the Worker additionally checks the Access identity against one allowlist shared by
+both routes:
 
 ```bash
 wrangler secret put OPERATOR_EMAILS   # comma- or whitespace-separated addresses
 ```
 
-**Unset means nobody**, in production: `/leads` is a 404 for every caller, including whoever
-deployed it. That is the same fail-closed position the bridge's service token takes, and for the
-same reason — a deploy that forgets the setting should have no operator surface at all rather than
-one that answers to whatever address the Allow policy happens to admit. A caller who is not on the
-list gets exactly the response a missing lead gets: a 404, never a 403, so nobody who guesses the
-URL learns the surface exists. `wrangler dev` and every test tier honour a single synthetic
-development operator instead — see `src/operators.ts`.
+**Unset means nobody**, in production: `/leads` and `/deliveries` are both a 404 for every caller,
+including whoever deployed it. That is the same fail-closed position the bridge's service token
+takes, and for the same reason — a deploy that forgets the setting should have no operator surface
+at all rather than one that answers to whatever address the Allow policy happens to admit. A caller
+who is not on the list gets exactly the response a missing lead gets: a 404, never a 403, so nobody
+who guesses the URL learns either surface exists. `wrangler dev` and every test tier honour a single
+synthetic development operator instead — see `src/operators.ts`.
 
 **Promotion does not issue the Access seat.** Nothing in this application can add an address to an
 Access policy, and nothing should: the thing that grants access to customer data must not be

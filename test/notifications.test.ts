@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   SENDING_TYPES,
   emailContent,
+  listAllOutbox,
   listOutboxForCustomer,
   recordNotificationForStatus,
   sendTypeForStatus,
@@ -368,5 +369,112 @@ describe("listOutboxForCustomer", () => {
     // for never rendering this verbatim to a customer.
     expect(email?.lastError).toBe("Resend API returned 401")
     expect(email?.sentAt).toBeNull()
+  })
+})
+
+describe("listAllOutbox", () => {
+  /**
+   * Issue #55's reader: every `outbox` row, every customer, on one screen for
+   * `GET /deliveries` (`src/routes/deliveries.ts`). Unlike `listOutboxForCustomer`
+   * above, the real query binds nothing at all — no `to_email`, no filter — so
+   * this fake answers `.all()` straight off `.prepare()` with no `.bind()` in
+   * between. `e2e/deliveries.spec.ts` drives the same function through the real
+   * route against real D1; what a fake DB earns its keep on here is the same
+   * thing it earns above: `fromRow`'s skip-on-corruption backstop and the raw,
+   * unredacted mapping of `last_error` — the one field the two readers treat
+   * identically (redaction is `src/routes/outbox.ts`'s job on the way OUT, not
+   * this module's, for either reader).
+   */
+  function row(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "ntf_1",
+      submission_id: "SUB-000001",
+      email_type: "shipped",
+      to_email: "customer@example.test",
+      from_email: "coord-portal <notify@example.test>",
+      subject: "Your work has shipped",
+      preheader: "A rota",
+      body: "It is live.",
+      cta_text: "View the result",
+      cta_href: "/submissions/sub_000001",
+      queued_at: "2026-01-04T00:00:00Z",
+      status: "queued",
+      provider_message_id: null,
+      attempts: 0,
+      last_error: null,
+      sent_at: null,
+      ...overrides,
+    }
+  }
+
+  function dbWithRows(results: unknown[]): Env {
+    return {
+      DB: {
+        prepare(_sql: string) {
+          return {
+            async all() {
+              return { results }
+            },
+          }
+        },
+      },
+    } as unknown as Env
+  }
+
+  it("is unscoped — rows from every customer come back, not filtered by any one recipient", async () => {
+    const env = dbWithRows([
+      row({ id: "ntf_1", to_email: "alice@example.test" }),
+      row({ id: "ntf_2", to_email: "bob@example.test" }),
+    ])
+    const emails = await listAllOutbox(env)
+    expect(emails.map((email) => email.to).sort()).toEqual([
+      "alice@example.test",
+      "bob@example.test",
+    ])
+  })
+
+  it("skips a row whose status is not one of the pinned delivery states — same CHECK backstop as listOutboxForCustomer", async () => {
+    const env = dbWithRows([row({ status: "a-hand-edited-value" })])
+    expect(await listAllOutbox(env)).toHaveLength(0)
+  })
+
+  it("skips a row whose email_type is not one of the pinned sending types", async () => {
+    const env = dbWithRows([row({ email_type: "a-hand-edited-value" })])
+    expect(await listAllOutbox(env)).toHaveLength(0)
+  })
+
+  it("maps a sent row's delivery fields straight through", async () => {
+    const env = dbWithRows([
+      row({
+        to_email: "sent-customer@example.test",
+        status: "sent",
+        provider_message_id: "prov_abc123",
+        sent_at: "2026-01-04T00:05:00Z",
+      }),
+    ])
+    const [email] = await listAllOutbox(env)
+    expect(email?.to).toBe("sent-customer@example.test")
+    expect(email?.status).toBe("sent")
+    expect(email?.providerMessageId).toBe("prov_abc123")
+    expect(email?.sentAt).toBe("2026-01-04T00:05:00Z")
+  })
+
+  it("maps a failed row's attempts and raw last_error straight through, unredacted", async () => {
+    const env = dbWithRows([
+      row({
+        to_email: "failed-customer@example.test",
+        status: "failed",
+        attempts: 3,
+        last_error: "Resend API returned 401",
+      }),
+    ])
+    const [email] = await listAllOutbox(env)
+    expect(email?.status).toBe("failed")
+    expect(email?.attempts).toBe(3)
+    // The whole point of issue #55: `src/routes/deliveries.ts` renders this
+    // verbatim, unlike `src/routes/outbox.ts`'s customer-safe substitution —
+    // and that separation only means something if this module hands back the
+    // raw value to both readers alike.
+    expect(email?.lastError).toBe("Resend API returned 401")
   })
 })
