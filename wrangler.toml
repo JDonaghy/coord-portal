@@ -32,6 +32,15 @@ custom_domain = true
 [observability]
 enabled = true
 
+# Issue #51: the sending address every notification email carries
+# (`src/notifications.ts`). A var, not a secret — this is the whole point of
+# the clause: a per-environment `From` is a one-line change here instead of a
+# code change. Not pinned for production by ms-3's contract, only that it
+# lives in config; #52 is expected to change this value once
+# mail.heurontech.com is verified.
+[vars]
+EMAIL_FROM = "coord-portal <notify@intake.heurontech.com>"
+
 # Issue #50: the drain that sends queued `outbox` rows. Every 5 minutes is
 # plenty for this repo's mail volume (CLAUDE.md: "digest-first, not
 # instant"). At this cadence with no exponential backoff between attempts

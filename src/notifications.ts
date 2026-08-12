@@ -66,11 +66,21 @@ export function sendTypeForStatus(status: string): SendType | null {
 /**
  * The sending address every email carries. Matches the three pinned mocks
  * (`mocks/11-13-email-*.html`) — the contract pins `email-from` as a hook, not
- * this literal string (a test may only assert "looks like an address"), so
- * this is free to move to an env-configured value later without breaking
- * anything sealed.
+ * this literal string (a test may only assert "looks like an address").
+ *
+ * Issue #51 moves the source of truth to `env.EMAIL_FROM` (a `wrangler.toml`
+ * `[vars]` entry, not a secret) so a per-environment sending address is a
+ * config change rather than this code changing. This constant survives as the
+ * fallback for a checkout that has not declared the var — better to send with
+ * the address this module always used than with an empty `From` — see
+ * `emailFrom` below.
  */
-const EMAIL_FROM = "coord-portal <notify@intake.heurontech.com>"
+const DEFAULT_EMAIL_FROM = "coord-portal <notify@intake.heurontech.com>"
+
+/** `env.EMAIL_FROM`, falling back to the historical literal if unset. */
+function emailFrom(env: Env): string {
+  return env.EMAIL_FROM ?? DEFAULT_EMAIL_FROM
+}
 
 /**
  * The delivery state vocabulary — issue #49, Gate-A contract § "Delivery
@@ -233,7 +243,7 @@ export async function recordNotificationForStatus(
       submission.reference,
       type,
       submission.customerEmail,
-      EMAIL_FROM,
+      emailFrom(env),
       content.subject,
       content.preheader,
       content.body,
