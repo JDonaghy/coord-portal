@@ -34,9 +34,12 @@ enabled = true
 
 # Issue #50: the drain that sends queued `outbox` rows. Every 5 minutes is
 # plenty for this repo's mail volume (CLAUDE.md: "digest-first, not
-# instant") and keeps the retry/give-up arc (5 attempts, `src/drain.ts`)
-# resolving within a working day rather than stretching over one. Not
-# reachable from local `wrangler dev` — that is exactly what
+# instant"). At this cadence with no exponential backoff between attempts
+# (by design, matching the contract), the retry/give-up arc (5 attempts,
+# `src/drain.ts`) resolves within roughly 25 minutes worst case, not over a
+# whole working day — comfortably fast, just noted here so the number in this
+# comment matches the number `src/drain.ts`'s `MAX_ATTEMPTS` actually
+# produces. Not reachable from local `wrangler dev` — that is exactly what
 # `--test-scheduled`'s `GET /__scheduled` stands in for, see package.json.
 [triggers]
 crons = ["*/5 * * * *"]
