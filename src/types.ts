@@ -48,6 +48,30 @@ export interface Env {
    */
   TURNSTILE_SITEKEY?: string
   TURNSTILE_SECRET?: string
+  /**
+   * The mail provider seam (issue #51) that issue #50's drain calls through —
+   * see `src/mailProvider.ts`.
+   *
+   * `RESEND_API_KEY` — secret, `wrangler secret put RESEND_API_KEY`. Never in
+   * `wrangler.toml`, never in a committed `.dev.vars` — this repo is public.
+   * Unset (or a call the real API rejects) must never crash the scheduled
+   * handler and must never mark a row `sent`; it fails the send attempt with a
+   * legible `last_error` and flows through the same attempts/backoff/give-up
+   * machinery as any other provider error (contract § "The provider seam",
+   * "Fail-closed").
+   *
+   * `MAIL_PROVIDER` — not a secret, and deliberately not read from
+   * `wrangler.toml` either: this file has no named environments (see its own
+   * comment on that), so a `[vars]` entry here would apply to the deployed
+   * Worker too, and "fake" must never be reachable in production. `=== "fake"`
+   * selects the deterministic in-memory fake regardless of whether
+   * `RESEND_API_KEY` is set; `npm run serve:acceptance` / `serve:test` set it
+   * with `wrangler dev --var MAIL_PROVIDER:fake`, which needs no `.dev.vars`
+   * file to keep in step by hand — the same trade `src/turnstile.ts`'s dev
+   * fallback makes. Absent (production) ⇒ the real Resend implementation.
+   */
+  RESEND_API_KEY?: string
+  MAIL_PROVIDER?: string
 }
 
 export interface ProbeResult {
