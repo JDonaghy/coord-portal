@@ -32,6 +32,15 @@ custom_domain = true
 [observability]
 enabled = true
 
+# Issue #50: the drain that sends queued `outbox` rows. Every 5 minutes is
+# plenty for this repo's mail volume (CLAUDE.md: "digest-first, not
+# instant") and keeps the retry/give-up arc (5 attempts, `src/drain.ts`)
+# resolving within a working day rather than stretching over one. Not
+# reachable from local `wrangler dev` — that is exactly what
+# `--test-scheduled`'s `GET /__scheduled` stands in for, see package.json.
+[triggers]
+crons = ["*/5 * * * *"]
+
 # Static site. Assets are matched first; anything with no matching file falls
 # through to the Worker, which is how /api/* reaches the router.
 [assets]

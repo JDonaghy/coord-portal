@@ -1,3 +1,4 @@
+import { drainOutbox } from "./drain"
 import { handlePages } from "./pages"
 import { handleApi } from "./router"
 import type { Env } from "./types"
@@ -25,5 +26,21 @@ export default {
     if (page) return page
 
     return env.ASSETS.fetch(request)
+  },
+
+  /**
+   * The Cron Trigger issue #50 asks for (`[triggers]` in wrangler.toml is the
+   * production schedule). Fully awaited rather than handed to
+   * `ctx.waitUntil`: a scheduled invocation has no response to return early,
+   * so there is nothing to unblock by deferring, and awaiting here means a
+   * thrown error surfaces as a failed invocation instead of a silently
+   * abandoned background task.
+   *
+   * `wrangler dev --test-scheduled` (`npm run serve:acceptance` /
+   * `serve:test`) exposes this at `GET /__scheduled` — see `src/drain.ts` for
+   * why nothing here is ever reachable from `fetch` above.
+   */
+  async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
+    await drainOutbox(env)
   },
 } satisfies ExportedHandler<Env>
