@@ -38,8 +38,24 @@ enabled = true
 # code change. Not pinned for production by ms-3's contract, only that it
 # lives in config; #52 is expected to change this value once
 # mail.heurontech.com is verified.
+#
+# #52 has now done exactly that. `mail.heurontech.com` is the domain verified
+# with Resend (SPF at `send.mail`, DKIM at `resend._domainkey.mail`, DMARC on
+# the apex) — `intake.heurontech.com` never was, and it is this Worker's own
+# custom domain with no MX, so mail sent from it would be refused as an
+# unverified sender and any reply would bounce into nothing.
+#
+# THE ACCEPTANCE ENVIRONMENT DOES NOT USE THIS VALUE. ms-3's contract pins the
+# acceptance `EMAIL_FROM` to the historical `notify@intake.heurontech.com`
+# literal, matching every ms-1 and ms-3 mock, and explicitly does not pin the
+# production value. `serve:acceptance` / `serve:test` therefore override this
+# var (see package.json) exactly as they already override MAIL_PROVIDER, which
+# is what keeps the sealed suite green while production moves independently.
+# Changing the address here must NOT be accompanied by an edit to
+# `tests/acceptance/**` — that would be amending the oracle to match the
+# implementation, which is the one thing the sealed suite exists to prevent.
 [vars]
-EMAIL_FROM = "coord-portal <notify@intake.heurontech.com>"
+EMAIL_FROM = "coord-portal <notify@mail.heurontech.com>"
 
 # Issue #50: the drain that sends queued `outbox` rows. Every 5 minutes is
 # plenty for this repo's mail volume (CLAUDE.md: "digest-first, not
