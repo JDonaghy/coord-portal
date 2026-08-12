@@ -13,10 +13,15 @@
 # another issue's block.
 #
 # ms-3's remaining issues, for whoever extends this file next:
-#   #50 the cron drain (`GET /__scheduled`), #51 the provider seam and its
-#   `mailfail` fake, #55 the operator view `GET /deliveries`. #52 is
-#   `oracle:exempt` by its own issue text (contract.md, Notes item 7) and gets
-#   no block here.
+#   #51 the provider seam and its `mailfail` fake, #55 the operator view
+#   `GET /deliveries`. #52 is `oracle:exempt` by its own issue text (contract.md,
+#   Notes item 7) and gets no block here.
+#
+# NOTE for #51's author: #50's block below already exercises the fake's pinned
+# black-box behaviour end to end (a `mailfail` recipient always fails, everyone
+# else succeeds) because that is the only lever #50's own transitions can be
+# driven with. #51's slice should assert what is left — fail-closed on an unset
+# key, `MAIL_PROVIDER` selection — not re-assert these.
 
 issues:
   49:
@@ -26,3 +31,11 @@ issues:
     - "[chromium] ms-3/49-outbox-delivery-state.spec.ts › ms-3 issue 49 outbox delivery state › the delivery state is added to the ms-1 email, not substituted for it"
     - "[chromium] ms-3/49-outbox-delivery-state.spec.ts › ms-3 issue 49 outbox delivery state › the delivery state a customer can read leaks no provider or engineer-side vocabulary"
     - "[chromium] ms-3/49-outbox-delivery-state.spec.ts › ms-3 issue 49 outbox delivery state › the delivery-state columns arrive as a numbered migration past the ms-1 head"
+  50:
+    - "[chromium] ms-3/50-drain.spec.ts › ms-3 issue 50 the drain › the scheduled drain can be triggered at all"
+    - "[chromium] ms-3/50-drain.spec.ts › ms-3 issue 50 the drain › a queued row stays queued until the drain runs"
+    - "[chromium] ms-3/50-drain.spec.ts › ms-3 issue 50 the drain › the drain claims a queued row and records it sent"
+    - "[chromium] ms-3/50-drain.spec.ts › ms-3 issue 50 the drain › the drain empties the whole queue, not just one row"
+    - "[chromium] ms-3/50-drain.spec.ts › ms-3 issue 50 the drain › one provider failure is a retry, not a give-up"
+    - "[chromium] ms-3/50-drain.spec.ts › ms-3 issue 50 the drain › a permanently failing send gives up visibly, and stays given up"
+    - "[chromium] ms-3/50-drain.spec.ts › ms-3 issue 50 the drain › two overlapping drain runs leave exactly one send behind"
