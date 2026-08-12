@@ -1,17 +1,28 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { drainOutbox, processRow, type QueuedRow } from "../src/drain"
 import type { MailProvider } from "../src/mailProvider"
 import type { Env } from "../src/types"
 
 /**
- * Unit coverage for issue #50's drain — the claiming compare-and-swap ("the
- * thing to get right") and the retry/give-up arc, against a minimal in-memory
- * fake of the exact D1 statements `src/drain.ts` issues. The real Worker
- * behaviour — actually invoked through `GET /__scheduled` — is the sealed
- * acceptance slice's job (`tests/acceptance/ms-3/50-drain.spec.ts`); this file
- * exists so the claim race and the attempt bookkeeping can be asserted in
- * milliseconds, and so a future change to either can fail fast in `npm test`
- * rather than only in the (much slower) acceptance run.
+ * Unit coverage for issue #50's drain — the claiming compare-and-swap plus
+ * lease ("the thing to get right") and the retry/give-up arc, against a
+ * minimal in-memory fake of the exact D1 statements `src/drain.ts` issues.
+ * The real Worker behaviour — actually invoked through `GET /__scheduled` —
+ * is the sealed acceptance slice's job (`tests/acceptance/ms-3/50-drain.spec.ts`);
+ * this file exists so the claim race and the attempt bookkeeping can be
+ * asserted in milliseconds, and so a future change to either can fail fast in
+ * `npm test` rather than only in the (much slower) acceptance run.
+ *
+ * A fix-round review of this file's earlier version pointed out that the
+ * "two concurrent claims" test below only exercises two invocations racing
+ * on an *identical stale snapshot* — the case the `attempts` CAS alone
+ * already handled — and does not exercise the *staggered* overlap (a second,
+ * independent invocation's batch SELECT landing after the first invocation's
+ * claim has already committed but before its `provider.send()` resolves).
+ * `"a row mid-send under a live claim is excluded from a second invocation's
+ * candidate batch"` below is the test that closes that gap, added alongside
+ * `claimed_at`/`CLAIM_LEASE_MS` (`migrations/0011_outbox_claim_lease.sql`,
+ * `src/drain.ts`).
  *
  * Every address below is invented on the reserved `example.test` TLD —
  * CLAUDE.md rule 1.
@@ -29,6 +40,7 @@ interface StoredRow {
   sent_at: string | null
   provider_message_id: string | null
   queued_at: string
+  claimed_at: string | null
 }
 
 function seedRow(overrides: Partial<StoredRow> = {}): StoredRow {
@@ -44,6 +56,7 @@ function seedRow(overrides: Partial<StoredRow> = {}): StoredRow {
     sent_at: null,
     provider_message_id: null,
     queued_at: "2026-08-11T00:00:00.000Z",
+    claimed_at: null,
     ...overrides,
   }
 }
@@ -67,8 +80,13 @@ function fakeDrainDB(rows: StoredRow[]) {
           return {
             async all<T>() {
               if (statement.startsWith("SELECT id, to_email")) {
+                const [leaseThreshold] = args as [string]
                 const results = [...store.values()]
-                  .filter((row) => row.status === "queued")
+                  .filter(
+                    (row) =>
+                      row.status === "queued" &&
+                      (row.claimed_at === null || row.claimed_at <= leaseThreshold),
+                  )
                   .sort(
                     (a, b) =>
                       a.queued_at.localeCompare(b.queued_at) || a.id.localeCompare(b.id),
@@ -79,10 +97,20 @@ function fakeDrainDB(rows: StoredRow[]) {
             },
             async run() {
               if (statement.startsWith("UPDATE outbox SET attempts = attempts + 1")) {
-                const [id, expectedAttempts] = args as [string, number]
+                const [claimedAt, id, expectedAttempts, leaseThreshold] = args as [
+                  string,
+                  string,
+                  number,
+                  string,
+                ]
                 const row = store.get(id)
-                const won = !!row && row.status === "queued" && row.attempts === expectedAttempts
-                if (won && row) row.attempts += 1
+                const leaseIsLive = !!row && row.claimed_at !== null && row.claimed_at > leaseThreshold
+                const won =
+                  !!row && row.status === "queued" && row.attempts === expectedAttempts && !leaseIsLive
+                if (won && row) {
+                  row.attempts += 1
+                  row.claimed_at = claimedAt
+                }
                 return { meta: { changes: won ? 1 : 0 } }
               }
               if (statement.startsWith("UPDATE outbox SET status = 'sent'")) {
@@ -93,6 +121,8 @@ function fakeDrainDB(rows: StoredRow[]) {
                   row.status = "sent"
                   row.sent_at = sentAt
                   row.provider_message_id = providerMessageId
+                  row.last_error = null
+                  row.claimed_at = null
                 }
                 return { meta: { changes: won ? 1 : 0 } }
               }
@@ -103,6 +133,7 @@ function fakeDrainDB(rows: StoredRow[]) {
                 if (won && row) {
                   row.status = "failed"
                   row.last_error = lastError
+                  row.claimed_at = null
                 }
                 return { meta: { changes: won ? 1 : 0 } }
               }
@@ -110,7 +141,10 @@ function fakeDrainDB(rows: StoredRow[]) {
                 const [lastError, id] = args as [string, string]
                 const row = store.get(id)
                 const won = !!row && row.status === "queued"
-                if (won && row) row.last_error = lastError
+                if (won && row) {
+                  row.last_error = lastError
+                  row.claimed_at = null
+                }
                 return { meta: { changes: won ? 1 : 0 } }
               }
               throw new Error(`fakeDrainDB: unrecognized UPDATE: ${statement}`)
@@ -183,6 +217,55 @@ describe("processRow — the claim", () => {
     expect(store.get("outbox-1")?.status).toBe("queued")
   })
 
+  it("a row mid-send under a live claim is excluded from a second invocation's candidate batch", async () => {
+    // The staggered-overlap scenario a fix-round review traced concretely:
+    // invocation A's claim commits (attempts 0→1, `claimed_at` stamped) and
+    // it is now awaiting `provider.send()`. Before that resolves, invocation
+    // B runs its own independent, fresh batch SELECT (`drainOutbox`, not
+    // `processRow` called with A's already-stale snapshot). The `attempts`
+    // CAS alone cannot stop B here — B's SELECT would legitimately observe
+    // `attempts = 1` and win its own CAS against it. `claimed_at` must keep B
+    // from ever seeing this row as a candidate in the first place.
+    const seeded = seedRow()
+    const { DB, store } = fakeDrainDB([seeded])
+    const env = { DB, MAIL_PROVIDER: "fake" } as unknown as Env
+
+    let releaseSend: (() => void) | undefined
+    const sendGate = new Promise<void>((resolve) => {
+      releaseSend = resolve
+    })
+    let sendCalls = 0
+    const slowProvider: MailProvider = {
+      async send() {
+        sendCalls++
+        await sendGate
+        return { ok: true, providerMessageId: "fake-msg-slow" }
+      },
+    }
+
+    // Invocation A: claims the row (this commits synchronously inside the
+    // fake before the first real await) and blocks on `provider.send()`.
+    const invocationA = processRow(env, slowProvider, queuedRowFrom(seeded))
+
+    // Invocation B: an entirely independent, fresh `drainOutbox` pass — the
+    // scenario's whole point is that B's SELECT is not handed A's stale
+    // snapshot, it runs its own.
+    await drainOutbox(env)
+
+    expect(
+      sendCalls,
+      "B's own drain pass must not have called the provider for a row A already has a live claim on",
+    ).toBe(1)
+    expect(store.get("outbox-1")?.status, "still mid-send, not yet resolved").toBe("queued")
+    expect(store.get("outbox-1")?.attempts, "only A's claim moved this").toBe(1)
+
+    releaseSend?.()
+    await invocationA
+
+    expect(store.get("outbox-1")?.status).toBe("sent")
+    expect(sendCalls, "the provider is still only ever called once for this row").toBe(1)
+  })
+
   it("a first-try success is sent, with a delivery time and provider id, attempts = 1", async () => {
     const seeded = seedRow()
     const { DB, store } = fakeDrainDB([seeded])
@@ -221,6 +304,28 @@ describe("processRow — the claim", () => {
     expect(final?.provider_message_id).toBeNull()
     expect(final?.sent_at).toBeNull()
     expect(final?.last_error).toBe("the fake mail provider deterministically rejects this address")
+    expect(final?.claimed_at, "a retry clears its claim so the very next tick can re-claim it").toBeNull()
+  })
+
+  it("a success after one or more prior failures clears the stale last_error, not just status", async () => {
+    // Non-blocking finding from the fix-round review: a row that fails once
+    // (or more) and then succeeds must not end up `status = 'sent'` with a
+    // stale `last_error` still sitting in the DB — a latent trap for a future
+    // `/deliveries` operator view (#55) or a direct D1 lookup.
+    const seeded = seedRow({ attempts: 2, last_error: "Resend API returned 500" })
+    const { DB, store } = fakeDrainDB([seeded])
+    const env = { DB } as unknown as Env
+    const provider: MailProvider = {
+      async send() {
+        return { ok: true, providerMessageId: "fake-msg-recovered" }
+      },
+    }
+
+    await processRow(env, provider, queuedRowFrom(seeded))
+
+    const final = store.get("outbox-1")
+    expect(final?.status).toBe("sent")
+    expect(final?.last_error, "success must clear a stale last_error from an earlier retry").toBeNull()
   })
 
   it("gives up after the 5th failing attempt, and only then", async () => {
@@ -271,6 +376,64 @@ describe("processRow — the claim", () => {
 
     expect(sendCalls, "sent is terminal — the claim must not re-fire the provider").toBe(0)
     expect(store.get("outbox-1")?.status).toBe("sent")
+  })
+
+  it("a claim whose invocation never cleared it (e.g. evicted mid-send) self-heals once its lease expires", async () => {
+    // The fallback path the module doc calls out: `claimed_at` should not be
+    // able to strand a row forever if the invocation that set it never got to
+    // run its own cleanup. Advance the clock well past `CLAIM_LEASE_MS`
+    // (module doc: chosen short relative to the 5-minute Cron Trigger cadence)
+    // and confirm a fresh invocation can claim the row again.
+    vi.useFakeTimers()
+    try {
+      const abandonedClaimTime = new Date().toISOString()
+      const seeded = seedRow({ attempts: 1, claimed_at: abandonedClaimTime })
+      const { DB, store } = fakeDrainDB([seeded])
+      const env = { DB } as unknown as Env
+
+      let sendCalls = 0
+      const provider: MailProvider = {
+        async send() {
+          sendCalls++
+          return { ok: true, providerMessageId: "fake-msg-healed" }
+        },
+      }
+
+      // Well past any reasonable lease — 10 minutes, longer than the whole
+      // 5-minute Cron Trigger cadence this module's own doc bounds the lease
+      // against.
+      vi.advanceTimersByTime(10 * 60 * 1000)
+
+      await processRow(env, provider, queuedRowFrom(seeded))
+
+      expect(sendCalls, "an expired lease must not block a fresh claim").toBe(1)
+      expect(store.get("outbox-1")?.status).toBe("sent")
+      expect(store.get("outbox-1")?.attempts).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("a claim whose lease is still live blocks a fresh claim attempt", async () => {
+    // The mirror image of the self-heal test above: a recent, still-live
+    // claim must keep blocking, not just an expired one.
+    const seeded = seedRow({ attempts: 1, claimed_at: new Date().toISOString() })
+    const { DB, store } = fakeDrainDB([seeded])
+    const env = { DB } as unknown as Env
+
+    let sendCalls = 0
+    const provider: MailProvider = {
+      async send() {
+        sendCalls++
+        return { ok: true, providerMessageId: "should-not-happen" }
+      },
+    }
+
+    await processRow(env, provider, queuedRowFrom(seeded))
+
+    expect(sendCalls, "a live lease must block a second claim attempt").toBe(0)
+    expect(store.get("outbox-1")?.attempts, "a blocked claim must not perturb the row").toBe(1)
+    expect(store.get("outbox-1")?.status).toBe("queued")
   })
 })
 
