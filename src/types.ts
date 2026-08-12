@@ -72,6 +72,18 @@ export interface Env {
    */
   RESEND_API_KEY?: string
   MAIL_PROVIDER?: string
+  /**
+   * The sending address every notification email carries (issue #51) — var,
+   * not secret, declared in `wrangler.toml`'s `[vars]` so a per-environment
+   * sending address is a config change, not the code change it used to be
+   * (raised as a non-blocking finding on #14). `src/notifications.ts` falls
+   * back to the same literal this replaced if the var is ever unset, so a
+   * missing declaration degrades to the old behaviour instead of sending with
+   * an empty `From`. Production's value is #52's to change once
+   * `mail.heurontech.com` is verified — this contract does not pin it, only
+   * that it lives here instead of a hardcoded string.
+   */
+  EMAIL_FROM?: string
 }
 
 export interface ProbeResult {
