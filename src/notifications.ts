@@ -74,8 +74,17 @@ export function sendTypeForStatus(status: string): SendType | null {
  * fallback for a checkout that has not declared the var — better to send with
  * the address this module always used than with an empty `From` — see
  * `emailFrom` below.
+ *
+ * #52 moved that fallback off `intake.heurontech.com`. Only
+ * `mail.heurontech.com` is verified with Resend; `intake.heurontech.com` is
+ * this Worker's own custom domain, has no MX, and a send from it is refused as
+ * an unverified sender. A fallback nobody can send from is a latent outage
+ * waiting for the first checkout that forgets the var, so the fallback now
+ * names the domain that actually works. The acceptance environment still
+ * overrides `EMAIL_FROM` back to the pinned historical literal (package.json),
+ * so this constant is not what the sealed mocks are matched against.
  */
-const DEFAULT_EMAIL_FROM = "coord-portal <notify@intake.heurontech.com>"
+const DEFAULT_EMAIL_FROM = "coord-portal <notify@mail.heurontech.com>"
 
 /** `env.EMAIL_FROM`, falling back to the historical literal if unset. */
 function emailFrom(env: Env): string {
