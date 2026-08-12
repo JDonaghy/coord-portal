@@ -90,7 +90,7 @@ describe("topbar", () => {
 describe("the other two headers", () => {
   it("share header.topbar, so they inherit the same wrapping rules", () => {
     expect(publicHeader()).toContain('<header class="topbar">')
-    expect(operatorTopbar("operator@example.test")).toContain('<header class="topbar">')
+    expect(operatorTopbar("operator@example.test", "leads")).toContain('<header class="topbar">')
   })
 
   it("keeps the public header free of nav and identity", () => {

@@ -134,7 +134,7 @@ export async function promoteLeadAction(
 }
 
 function inbox(operator: Operator, leads: Lead[]): string {
-  return `${operatorTopbar(operator.email)}
+  return `${operatorTopbar(operator.email, "leads")}
 <main>
   <div class="page-head">
     <h1>Leads</h1>
@@ -180,7 +180,7 @@ function detail(operator: Operator, lead: Lead): string {
   const status = leadStatus(lead)
   const promoted = status === "promoted"
 
-  return `${operatorTopbar(operator.email)}
+  return `${operatorTopbar(operator.email, "leads")}
 <main data-testid="lead-detail" data-status="${status}">
   <a class="back-link" href="/leads" data-testid="back-to-leads">&larr; Leads</a>
 

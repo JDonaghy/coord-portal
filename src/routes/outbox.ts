@@ -1,5 +1,5 @@
 import { readAccessIdentity } from "../identity"
-import { listOutboxForCustomer, type OutboxEmail } from "../notifications"
+import { DELIVERY_STATUS_TEXT, listOutboxForCustomer, type OutboxEmail } from "../notifications"
 import { escapeHtml, html, page, topbar } from "../render"
 import type { Env } from "../types"
 
@@ -42,17 +42,6 @@ function outboxPage(email: string | null, emails: OutboxEmail[]): string {
 ${body}
   </div>
 </main>`
-}
-
-/**
- * Issue #49, Gate-A contract § "Delivery state vocabulary": the fixed
- * `data-status` slug -> exact `delivery-status` pill text. Three slugs, three
- * strings, nothing else ever.
- */
-const DELIVERY_STATUS_TEXT: Record<OutboxEmail["status"], string> = {
-  queued: "Queued",
-  sent: "Sent",
-  failed: "Delivery failed",
 }
 
 /**

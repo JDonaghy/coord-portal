@@ -1,4 +1,5 @@
 import { submissionsDashboard } from "./routes/dashboard"
+import { deliveries } from "./routes/deliveries"
 import { intakeForm, submitIntake } from "./routes/intake"
 import {
   leadDetail,
@@ -55,6 +56,17 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
   // renders it. See `routes/outbox.ts`.
   if (pathname === "/outbox" && request.method === "GET") {
     return outbox(request, env)
+  }
+
+  // The operator's delivery view (#55) — every outbox row, every customer,
+  // the counterpart to the customer-scoped `/outbox` above. Owned here for
+  // every method, same reasoning as `/leads…` just below: falling through to
+  // `ASSETS.fetch` on an unsupported method would hand an unauthenticated
+  // caller a response this contract says is operator-only. See
+  // `routes/deliveries.ts`.
+  if (pathname === "/deliveries") {
+    if (request.method === "GET") return deliveries(request, env)
+    return leadsNotFound()
   }
 
   // The operator's lead triage surface (#33). Owned here for every method, not
