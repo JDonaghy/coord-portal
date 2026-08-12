@@ -59,8 +59,11 @@ export function publicHeader(): string {
 </header>`
 }
 
+export type OperatorNavCurrent = "leads" | "deliveries"
+
 /**
- * The header every OPERATOR screen carries — issue #33's `/leads*`.
+ * The header every OPERATOR screen carries — issue #33's `/leads*` and, as of
+ * issue #55, `/deliveries`.
  *
  * Deliberately not `topbar()`. That one's nav points at `/submissions` and
  * `/intake`, which are the *customer's* screens: `/submissions` is scoped to
@@ -71,12 +74,22 @@ export function publicHeader(): string {
  * `identity-email` reuses the customer topbar's hook name and copy on purpose —
  * "who does this page say is signed in" is the same question on both, and one
  * name for it is one thing to learn.
+ *
+ * `current` picks which nav entry carries `aria-current="page"` — issue #55's
+ * Gate-A contract amendment: this used to hardcode it on `nav-leads` (the only
+ * operator screen there was), and now that there are two, the current one has
+ * to be computed the same way `topbar()`'s `nav-dashboard` / `nav-new` /
+ * `nav-outbox` already are.
  */
-export function operatorTopbar(email: string): string {
+export function operatorTopbar(email: string, current: OperatorNavCurrent): string {
+  const leadsCurrent = current === "leads" ? ' aria-current="page"' : ""
+  const deliveriesCurrent = current === "deliveries" ? ' aria-current="page"' : ""
+
   return `<header class="topbar">
   <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
   <nav aria-label="primary">
-    <a href="/leads" aria-current="page" data-testid="nav-leads">Leads</a>
+    <a href="/leads" data-testid="nav-leads"${leadsCurrent}>Leads</a>
+    <a href="/deliveries" data-testid="nav-deliveries"${deliveriesCurrent}>Deliveries</a>
   </nav>
   <span class="identity" data-testid="identity-email">signed in as ${escapeHtml(email)}</span>
 </header>`
@@ -431,6 +444,28 @@ export function page(title: string, main: string): string {
     display: inline-block; margin-top: 1rem; background: var(--accent); color: white !important;
     text-decoration: none; border-radius: var(--r-md); padding: 0.65rem 1.25rem; font-weight: 600;
   }
+
+  /* ── The operator's delivery view (issue #55) — ms-3/mocks/05-06-deliveries-*.html.
+     GET /deliveries: every outbox row across every customer, not /outbox's
+     scoped email-preview DOM. Reuses .delivery-pill and .delivery-detail from
+     the outbox styles above — same pill, same vocabulary, see
+     src/notifications.ts's DELIVERY_STATUS_TEXT. */
+  ul.deliveries-list { list-style: none; margin: 1.5rem 0 0; padding: 0; display: grid; gap: 0.75rem; }
+  .delivery-row {
+    display: grid; gap: 0.6rem;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1rem 1.25rem;
+  }
+  .delivery-row .row-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+  .delivery-row .row-main { display: grid; gap: 0.3rem; max-width: 32rem; }
+  .delivery-row .subject { font-weight: 600; }
+  .delivery-row .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  .delivery-row .row-side { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+  .delivery-error {
+    margin: 0; padding: 0.6rem 0.85rem; background: var(--fail-wash); color: var(--fail);
+    border-radius: var(--r-md); font-size: var(--step--1); font-family: var(--font-mono);
+  }
+  .delivery-provider-id { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
 </style>
 </head>
 <body>

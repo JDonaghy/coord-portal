@@ -99,6 +99,26 @@ function isDeliveryStatus(value: string): value is DeliveryStatus {
   return (DELIVERY_STATUSES as readonly string[]).includes(value)
 }
 
+/**
+ * The fixed `data-status` slug -> exact `delivery-status` pill text — issue
+ * #49, Gate-A contract § "Delivery state vocabulary". Three slugs, three
+ * strings, nothing else, ever.
+ *
+ * Shared by both readers of this vocabulary: `/outbox` (`src/routes/outbox.ts`,
+ * issue #49, scoped to one customer) and `/deliveries`
+ * (`src/routes/deliveries.ts`, issue #55, every customer). The pill text is
+ * not the customer-safety-sensitive part of either screen — that is
+ * `last_error`, which the two routes deliberately do NOT share a rendering
+ * path for (see `src/routes/deliveries.ts`'s module comment) — so one source
+ * of truth here is only avoiding copy-paste vocabulary drift, not a
+ * redaction shortcut.
+ */
+export const DELIVERY_STATUS_TEXT: Record<DeliveryStatus, string> = {
+  queued: "Queued",
+  sent: "Sent",
+  failed: "Delivery failed",
+}
+
 export interface OutboxEmail {
   id: string
   /** The customer-visible `SUB-XXXXXX` reference this send is about. */
@@ -322,6 +342,37 @@ export async function listOutboxForCustomer(env: Env, email: string): Promise<Ou
   )
     .bind(email)
     .all<OutboxRow>()
+  return (results ?? [])
+    .map(fromRow)
+    .filter((email): email is OutboxEmail => email !== null)
+}
+
+/**
+ * Every outbox row, across every customer, most recent activity first — the
+ * operator's counterpart to `listOutboxForCustomer` above (issue #55,
+ * Gate-A contract § "The operator delivery view"). Deliberately unscoped: the
+ * one caller allowed to see every customer's rows on a single screen is
+ * `GET /deliveries` (`src/routes/deliveries.ts`), gated by `readOperator`
+ * rather than by `to_email` the way this module's other reader is. See that
+ * route's module comment for why this is a second function rather than
+ * `listOutboxForCustomer` with an "every customer" flag threaded through it.
+ *
+ * "Most recent activity first" (issue #55's own words) is ambiguous for a
+ * `sent` row: is its activity the decision (`queued_at`) or the delivery
+ * (`sent_at`)? That is the same conflict this contract's Notes item 1 already
+ * records for `outbox.sent_at`'s two meanings, inherited here rather than
+ * resolved. This orders by whichever is later — `sent_at` once a row has one,
+ * `queued_at` until then — which is also the only ordering a sealed test can
+ * assert without pinning that open question (see the route's own comment on
+ * the "Ordering" contract section). A `failed` row's retries never touch
+ * either column, so a much-retried row still sorts by when it was first
+ * decided, not by its last retry attempt — there is no column that records
+ * that moment.
+ */
+export async function listAllOutbox(env: Env): Promise<OutboxEmail[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM outbox ORDER BY COALESCE(sent_at, queued_at) DESC, id DESC`,
+  ).all<OutboxRow>()
   return (results ?? [])
     .map(fromRow)
     .filter((email): email is OutboxEmail => email !== null)
