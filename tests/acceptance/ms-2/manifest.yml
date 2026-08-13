@@ -45,3 +45,8 @@ issues:
     - "[chromium] ms-2/33-lead-triage-promotion.spec.ts › ms-2 issue 33 lead triage and promotion › a lead nobody promotes stays new"
     - "[chromium] ms-2/33-lead-triage-promotion.spec.ts › ms-2 issue 33 lead triage and promotion › the leads surface is a 404 to anyone who is not the operator"
     - "[chromium] ms-2/33-lead-triage-promotion.spec.ts › ms-2 issue 33 lead triage and promotion › coord never sees leads — promotion looks like an ordinary submission"
+  41:
+    - "[chromium] ms-2/41-public-body-hygiene.spec.ts › ms-2 issue 41 public response body hygiene › no engineer-side identifier reaches an unauthenticated caller"
+    - "[chromium] ms-2/41-public-body-hygiene.spec.ts › ms-2 issue 41 public response body hygiene › the public route ships no styling for screens a stranger cannot reach"
+    - "[chromium] ms-2/41-public-body-hygiene.spec.ts › ms-2 issue 41 public response body hygiene › the shared token sheet stays public and names no screens"
+    - "[chromium] ms-2/41-public-body-hygiene.spec.ts › ms-2 issue 41 public response body hygiene › the receipt and the rejected redisplay are as clean as the form"
