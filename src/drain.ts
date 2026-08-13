@@ -169,11 +169,17 @@ export async function processRow(env: Env, provider: MailProvider, row: QueuedRo
 
   const attempts = row.attempts + 1
 
+  // `replyTo` is read from config at send time rather than stored per row
+  // (#52). The reply destination is a property of the deployment, not of the
+  // decision that queued the row — a row queued before the var changed should
+  // still send to wherever replies go *now*, and a stored copy would make an
+  // address change require a migration instead of a config edit.
   const outcome = await provider.send({
     to: row.to_email,
     from: row.from_email,
     subject: row.subject,
     body: row.body,
+    replyTo: env.REPLY_TO,
   })
 
   if (outcome.ok) {

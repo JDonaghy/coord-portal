@@ -112,6 +112,36 @@ describe("ResendMailProvider", () => {
     expect(url).toBe("https://api.resend.com/emails")
     expect((init.headers as Record<string, string>)["authorization"]).toBe("Bearer test-key")
   })
+
+  // Issue #52: the `From` domain is send-only, so `Reply-To` is the entire
+  // reply path. These two cover the seam in both directions — nothing else in
+  // this repo can, since no black-box surface sees a real Resend request.
+  it("sends reply_to when a reply address is configured", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ id: "resend-r1" }), { status: 200 }))
+    const provider = new ResendMailProvider("test-key")
+    await provider.send({
+      to: "a@example.test",
+      from: "f@example.test",
+      subject: "s",
+      body: "b",
+      replyTo: "replies@example.test",
+    })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toMatchObject({ reply_to: "replies@example.test" })
+  })
+
+  it("omits reply_to entirely when no reply address is configured", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ id: "resend-r2" }), { status: 200 }))
+    const provider = new ResendMailProvider("test-key")
+    await provider.send({ to: "a@example.test", from: "f@example.test", subject: "s", body: "b" })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    // Absent, not null and not "": Resend writes a header for a present-but-
+    // empty value, and a malformed `Reply-To` can leave a customer with no
+    // reply target at all — worse than the header simply not being there.
+    expect(JSON.parse(init.body as string)).not.toHaveProperty("reply_to")
+  })
 })
 
 describe("selectMailProvider", () => {
