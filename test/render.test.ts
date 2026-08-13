@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { operatorTopbar, page, publicHeader, topbar } from "../src/render"
+import { operatorTopbar, page, publicHeader, publicPage, topbar } from "../src/render"
 
 /**
  * Regression cover for the topbar's NARROW-VIEWPORT behaviour.
@@ -98,5 +98,74 @@ describe("the other two headers", () => {
     expect(rendered).toContain('data-testid="brand-home"')
     expect(rendered).not.toContain("data-testid=\"identity-email\"")
     expect(rendered).not.toContain("<nav")
+  })
+})
+
+/**
+ * Issue #41: `/start` used to be rendered with `page()`, which inlines the
+ * WHOLE authenticated application's stylesheet — comments naming issues and
+ * mock filenames included — because none of it renders and #31's DOM-level
+ * acceptance slice reads `innerText()`, which cannot see a `<style>` block at
+ * all. The fix is `publicPage()`: a second document shell wired to its own,
+ * hand-picked sheet.
+ *
+ * The real oracle for "no engineer-side identifier reaches a stranger" is the
+ * sealed black-box slice (`tests/acceptance/ms-2/41-public-body-hygiene.spec.ts`),
+ * which asserts on the actual bytes `GET`/`POST /start` put on the wire behind
+ * a running Worker. This is a cheap, fast tripwire next to it: a unit test
+ * that fails in under a second if `publicPage()` is ever pointed back at
+ * `page()`'s sheet, without paying for `wrangler dev` + Playwright to find
+ * that out.
+ */
+describe("publicPage", () => {
+  const shell = publicPage("Get in touch — coord-portal", "<main></main>")
+
+  it("still links the shared token stylesheet", () => {
+    expect(shell).toContain('<link rel="stylesheet" href="/tokens.css">')
+  })
+
+  it("never inlines a selector or comment naming an authenticated or operator screen", () => {
+    const AUTHENTICATED_ONLY = [
+      "ul.submission-list",
+      "submission-detail",
+      "lead-detail",
+      ".lead-row",
+      "leads-list",
+      ".round-card",
+      "access-seat-reminder",
+      "delivery-pill",
+      "outbox-list",
+      "status-pill",
+      "verdict-pill",
+      "issue #13",
+      "issue #33",
+      "mocks/",
+      ".html",
+    ]
+    for (const needle of AUTHENTICATED_ONLY) {
+      expect(shell, `publicPage() must not ship "${needle}"`).not.toContain(needle)
+    }
+  })
+
+  it("still carries every rule the public form and receipt actually use", () => {
+    for (const selector of [
+      "header.topbar",
+      "form.lead",
+      ".field",
+      ".optional-tag",
+      "button.primary",
+      ".async-note",
+      ".lead-error",
+      ".receipt",
+      "a.button",
+    ]) {
+      expect(shell, `publicPage() must still style ${selector}`).toContain(selector)
+    }
+  })
+
+  it("escapes the document title, same as page()", () => {
+    expect(publicPage('a "quoted" <title>', "")).toContain(
+      "<title>a &quot;quoted&quot; &lt;title&gt;</title>",
+    )
   })
 })
