@@ -1,6 +1,6 @@
 import { createLead } from "../leads"
 import { clientIp, isRateLimited } from "../rateLimit"
-import { escapeHtml, html, page, publicHeader } from "../render"
+import { escapeHtml, html, publicHeader, publicPage } from "../render"
 import { TURNSTILE_FIELD, publicSitekey, verifySubmission } from "../turnstile"
 import type { Env } from "../types"
 
@@ -32,7 +32,7 @@ import type { Env } from "../types"
  * contract's "two failure families, one rendered shape" for (1)/(2) only.
  */
 export function startForm(request: Request, env: Env): Response {
-  return html(page("Get in touch — coord-portal", renderForm(request, env)))
+  return html(publicPage("Get in touch — coord-portal", renderForm(request, env)))
 }
 
 interface DraftValues {
@@ -122,7 +122,7 @@ export async function submitStart(request: Request, env: Env): Promise<Response>
   const ip = clientIp(request)
   if (await isRateLimited(env, ip)) {
     return html(
-      page("Get in touch — coord-portal", renderForm(request, env, EMPTY_DRAFT, REJECTION_BANNER)),
+      publicPage("Get in touch — coord-portal", renderForm(request, env, EMPTY_DRAFT, REJECTION_BANNER)),
       { status: 429 },
     )
   }
@@ -140,7 +140,7 @@ export async function submitStart(request: Request, env: Env): Promise<Response>
   const token = stringField(form, TURNSTILE_FIELD)
   if (!(await verifySubmission(request, env, token))) {
     return html(
-      page("Get in touch — coord-portal", renderForm(request, env, draft, REJECTION_BANNER)),
+      publicPage("Get in touch — coord-portal", renderForm(request, env, draft, REJECTION_BANNER)),
       { status: 400 },
     )
   }
@@ -149,7 +149,7 @@ export async function submitStart(request: Request, env: Env): Promise<Response>
   // this is never merged into the bot-gate banner above.
   if (!draft.summary || !draft.email) {
     return html(
-      page(
+      publicPage(
         "Get in touch — coord-portal",
         renderForm(request, env, draft, "Please fill in every required field."),
       ),
@@ -163,7 +163,7 @@ export async function submitStart(request: Request, env: Env): Promise<Response>
     name: draft.name || null,
   })
 
-  return html(page("Thanks — coord-portal", receipt(lead.reference)))
+  return html(publicPage("Thanks — coord-portal", receipt(lead.reference)))
 }
 
 function receipt(reference: string): string {

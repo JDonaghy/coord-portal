@@ -95,25 +95,32 @@ export function operatorTopbar(email: string, current: OperatorNavCurrent): stri
 </header>`
 }
 
-/** Wraps a `<main>` body in the shared document shell and token stylesheet. */
-export function page(title: string, main: string): string {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(title)}</title>
-<link rel="stylesheet" href="/tokens.css">
-<style>
+/**
+ * Component styles for the AUTHENTICATED and OPERATOR screens — every route
+ * behind Access (`topbar()` / `operatorTopbar()`). `/start`, the one public
+ * route (issue #31), does NOT use this sheet — see `PUBLIC_STYLES` below.
+ *
+ * Issue #41: before this split, `page()` inlined this entire sheet on every
+ * screen it rendered, `/start` included, so a stranger's `GET /start` shipped
+ * selectors and comments naming screens — and issues — they could never
+ * reach (`ul.submission-list`, `main[data-testid="submission-detail"]`,
+ * `.status-pill[data-status="on-hold"]`, the operator's `.lead-row`, and the
+ * doc comments below that name mock filenames). None of that renders, which
+ * is exactly why a DOM-level test cannot see it — it is present only in the
+ * bytes a browser downloads. Splitting the two stylesheets means `/start`
+ * never downloads these bytes at all, rather than relying on any of it being
+ * "invisible enough".
+ */
+const APP_STYLES = `
   /* The topbar WRAPS, and its identity may break mid-token. Both are load-
-     bearing, not cosmetic. A phone is 412 CSS px wide (the e2e suite's Pixel 7
-     project), the body reserves 1.25rem either side, and the brand + three nav
-     links + a monospace "signed in as name@example.com" do not fit in what is
-     left. As a nowrap flex row this header did not clip — it pushed the
-     *document* wider than the layout viewport, and mobile Chrome answers a
-     document wider than device-width by scaling the whole page down. Once page
-     scale != 1, the CSS-pixel coordinates a test computes for a control and
-     the screen coordinates its click lands on drift apart, so a click aimed at
+     bearing, not cosmetic. A phone is 412 CSS px wide, the body reserves
+     1.25rem either side, and the brand + three nav links + a monospace
+     "signed in as name@example.com" do not fit in what is left. As a nowrap
+     flex row this header did not clip — it pushed the *document* wider than
+     the layout viewport, and mobile Chrome answers a document wider than
+     device-width by scaling the whole page down. Once page scale != 1, the
+     CSS-pixel coordinates a test computes for a control and the screen
+     coordinates its click lands on drift apart, so a click aimed at
      submit-intake lands on whatever sits ~70px above it (the
      label[for=projectScope]) and the form is never submitted. Wrapping keeps
      scrollWidth <= clientWidth, which keeps page scale at 1. Nothing here
@@ -466,6 +473,84 @@ export function page(title: string, main: string): string {
     border-radius: var(--r-md); font-size: var(--step--1); font-family: var(--font-mono);
   }
   .delivery-provider-id { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+`
+
+/**
+ * Component styles for `/start` — the ONLY stylesheet a stranger's browser
+ * ever downloads (issue #31's `GET /start` and `POST /start`, both
+ * `Auth: none`). Issue #41's fix: this is a hand-picked subset covering
+ * exactly what `publicHeader()`, and `renderForm()` / `receipt()` in
+ * `src/routes/start.ts`, render — nothing about an authenticated or operator
+ * screen lives in this constant, and nothing here names one. If `/start`'s
+ * markup grows a new class, extend this sheet; reaching for `APP_STYLES`
+ * instead reintroduces the leak this split exists to close.
+ */
+const PUBLIC_STYLES = `
+  header.topbar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1.25rem;
+    max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+
+  main { max-width: 44rem; margin: 0 auto; padding: 0 1rem 3rem; }
+
+  form.lead { display: grid; gap: 1.25rem; }
+  .field { display: grid; gap: 0.4rem; }
+  .field label { font-weight: 600; font-size: var(--step--1); color: var(--text); }
+  .field textarea, .field input[type="text"] {
+    font: inherit; padding: 0.65rem 0.75rem; border-radius: var(--r-md);
+    border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
+    resize: vertical;
+  }
+  .field textarea:focus, .field input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .optional-tag {
+    font-size: var(--step--1); color: var(--text-faint); font-weight: 400;
+    border: 1px solid var(--line); border-radius: 999px; padding: 0 0.5em; margin-left: 0.5em;
+  }
+  .actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.5rem; }
+  button.primary {
+    background: var(--accent); color: white; border: none; border-radius: var(--r-md);
+    padding: 0.65rem 1.25rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.primary:hover { background: var(--accent-dim); }
+  .async-note {
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md);
+    padding: 0.85rem 1rem; font-size: var(--step--1); color: var(--text-dim); margin-bottom: 1.5rem;
+  }
+  .lead-error {
+    background: var(--fail-wash); color: var(--fail); border: 1px solid var(--fail);
+    border-radius: var(--r-md); padding: 0.85rem 1rem; font-size: var(--step--1);
+    margin-bottom: 1.5rem; font-weight: 600;
+  }
+
+  .receipt { text-align: center; padding: 2rem 1rem; }
+  .receipt .ref {
+    font-family: var(--font-mono); color: var(--text-faint); font-size: var(--step--1);
+    margin: 0.5rem 0 1.5rem;
+  }
+  .receipt h1 { margin-bottom: 0.5rem; }
+  .receipt p.lede { max-width: 32rem; margin: 0 auto 2rem; }
+  .receipt .actions { display: flex; justify-content: center; gap: 0.75rem; }
+  a.button {
+    display: inline-block; text-decoration: none; border-radius: var(--r-md);
+    padding: 0.6rem 1.1rem; font-weight: 600; font-size: var(--step--1);
+  }
+  a.button.primary { background: var(--accent); color: white; }
+  a.button.secondary { border: 1px solid var(--line-strong); color: var(--text); }
+`
+
+/** The shared document shell: doctype, head, token stylesheet link, and one inline `<style>` block. */
+function documentShell(title: string, main: string, styles: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<link rel="stylesheet" href="/tokens.css">
+<style>
+${styles}
 </style>
 </head>
 <body>
@@ -473,4 +558,24 @@ ${main}
 </body>
 </html>
 `
+}
+
+/**
+ * Wraps a `<main>` body in the shared document shell, the token stylesheet
+ * and `APP_STYLES` — the authenticated / operator application's component
+ * rules. Every screen behind Access uses this. `/start` does not; see
+ * `publicPage()`.
+ */
+export function page(title: string, main: string): string {
+  return documentShell(title, main, APP_STYLES)
+}
+
+/**
+ * Wraps a `<main>` body in the shared document shell, the token stylesheet
+ * and `PUBLIC_STYLES` — the reduced sheet issue #41 carved out so that
+ * `/start` (issue #31's public route) never ships the authenticated
+ * application's stylesheet to a stranger. Used only by `src/routes/start.ts`.
+ */
+export function publicPage(title: string, main: string): string {
+  return documentShell(title, main, PUBLIC_STYLES)
 }
