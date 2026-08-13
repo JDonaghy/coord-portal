@@ -327,7 +327,15 @@ test.describe("ms-1 issue 10 up-mapping read model", () => {
     page,
     request,
   }) => {
-    await asCustomer(page, "closed-set@example.test")
+    // This customer's own address is scanned by the whole-body assertion below,
+    // because issue #12 pins that "every authenticated screen names the signed-in
+    // customer" — so the identity chrome is part of every page this test reads.
+    // The address must therefore contain none of `ENGINEER_SIDE`. The original
+    // `closed-set@example.test` contained "closed" and failed against a correct
+    // implementation; the guard below now makes that mistake impossible to
+    // reintroduce silently.
+    const CUSTOMER = "outside-vocab@example.test"
+    await asCustomer(page, CUSTOMER)
 
     // Issue #10: engineer/issue/assignment state is rolled UP into the fixed
     // vocabulary. Whatever the daemon's own state machine calls things, the
@@ -349,6 +357,19 @@ test.describe("ms-1 issue 10 up-mapping read model", () => {
       "In progress",
       "",
     ]
+
+    // Self-check on the fixture, not on the app: a collision here would fail the
+    // body scan below while the implementation is behaving correctly, which reads
+    // as a wall breach and is not one. Fail loudly and specifically instead.
+    for (const raw of ENGINEER_SIDE) {
+      if (raw.trim().length === 0) continue
+      expect(
+        CUSTOMER,
+        `fixture defect, not an app defect: the signed-in address contains the ` +
+          `engineer-side value ${JSON.stringify(raw)}, which the whole-body scan ` +
+          "below cannot distinguish from a real leak. Choose another address.",
+      ).not.toContain(raw)
+    }
 
     let revision = 200
     for (const [i, raw] of ENGINEER_SIDE.entries()) {
