@@ -84,6 +84,26 @@ export interface Env {
    * that it lives here instead of a hardcoded string.
    */
   EMAIL_FROM?: string
+  /**
+   * Where a customer's reply goes (issue #52) — var, not secret.
+   *
+   * The `From` address is a send-only identity: `mail.heurontech.com` is
+   * verified with Resend for *outbound* and has no inbound mail service, so a
+   * customer who hits reply reaches nothing. #52's "somewhere for replies to
+   * land" was to be Cloudflare Email Routing on that subdomain, but Cloudflare
+   * scopes Email Routing to the zone — "if the domain is disabled, subdomains
+   * will be disabled too" — and enabling it on `heurontech.com` would replace
+   * the Zoho MX records that carry all real mail for the business. Trading
+   * working inboxes for a reply address is not a trade worth making, so the
+   * reply path is a header instead: `Reply-To`, pointed at a mailbox that
+   * already works.
+   *
+   * Unset ⇒ no `Reply-To` header at all, which is the honest degradation: a
+   * reply then bounces off a domain with no MX and the sender learns their
+   * message went nowhere. That is strictly better than the alternative #52
+   * exists to prevent — silent acceptance into a black hole.
+   */
+  REPLY_TO?: string
 }
 
 export interface ProbeResult {

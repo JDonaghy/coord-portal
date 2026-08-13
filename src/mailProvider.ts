@@ -20,6 +20,13 @@ export interface OutboundEmail {
   from: string
   subject: string
   body: string
+  /**
+   * Where a reply should go, when that is not the `from` address (issue #52 —
+   * see `Env.REPLY_TO`). Optional: a provider that receives no value must send
+   * no `Reply-To` header rather than inventing one, so mail keeps working
+   * unchanged wherever the var is not declared.
+   */
+  replyTo?: string
 }
 
 export type MailSendOutcome =
@@ -77,11 +84,16 @@ export class ResendMailProvider implements MailProvider {
           authorization: `Bearer ${this.apiKey}`,
           "content-type": "application/json",
         },
+        // `reply_to` is omitted entirely when unset rather than sent as null or
+        // "": Resend treats a present-but-empty value as a header to write, and
+        // a malformed `Reply-To` is worse than none — some clients then offer
+        // the customer no reply target at all.
         body: JSON.stringify({
           from: email.from,
           to: email.to,
           subject: email.subject,
           text: email.body,
+          ...(email.replyTo ? { reply_to: email.replyTo } : {}),
         }),
       })
 
