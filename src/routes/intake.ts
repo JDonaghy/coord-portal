@@ -1,3 +1,4 @@
+import { parseFormData } from "../formData"
 import { readAccessIdentity } from "../identity"
 import { escapeHtml, html, page, topbar } from "../render"
 import { createSubmission } from "../submissions"
@@ -108,7 +109,22 @@ function renderForm(request: Request, draft: DraftValues = EMPTY_DRAFT, error?: 
  * half-empty submission.
  */
 export async function submitIntake(request: Request, env: Env): Promise<Response> {
-  const form = await request.formData()
+  // Issue #71: the identical unguarded `request.formData()` throws a raw
+  // `TypeError` on a malformed body. This route already has a
+  // malformed-request shape — the required-field message below — so a parse
+  // failure is not a distinct message, "do not invent a new one": it's
+  // treated exactly like a submission that skipped every required field.
+  const form = await parseFormData(request)
+  if (!form) {
+    return html(
+      page(
+        "New request — coord-portal",
+        renderForm(request, EMPTY_DRAFT, "Please fill in every required field."),
+      ),
+      { status: 400 },
+    )
+  }
+
   const draft: DraftValues = {
     outcome: stringField(form, "outcome"),
     audience: stringField(form, "audience"),
