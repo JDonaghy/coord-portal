@@ -175,3 +175,59 @@ test("a sustained burst from one IP is eventually cut off, and a different IP is
     'data-testid="lead-receipt"',
   )
 })
+
+/**
+ * Issue #71: `src/routes/start.ts:130` called `request.formData()` unguarded
+ * — a raw `TypeError`, an unhandled 500, on a body that is not a parseable
+ * form. Production repro from the issue:
+ *
+ *   curl -X POST /start -H 'content-type: application/json' -d '{}'  → 500
+ *
+ * The fix treats that failure as the same "caller sent something wrong"
+ * shape as a failed bot-gate check — the identical `REJECTION_BANNER` at
+ * 400, "a caller who sent an unparseable body learns exactly what a caller
+ * who failed Turnstile learns."
+ */
+test("a JSON body gets the standard refusal banner at 400, never a 500 — issue #71's own repro", async ({
+  request,
+}) => {
+  const response = await request.post("/start", {
+    headers: { ...ipHeaders("203.0.113.207"), "content-type": "application/json" },
+    data: "{}",
+    maxRedirects: 0,
+    failOnStatusCode: false,
+  })
+  expect(response.status()).toBe(400)
+  const body = await response.text()
+  expect(body).not.toContain('data-testid="lead-receipt"')
+  expect(body).not.toMatch(LEAD_REFERENCE)
+  expect(body).toContain('data-testid="lead-form"')
+  expect(bannerOf(body)).toBe(REJECTION_BANNER)
+})
+
+test("a multipart/form-data body with a missing boundary= also gets the refusal banner at 400", async ({
+  request,
+}) => {
+  const response = await request.post("/start", {
+    headers: { ...ipHeaders("203.0.113.208"), "content-type": "multipart/form-data" },
+    data: "this is not valid multipart data",
+    maxRedirects: 0,
+    failOnStatusCode: false,
+  })
+  expect(response.status()).toBe(400)
+  const body = await response.text()
+  expect(bannerOf(body)).toBe(REJECTION_BANNER)
+})
+
+test("a malformed body creates no lead", async ({ request }) => {
+  const response = await request.post("/start", {
+    headers: { ...ipHeaders("203.0.113.209"), "content-type": "application/json" },
+    data: '{"summary":"should never be stored","email":"nobody@example.test"}',
+    maxRedirects: 0,
+    failOnStatusCode: false,
+  })
+  expect(response.status()).toBe(400)
+  const body = await response.text()
+  expect(body).not.toContain('data-testid="lead-receipt"')
+  expect(body).not.toMatch(LEAD_REFERENCE)
+})
