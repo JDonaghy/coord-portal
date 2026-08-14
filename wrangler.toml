@@ -57,16 +57,42 @@ enabled = true
 [vars]
 EMAIL_FROM = "coord-portal <notify@mail.heurontech.com>"
 
-# Issue #52: where a customer's reply goes. `mail.heurontech.com` is verified
-# with Resend for sending only and has no inbound mail service, so the `From`
-# address above receives nothing.
+# Issue #52: where a customer's reply goes.
 #
-# #52 planned Cloudflare Email Routing on that subdomain. It cannot be used:
-# Cloudflare scopes Email Routing to the zone ("Subdomains are dependent on the
-# domain. If the domain is disabled, subdomains will be disabled too"), so
-# routing `mail.heurontech.com` requires enabling it on `heurontech.com`, which
-# replaces the Zoho MX records carrying all real mail for the business. A
-# header costs nothing and risks nothing.
+# CORRECTED 2026-08-14 by measurement (coord-portal#78, closed invalid). This
+# comment previously made two claims, both false, and acting on them would have
+# destroyed a working reply path:
+#
+#   * "`mail.heurontech.com` … has no inbound mail service, so the `From`
+#     address above receives nothing." FALSE. A message from
+#     `jdonaghy@heurontech.com` to `notify@mail.heurontech.com` arrives in an
+#     operator inbox.
+#   * "[Cloudflare Email Routing] cannot be used." FALSE. It is enabled on that
+#     subdomain today, with an Active rule forwarding `notify@` onward — while
+#     the apex MX records still point at Zoho and carry all real business mail.
+#
+# Keep the caveat that produced the second claim, in its true and weaker form:
+# the Email Routing dashboard flags the Zoho apex MX/SPF as "Conflicting" and
+# offers to replace them with Cloudflare's own. Accepting that takes down all
+# business mail. Decline it. That is a hazard in the UI, not a reason routing
+# cannot run on the subdomain.
+#
+# ⚠ DO NOT "CLEAN UP" THE `route*.mx.cloudflare.net` MX RECORDS AT
+# `mail.heurontech.com`. They are load-bearing. They render padlocked and
+# read-only in the dashboard precisely because Email Routing owns them, and
+# disabling the service to remove them removes the forward with it.
+#
+# So a customer reply reaches a human by EITHER path, depending on whether
+# their mail client honours this header:
+#
+#   Reply-To honoured        → jdonaghy@heurontech.com (Zoho — this var)
+#   Reply-To ignored, or a
+#   reply sent to `From`     → notify@mail.heurontech.com, forwarded onward by
+#                              the Email Routing rule described above
+#
+# Nothing is lost either way, but replies do scatter across two mailboxes with
+# no way to predict which. Pointing the routing rule at this same address would
+# converge them; that is a deliberate open choice, not an oversight.
 #
 # NOT a secret: it is printed in the headers of every mail sent, and a customer
 # reading their inbox can see it.
