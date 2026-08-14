@@ -13,9 +13,42 @@ export interface Env {
    * ever reaches this Worker — these are the defence-in-depth copy, set with
    * `wrangler secret put`, NEVER in `wrangler.toml` (this repo is public).
    * See `src/bridge/auth.ts` for what happens when they are unset.
+   *
+   * `BRIDGE_CLIENT_ID` is load-bearing in production: behind the edge it is the
+   * `common_name` the verified Access assertion must carry (#70). Unset ⇒ the
+   * bridge answers nobody. It is not really a secret (Access forwards it, and
+   * it is useless without the other half) but it lives here rather than in
+   * `wrangler.toml` because the pair is set together.
+   *
+   * `BRIDGE_CLIENT_SECRET` is *not* used behind the edge — the edge consumes it
+   * rather than forwarding it, which is the whole of #70 — and remains only for
+   * the local `wrangler dev` path and for the day Cloudflare forwards both.
    */
   BRIDGE_CLIENT_ID?: string
   BRIDGE_CLIENT_SECRET?: string
+  /**
+   * Cloudflare Access verification settings (#70) — what
+   * `verifyAccessIdentity()` in `src/identity.ts` pins a token to.
+   *
+   * `ACCESS_TEAM_DOMAIN` — e.g. `<team>.cloudflareaccess.com`. Fixes both the
+   * JWKS URL (`/cdn-cgi/access/certs`) and the exact `iss` accepted, so a token
+   * signed by another Cloudflare team is refused rather than verified against
+   * its own issuer's keys.
+   *
+   * `BRIDGE_ACCESS_AUD` — the AUD tag of the *bridge* Access application, so a
+   * token minted for the site application cannot be replayed at `/api/bridge`.
+   * Per-application: a second verified surface needs its own AUD var, never a
+   * shared one.
+   *
+   * Neither is a secret in the `BRIDGE_CLIENT_SECRET` sense (an AUD tag grants
+   * nothing without a Cloudflare-signed token for it), but both name this
+   * account's Access setup, so they are set with `wrangler secret put` and stay
+   * out of a public `wrangler.toml`. Optional here for the same reason as
+   * everything else in this file — unset must fail closed, not crash — and
+   * `src/bridge/auth.ts` is what actually refuses.
+   */
+  ACCESS_TEAM_DOMAIN?: string
+  BRIDGE_ACCESS_AUD?: string
   /**
    * Who may reach the operator surface (`/leads*`, issue #33) — a comma- or
    * whitespace-separated allowlist of Access identities.
