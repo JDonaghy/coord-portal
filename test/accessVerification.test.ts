@@ -260,6 +260,29 @@ describe("verifyAccessIdentity — the JWKS it verifies against", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it("stops trusting a cached key once its key set is stale", async () => {
+    // A key that has been revoked at Cloudflare must stop working here without
+    // a redeploy, so the TTL is checked before the cache hit — not after it.
+    const token = await signer.sign(serviceTokenClaims({ exp: epoch(7200) }))
+    expect((await verifyAccessIdentity(request(token), OPTIONS))?.verified).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(Date.now() + 11 * 60 * 1000))
+      expect((await verifyAccessIdentity(request(token), OPTIONS))?.verified).toBe(true)
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+
+      // …and if the endpoint is down when the set goes stale, it refuses
+      // rather than serving the key it happens to still be holding.
+      fetchMock.mockRejectedValue(new Error("network down"))
+      vi.setSystemTime(new Date(Date.now() + 11 * 60 * 1000))
+      expect(await verifyAccessIdentity(request(token), OPTIONS)).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("shares one in-flight fetch across concurrent verifications", async () => {
     const token = await signer.sign(serviceTokenClaims())
     const results = await Promise.all(
