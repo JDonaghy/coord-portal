@@ -300,17 +300,23 @@ function audienceIncludes(aud: unknown, expected: string): boolean {
 async function signingKey(issuer: string, kid: string): Promise<CryptoKey | null> {
   const cached = jwksCache.get(issuer)
   if (cached) {
-    const key = cached.keys.get(kid)
-    if (key) return key
     const age = Date.now() - cached.fetchedAt
-    if (age < JWKS_UNKNOWN_KID_REFETCH_MS) return null
-    if (age < JWKS_TTL_MS) {
-      // Unknown kid on a still-fresh JWKS: could be a rotation, so re-fetch —
-      // but no more often than the floor above.
-      return (await loadJwks(issuer))?.keys.get(kid) ?? null
-    }
+    const key = cached.keys.get(kid)
+    // A cached key is used only while the set it came from is fresh: past the
+    // TTL a revoked key must stop working, so the age is checked before the
+    // hit, not after.
+    if (key && age < JWKS_TTL_MS) return key
+    // Unknown kid on a recently-fetched set: could be a rotation, but an
+    // attacker minting random kids must not turn this into a fetch amplifier
+    // pointed at Cloudflare's certs endpoint.
+    if (!key && age < JWKS_UNKNOWN_KID_REFETCH_MS) return null
   }
-  return (await loadJwks(issuer))?.keys.get(kid) ?? null
+
+  // Re-fetch. A failure refuses rather than falling back to whatever is still
+  // cached — "the key set is unavailable" is not "admit the caller", and the
+  // stale entry stays only to serve requests inside its own TTL.
+  const refreshed = await loadJwks(issuer)
+  return refreshed?.keys.get(kid) ?? null
 }
 
 async function loadJwks(issuer: string): Promise<Jwks | null> {
@@ -321,9 +327,9 @@ async function loadJwks(issuer: string): Promise<Jwks | null> {
 
   const pending = fetchJwks(issuer)
     .then((jwks) => {
-      // A failed fetch leaves the previous JWKS in place if there is one — it
-      // was valid a moment ago — and leaves nothing cached if there is not,
-      // which refuses. Failure never installs an empty key set.
+      // Failure never installs an empty key set: a JWKS that could not be
+      // fetched or parsed must not overwrite one that was fetched, and must
+      // not become a cached "no keys" that refuses for the next ten minutes.
       if (jwks) jwksCache.set(issuer, jwks)
       return jwks
     })
