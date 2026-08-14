@@ -1,3 +1,4 @@
+import { parseFormData } from "../formData"
 import { readAccessIdentity } from "../identity"
 import { getOpenQuestion, recordAnswer, type OpenQuestion } from "../questions"
 import { escapeHtml, html, page, topbar } from "../render"
@@ -83,26 +84,26 @@ export async function submitSubmissionAction(
 
   // `request.formData()` throws a raw `TypeError` — an unhandled 500 — when
   // the request carries no `Content-Type` at all, or one it can't parse as a
-  // form (issue #46: a bot, a broken client, or a redirect replayed as a
-  // bare POST). That is a malformed request, not a server error, and this
-  // refusal has to look exactly like the ownership check just above it: a
-  // POST with no body content-type gets the same 404 a non-owner gets, never
-  // a 5xx that would tell a prober "the id exists, the body was just wrong."
+  // form (issue #46, and issue #71 for the two routes this reasoning missed:
+  // a bot, a broken client, or a redirect replayed as a bare POST). That is a
+  // malformed request, not a server error, and this refusal has to look
+  // exactly like the ownership check just above it: a POST with no body
+  // content-type gets the same 404 a non-owner gets, never a 5xx that would
+  // tell a prober "the id exists, the body was just wrong."
   //
   // The content-type pre-check below only rules out the common case (no
   // header at all, or a plainly non-form one). It cannot rule out a
   // `multipart/form-data` header with a missing or malformed `boundary=` —
-  // that still throws inside the actual parse. So the parse itself is also
-  // wrapped: any failure there gets the same 404, not a 5xx.
+  // that still throws inside the actual parse. So the parse itself goes
+  // through `parseFormData`, which turns that throw into `null`: any failure
+  // there gets the same 404, not a 5xx.
   const contentType = request.headers.get("content-type") ?? ""
   if (!isFormContentType(contentType)) {
     return html(page("Not found — coord-portal", notFound()), { status: 404 })
   }
 
-  let form: FormData
-  try {
-    form = await request.formData()
-  } catch {
+  const form = await parseFormData(request)
+  if (!form) {
     return html(page("Not found — coord-portal", notFound()), { status: 404 })
   }
   const action = stringField(form, "action")

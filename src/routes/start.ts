@@ -1,3 +1,4 @@
+import { parseFormData } from "../formData"
 import { createLead } from "../leads"
 import { clientIp, isRateLimited } from "../rateLimit"
 import { escapeHtml, html, publicHeader, publicPage } from "../render"
@@ -127,7 +128,21 @@ export async function submitStart(request: Request, env: Env): Promise<Response>
     )
   }
 
-  const form = await request.formData()
+  // Issue #71: a malformed body (no `Content-Type`, one that isn't a form, or
+  // a `multipart/form-data` header with a missing/malformed `boundary=`)
+  // makes `request.formData()` throw. That's the same "caller sent something
+  // wrong" shape as a failed bot-gate check, so it gets the identical
+  // `REJECTION_BANNER` refusal at 400 — never a 5xx, and never a message that
+  // tells a prober which check actually fired. This sits at the parse, after
+  // the rate limit above, per the check order this route pins.
+  const form = await parseFormData(request)
+  if (!form) {
+    return html(
+      publicPage("Get in touch — coord-portal", renderForm(request, env, EMPTY_DRAFT, REJECTION_BANNER)),
+      { status: 400 },
+    )
+  }
+
   const draft: DraftValues = {
     summary: stringField(form, "summary"),
     email: stringField(form, "email"),
