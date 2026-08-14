@@ -41,3 +41,36 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 7
+
+  acceptance:
+    name: sealed acceptance suite (playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # playwright.acceptance.config.ts's webServer block runs
+      # `npm run serve:acceptance`, wipes local D1 state, migrates it fresh,
+      # and polls /api/health with a bounded 120s timeout before the suite
+      # starts — the same readiness mechanism the e2e job above relies on for
+      # `serve:test`, just pointed at the sealed suite's own port (8789) and
+      # its own throwaway database.
+      - name: Run sealed acceptance suite (ms-1, ms-2, ms-3)
+        run: npm run test:acceptance -- --reporter=list,html,json
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: acceptance-results.json
+      # A path filter that matches nothing exits 0 with 0 tests run — a
+      # confidently-wrong green (see playwright.acceptance.config.ts). Fail
+      # the job unless the suite actually executed something.
+      - name: Assert the suite didn't silently run zero tests
+        run: node scripts/assert-acceptance-ran.mjs acceptance-results.json
+      - uses: actions/upload-artifact@v5
+        if: failure()
+        with:
+          name: acceptance-playwright-report
+          path: playwright-report/
+          retention-days: 7
