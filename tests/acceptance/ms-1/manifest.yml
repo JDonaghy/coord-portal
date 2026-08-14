@@ -99,3 +99,40 @@ issues:
     - "[chromium] ms-1/15-sync-bridge.spec.ts › ms-1 issue 15 sync bridge › a coord-owned write produces no event"
     - "[chromium] ms-1/15-sync-bridge.spec.ts › ms-1 issue 15 sync bridge › a heartbeat is accepted and repeatable"
     - "[chromium] ms-1/15-sync-bridge.spec.ts › ms-1 issue 15 sync bridge › the bridge exposes no inbound registration path"
+
+  # ⚠ READ THIS BEFORE TREATING #70 AS COVERED BY A GREEN RUN.
+  #
+  # This slice has NO `expected_red` entry, and that is not an oversight: all
+  # seven clauses were measured GREEN against the unimplemented state on
+  # 2026-08-14, before any work on #70 existed. See the STUCK note in the
+  # test-author's report and the header comment of `70-bridge-edge-auth.spec.ts`.
+  #
+  # The reason is the shape of the bug. #70 is a FALSE NEGATIVE — behind the
+  # edge the gate admits nobody, including the daemon. A sealed run has no
+  # Cloudflare Access, no team JWKS and no network, so it cannot mint a token
+  # the fixed Worker would accept, and the four refusals #70's own acceptance
+  # section lists are all already satisfied by a gate that refuses everything.
+  # Measured (`serve:acceptance`, /api/bridge/pull):
+  #
+  #   local  + well-formed pair            → 200   ← the dev path, must stay
+  #   local  + nothing                     → 401
+  #   edge   + well-formed pair            → 401   ← the production symptom
+  #   edge   + pair + JWT                  → 401
+  #   edge   + nothing                     → 401
+  #
+  # So a GREEN #70 slice does NOT mean #70 is implemented — a worker who
+  # changes nothing at all passes it. What it does mean is that no wrong fix
+  # got in: the clauses fail loudly if `verifyAccessIdentity()` decodes instead
+  # of verifying, if the local well-formed-pair relaxation becomes reachable
+  # behind the edge, if a human identity is accepted as the daemon, or if an
+  # unreachable JWKS fails open. That is a ratchet, not an oracle. The oracle
+  # for #70 is the post-merge check #70 names itself: `coord portal heartbeat`
+  # from the daemon host returning success against production.
+  70:
+    - "[chromium] ms-1/70-bridge-edge-auth.spec.ts › ms-1 issue 70 bridge edge auth › behind the edge, a request with no credential at all is refused"
+    - "[chromium] ms-1/70-bridge-edge-auth.spec.ts › ms-1 issue 70 bridge edge auth › behind the edge, the plaintext header pair is not authorisation"
+    - "[chromium] ms-1/70-bridge-edge-auth.spec.ts › ms-1 issue 70 bridge edge auth › behind the edge, a well-formed but unverifiable token is refused"
+    - "[chromium] ms-1/70-bridge-edge-auth.spec.ts › ms-1 issue 70 bridge edge auth › behind the edge, a human's Access identity is never a bridge credential"
+    - "[chromium] ms-1/70-bridge-edge-auth.spec.ts › ms-1 issue 70 bridge edge auth › behind the edge, an unfetchable key set refuses rather than admits"
+    - "[chromium] ms-1/70-bridge-edge-auth.spec.ts › ms-1 issue 70 bridge edge auth › a 401 behind the edge says nothing about which check fired"
+    - "[chromium] ms-1/70-bridge-edge-auth.spec.ts › ms-1 issue 70 bridge edge auth › the local well-formed-pair path still authorises when not behind the edge"
