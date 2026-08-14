@@ -50,3 +50,19 @@ issues:
     - "[chromium] ms-2/41-public-body-hygiene.spec.ts › ms-2 issue 41 public response body hygiene › the public route ships no styling for screens a stranger cannot reach"
     - "[chromium] ms-2/41-public-body-hygiene.spec.ts › ms-2 issue 41 public response body hygiene › the shared token sheet stays public and names no screens"
     - "[chromium] ms-2/41-public-body-hygiene.spec.ts › ms-2 issue 41 public response body hygiene › the receipt and the rejected redisplay are as clean as the form"
+  71:
+    - "[chromium] ms-2/71-malformed-body.spec.ts › ms-2 issue 71 malformed request bodies › the public form answers the issue's own reproduction with 400, not 500"
+    - "[chromium] ms-2/71-malformed-body.spec.ts › ms-2 issue 71 malformed request bodies › every unparseable body shape lands on the same refusal, not a 5xx"
+    - "[chromium] ms-2/71-malformed-body.spec.ts › ms-2 issue 71 malformed request bodies › a malformed body creates no lead"
+    - "[chromium] ms-2/71-malformed-body.spec.ts › ms-2 issue 71 malformed request bodies › the authenticated intake route no longer 500s on a malformed body either"
+
+# Tests OBSERVED failing against the unimplemented state, recorded per issue at
+# the moment the slice was authored. Only issue 71's slice was run to produce
+# this block — the earlier slices' entries are deliberately absent rather than
+# guessed at, since this author never observed them.
+expected_red:
+  71:
+    - "[chromium] ms-2/71-malformed-body.spec.ts › ms-2 issue 71 malformed request bodies › the public form answers the issue's own reproduction with 400, not 500"
+    - "[chromium] ms-2/71-malformed-body.spec.ts › ms-2 issue 71 malformed request bodies › every unparseable body shape lands on the same refusal, not a 5xx"
+    - "[chromium] ms-2/71-malformed-body.spec.ts › ms-2 issue 71 malformed request bodies › a malformed body creates no lead"
+    - "[chromium] ms-2/71-malformed-body.spec.ts › ms-2 issue 71 malformed request bodies › the authenticated intake route no longer 500s on a malformed body either"
