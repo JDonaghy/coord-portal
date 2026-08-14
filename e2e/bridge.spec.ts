@@ -156,6 +156,54 @@ test("every bridge route refuses a caller without a service token", async ({ req
   expect(new Set(bodies).size).toBe(1)
 })
 
+test("a caller claiming to be behind the edge needs a signed assertion, not headers (#70)", async ({
+  request,
+}) => {
+  // Behind Cloudflare's edge the daemon is recognised by the Access assertion
+  // Cloudflare signs, not by the client-secret header the edge consumes. This
+  // Worker has no Access configuration under `wrangler dev`, so *everything*
+  // that claims an edge stamp here must be refused — including a complete
+  // service-token pair and a self-minted JWT that names one.
+  //
+  // Forging `CF-Ray` is the only way to reach that branch from a laptop, and it
+  // is safe to test with precisely because it can only ever make the gate
+  // stricter (`src/deployment.ts`).
+  const forgedRay = { "CF-Ray": "deadbeefdeadbeef-XXX" }
+  const selfMinted = [
+    btoa(JSON.stringify({ alg: "none", kid: "made-up" })),
+    btoa(
+      JSON.stringify({
+        iss: "https://attacker.cloudflareaccess.com",
+        aud: ["0".repeat(64)],
+        exp: Math.floor(Date.now() / 1000) + 600,
+        common_name: SERVICE_TOKEN["CF-Access-Client-Id"],
+      }),
+    ),
+    "not-a-signature",
+  ]
+    .join(".")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+(?=\.|$)/g, "")
+
+  const attempts = [
+    { ...SERVICE_TOKEN, ...forgedRay },
+    { ...forgedRay, "Cf-Access-Jwt-Assertion": selfMinted },
+    { ...SERVICE_TOKEN, ...forgedRay, "Cf-Access-Jwt-Assertion": selfMinted },
+  ]
+
+  for (const headers of attempts) {
+    const res = await request.get("/api/bridge/pull", { headers })
+    expect(res.status(), JSON.stringify(Object.keys(headers))).toBe(401)
+    expect(await res.text()).toBe("")
+  }
+
+  // …and the local path is untouched: the same pair without the forged stamp
+  // still authorises, which is what keeps this suite and the sealed run working.
+  const allowed = await request.get("/api/bridge/pull", { headers: SERVICE_TOKEN })
+  expect(allowed.status()).toBe(200)
+})
+
 test("a new submission reaches the stream once, and replays from the same cursor", async ({
   page,
   request,

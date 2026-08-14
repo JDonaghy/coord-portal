@@ -44,7 +44,9 @@ export async function handleApi(
   // is a yes/no answer), and a route added here later cannot be published
   // unauthenticated by forgetting a line. `/api/bridge` authorises the bridge
   // and nothing else — it must never widen into a general Access bypass.
-  if (isBridgePath(pathname) && !isBridgeAuthorized(request, env)) {
+  // Awaited: behind Cloudflare's edge the gate verifies a signed Access
+  // assertion against the team's JWKS, which is a (cached) network call (#70).
+  if (isBridgePath(pathname) && !(await isBridgeAuthorized(request, env))) {
     return bridgeUnauthorized()
   }
 
