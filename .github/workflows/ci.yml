@@ -43,8 +43,21 @@ jobs:
           retention-days: 7
 
   acceptance:
-    name: sealed acceptance suite (playwright)
+    # One wrangler dev per milestone instead of one for the whole 147-test,
+    # 4.4-minute suite: issue #81 measured that single long-lived server
+    # dying mid-run (silent `✘ [ERROR]`, no message) and forfeiting every
+    # test behind it. Sharding by milestone cuts each server's lifetime to
+    # roughly a third and, with fail-fast off below, isolates a crash to the
+    # one milestone it hit instead of red-ing the whole gate.
+    name: sealed acceptance suite (${{ matrix.milestone }})
     runs-on: ubuntu-latest
+    strategy:
+      # A crash in one milestone's wrangler dev must not cancel the other
+      # two shards — each is an independent verdict on an independent slice
+      # of the contract.
+      fail-fast: false
+      matrix:
+        milestone: [ms-1, ms-2, ms-3]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -58,19 +71,38 @@ jobs:
       # and polls /api/health with a bounded 120s timeout before the suite
       # starts — the same readiness mechanism the e2e job above relies on for
       # `serve:test`, just pointed at the sealed suite's own port (8789) and
-      # its own throwaway database.
-      - name: Run sealed acceptance suite (ms-1, ms-2, ms-3)
-        run: npm run test:acceptance -- --reporter=list,html,json
+      # its own throwaway database. Each matrix leg gets its own runner, so
+      # each milestone gets its own freshly-migrated D1 and its own wrangler
+      # dev process for free — nothing here needs to coordinate across legs.
+      #
+      # The trailing positional arg is the milestone token itself: Playwright
+      # matches it by substring against each spec's resolved path (see the
+      # config's header comment), so `ms-1` selects only `tests/acceptance/ms-1/**`.
+      - name: Run sealed acceptance suite (${{ matrix.milestone }})
+        run: npm run test:acceptance -- ${{ matrix.milestone }} --reporter=list,html,json
         env:
           PLAYWRIGHT_JSON_OUTPUT_NAME: acceptance-results.json
       # A path filter that matches nothing exits 0 with 0 tests run — a
-      # confidently-wrong green (see playwright.acceptance.config.ts). Fail
-      # the job unless the suite actually executed something.
+      # confidently-wrong green (see playwright.acceptance.config.ts).
+      # Sharding multiplies the ways a filter can silently match nothing, so
+      # every leg of the matrix gets this guard, not just the old single job.
       - name: Assert the suite didn't silently run zero tests
         run: node scripts/assert-acceptance-ran.mjs acceptance-results.json
+      # The crash issue #81 was filed over left no message and no stack in
+      # the job log — wrangler had already written the detail to its own log
+      # file, which nobody collected. Grab it alongside the Playwright report
+      # so the next crash is diagnosable instead of a mystery.
+      - name: Upload wrangler log
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: acceptance-wrangler-log-${{ matrix.milestone }}
+          path: ~/.config/.wrangler/logs/
+          if-no-files-found: warn
+          retention-days: 7
       - uses: actions/upload-artifact@v5
         if: failure()
         with:
-          name: acceptance-playwright-report
+          name: acceptance-playwright-report-${{ matrix.milestone }}
           path: playwright-report/
           retention-days: 7
