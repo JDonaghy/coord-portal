@@ -42,12 +42,15 @@ this feeds, not the intake surface.
 | `src/routes/deliveries.ts` | `GET /deliveries` — the operator's counterpart to `/outbox`: every outbox row, every customer, including the raw delivery error `/outbox` redacts (#55). Operator-only, same gate as `/leads`; see below. |
 | `migrations/` | `0001` the harness, `0002` submissions (#9), `0003` the bridge's event stream, coord mirror and daemon last-seen, `0004` question answers (#11), `0005` public leads (#31), `0006` design rounds and sign-off (#13), `0007` what a promoted lead records (#33), `0008` per-IP start attempts for the rate limit (#32), `0009` the customer outbox (#14) |
 | `public/` | placeholder page with a live health readout, and the token layer |
-| `test/` | 46 unit tests over routing, health probes, identity parsing and the bridge's decidable parts |
+| `test/` | 216 unit tests over routing, health probes, identity parsing, Access JWT verification and the bridge's decidable parts |
 | `e2e/` | 18 Playwright specs driving the real Worker with real local D1/R2 |
 
-**`/api/whoami` is a diagnostic, not a session.** It reads the headers Access injects but does not
-verify the JWT against the team JWKS, so `verified` is hard-coded `false` and nothing may make an
-authorization decision from it. Verification is #1981; the shape is there so that lands additively.
+**`/api/whoami` is a diagnostic, not a session.** `readAccessIdentity` reads the headers Access
+injects and checks nothing, so its `verified` is hard-coded `false` and nothing may make an
+authorization decision from it. The verified reading is `verifyAccessIdentity()` in the same module
+(#70): JWKS-backed, RS256 signature checked, `iss` / `aud` / `exp` pinned, `null` for anything it
+cannot prove. The bridge uses it; `/api/whoami` deliberately still does not, because a diagnostic
+that fetches a key set is a diagnostic that can fail for a second reason.
 
 ## The sync bridge
 
@@ -77,24 +80,44 @@ the daemon polls faster. See CLAUDE.md rule 2.
 ### Authorising the daemon
 
 The daemon cannot complete an interactive Access login, so it presents a **service token** as
-`CF-Access-Client-Id` / `CF-Access-Client-Secret`. That needs a **third Access application**, scoped
+`CF-Access-Client-Id` / `CF-Access-Client-Secret`. That needs a **fourth Access application**, scoped
 to `intake.heurontech.com/api/bridge` with a **Service Auth** policy — see the Access table below.
 That path authorises the bridge and nothing else; it must never widen into a general bypass.
 
-⚠ **The Worker also checks the token itself, and fails closed.** Set both halves as secrets when the
-service token is created:
+⚠ **The Worker also checks the caller itself, and fails closed** — but *not* by comparing the
+presented header pair, which behind the edge can never work. Access validates the pair and forwards
+at most part of it; what it does forward is the signed `Cf-Access-Jwt-Assertion`. So in production
+the Worker verifies that assertion against the team's JWKS (signature, `iss`, `aud`, `exp`) and
+requires its `common_name` to be the daemon's client id (#70). Three settings, all fail-closed:
 
 ```bash
-wrangler secret put BRIDGE_CLIENT_ID       # the token's Client ID
-wrangler secret put BRIDGE_CLIENT_SECRET   # the token's Client Secret
+wrangler secret put BRIDGE_CLIENT_ID       # the token's Client ID — the common_name to expect
+wrangler secret put ACCESS_TEAM_DOMAIN     # e.g. heurontech.cloudflareaccess.com
+wrangler secret put BRIDGE_ACCESS_AUD      # the *bridge* application's AUD tag, not the site's
+wrangler secret put BRIDGE_CLIENT_SECRET   # local/legacy only — see below
 ```
 
-Until they are set, every request that arrives through Cloudflare's edge gets a flat 401 no matter
-what Access says. That is deliberate: the alternative — trusting any well-formed pair — turns a
-misconfigured or deleted Access application into a world-readable inbox of customer submissions.
-Locally there is no edge and no Access, so `wrangler dev` honours any well-formed pair; the Worker
-tells the two apart by `CF-Ray`, which only the edge can set (`src/deployment.ts`). It cannot use the
+Until all three of the first are set, every request that arrives through Cloudflare's edge gets a
+flat 401 no matter what Access says. That is deliberate: the alternative — trusting any well-formed
+pair — turns a misconfigured or deleted Access application into a world-readable inbox of customer
+submissions. `BRIDGE_CLIENT_SECRET` is **not** part of the production path any more: the edge
+consumes the secret rather than forwarding it, so nothing in the Worker can compare it. It stays for
+the local path and for the day Cloudflare forwards both halves.
+
+Locally there is no edge, no Access and no JWT, so `wrangler dev` honours any well-formed pair
+exactly as before; the Worker tells the two apart by `CF-Ray`, which only the edge can set
+(`src/deployment.ts`), and a client who forges one lands in the *stricter* branch. It cannot use the
 hostname: `wrangler dev` serves the custom domain from a laptop.
+
+**If the daemon is still getting a 401**, the Worker leaves one line in `wrangler tail` per refusal
+behind the edge — which credential headers arrived, which claims a verified token carried (names
+only, never values), and which of the three settings are unset. That is the measurement this bug
+cost us: the 401 is silent to the caller on purpose, so the diagnosis lives in the log.
+
+The AUD tag comes from the Access application's own page (Cloudflare dashboard → Access →
+Applications → the bridge application → *Application Audience (AUD) Tag*). It is per-application:
+using the site application's tag would let a signed-in human's token be replayed at the bridge,
+which is exactly what pinning `aud` prevents.
 
 ## Development
 
@@ -161,9 +184,9 @@ Four applications, not one — Cloudflare matches most-specific-first:
 | `intake.heurontech.com/api/bridge` | the sync bridge only | **Service Auth** — the daemon's service token |
 | `intake.heurontech.com` | everything else | **Allow** — permitted emails |
 
-The bridge application is **not yet created** — it is an account-setup step for whoever mints the
-daemon's service token, alongside the two `wrangler secret put` calls above. Until then the bridge
-sits behind the site's Allow policy, which a daemon cannot satisfy.
+The bridge application was created 2026-08-13 alongside the `coord-daemon` service token. Its **AUD
+tag** is what `BRIDGE_ACCESS_AUD` must hold; the site application's tag is a different value and
+using it would defeat the point of pinning `aud`.
 
 The `/start` bypass is an **account-setup step, same as the bridge application above — not yet
 created**. The Worker itself never authenticates that route (`src/routes/start.ts` never reads an
@@ -177,9 +200,11 @@ The `/api/health` bypass is **required, not a convenience**: without it CI's pos
 check receives a login page and every deploy fails. Health exposes a version and a schema version,
 nothing about any customer.
 
-Until #1981 verifies the Access JWT in the Worker, **Access is the only control** — deleting or
-misconfiguring that policy silently reopens the site, because the Worker cannot currently tell a
-genuine Access request from a forged one. See `src/identity.ts`.
+For **everything except `/api/bridge`, Access is still the only control** — deleting or
+misconfiguring that policy silently reopens the site, because the Worker does not verify the
+assertion on those routes and cannot tell a genuine Access request from a forged one. `/api/bridge`
+is the exception as of #70: it verifies, so a deleted Access application closes the bridge rather
+than opening it. See `src/identity.ts`.
 
 ### The operator surface, and the seat that is issued by hand
 

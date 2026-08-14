@@ -17,7 +17,9 @@ import type { Env } from "./types"
  * and CLAUDE.md's "no authentication code in the application") — this module
  * reads the identity Access resolved, via `readAccessIdentity`, and checks it
  * against a configured list. Everything `src/identity.ts` says about that
- * identity being unverified until #1981 applies here unchanged.
+ * identity being unverified until #1981 applies here unchanged: #70 built
+ * `verifyAccessIdentity()` and wired it into the *bridge* only, so the operator
+ * allowlist is still checked against an identity nothing has proved.
  *
  * ── HOW IT DECIDES ─────────────────────────────────────────────────────────
  * 1. If `OPERATOR_EMAILS` (or `OPERATOR_EMAIL`) is configured, the caller's
