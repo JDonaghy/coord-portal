@@ -14,7 +14,8 @@
 #
 # ms-3's remaining issues, for whoever extends this file next:
 #   none. #55's block is below; #52 is `oracle:exempt` by its own issue text
-#   (contract.md, Notes item 7) and gets no block here.
+#   (contract.md, Notes item 7) and gets no block here. #83 was filed later,
+#   against this milestone's own blind spot, and has its own block at the end.
 #
 # NOTE for #51's author: #50's block below already exercises the fake's pinned
 # black-box behaviour end to end (a `mailfail` recipient always fails, everyone
@@ -64,3 +65,41 @@ issues:
     - "[chromium] ms-3/55-operator-deliveries.spec.ts › ms-3 issue 55 the operator delivery view › every delivery state renders on the operator's screen with its pinned detail"
     - "[chromium] ms-3/55-operator-deliveries.spec.ts › ms-3 issue 55 the operator delivery view › the operator's screen puts the most recent activity first"
     - "[chromium] ms-3/55-operator-deliveries.spec.ts › ms-3 issue 55 the operator delivery view › the delivery view is part of the operator's surface, alongside leads"
+  # #83 is the milestone's own blind spot, not a new feature: every CTA
+  # assertion above lands on `GET /outbox` — "the portal's own rendering of what
+  # it decided to send" — so all four slices above stayed green while every real
+  # email went out with no link at all. This block asserts on the OTHER
+  # artefact: what the drain actually handed to the provider, which #53 declares
+  # to be this milestone's observable surface ("made against a fake that records
+  # its payload") and which nothing in the suite had ever read.
+  #
+  # ⚠ It cannot pass until the fake's recorded payloads are readable over HTTP.
+  # contract.md pins no such route (§ "The provider seam" says the opposite),
+  # which is exactly the gap that let #83 ship. The slice probes
+  # `/__outbound` (recommended), `/__outbox`, `/__mail`, `/__emails`, `/__sent`
+  # and needs a Gate-A amendment naming one of them; see the ⚠ block at the top
+  # of the spec for the shape it accepts (deliberately field-name-agnostic).
+  83:
+    - "[chromium] ms-3/83-email-link.spec.ts › ms-3 issue 83 the link in the sent email › the email handed to the provider carries a link to the submission it is about"
+    - "[chromium] ms-3/83-email-link.spec.ts › ms-3 issue 83 the link in the sent email › the link survives for a mail client that renders no HTML"
+    - "[chromium] ms-3/83-email-link.spec.ts › ms-3 issue 83 the link in the sent email › the provider is handed an HTML body alongside the text one"
+    - "[chromium] ms-3/83-email-link.spec.ts › ms-3 issue 83 the link in the sent email › a sent email never carries a broken or unresolved link"
+
+# Observed red at authoring time, per issue — recorded from an actual
+# `npm run test:acceptance -- ms-3/83-email-link` run against the
+# unimplemented state, not from intent.
+#
+# All four failed at the same point: the payload was unreadable (every probed
+# path 404). Everything upstream of that — intake, the bridge push that decides
+# the send, the queued row, and the drain taking it to `sent` — ran green, so
+# these are failing on #83's own assertion surface and not on missing wiring.
+# The last id is a ratchet rather than a positive assertion (a sent email never
+# carries `undefined`-shaped garbage, which is true of today's linkless email
+# too); it is listed here because it is red NOW for the same missing-surface
+# reason, and it should go green and stay green.
+expected_red:
+  83:
+    - "[chromium] ms-3/83-email-link.spec.ts › ms-3 issue 83 the link in the sent email › the email handed to the provider carries a link to the submission it is about"
+    - "[chromium] ms-3/83-email-link.spec.ts › ms-3 issue 83 the link in the sent email › the link survives for a mail client that renders no HTML"
+    - "[chromium] ms-3/83-email-link.spec.ts › ms-3 issue 83 the link in the sent email › the provider is handed an HTML body alongside the text one"
+    - "[chromium] ms-3/83-email-link.spec.ts › ms-3 issue 83 the link in the sent email › a sent email never carries a broken or unresolved link"
