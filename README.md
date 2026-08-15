@@ -40,8 +40,9 @@ this feeds, not the intake surface.
 | `src/routes/leads.ts` | `/leads`, `/leads/:id`, `POST /leads/:id/promote` — the operator's triage inbox and the one gate a stranger's request crosses to become a submission. Operator-only; see below. |
 | `src/routes/outbox.ts` | `GET /outbox` — a customer's read-back of the emails the portal decided to send them (#14). Scoped to their own sends, same as the dashboard. |
 | `src/routes/deliveries.ts` | `GET /deliveries` — the operator's counterpart to `/outbox`: every outbox row, every customer, including the raw delivery error `/outbox` redacts (#55). Operator-only, same gate as `/leads`; see below. |
+| `src/routes/home.ts` | `GET /` — the customer front door (#84): a signed-in customer with submissions goes straight to `/submissions`, one with none is named and pointed at `/intake`, a caller with no identity gets plain-language copy pointing at `/start`. Replaced the day-one static placeholder. |
 | `migrations/` | `0001` the harness, `0002` submissions (#9), `0003` the bridge's event stream, coord mirror and daemon last-seen, `0004` question answers (#11), `0005` public leads (#31), `0006` design rounds and sign-off (#13), `0007` what a promoted lead records (#33), `0008` per-IP start attempts for the rate limit (#32), `0009` the customer outbox (#14) |
-| `public/` | placeholder page with a live health readout, and the token layer |
+| `public/` | the token layer (`tokens.css`) shared by every server-rendered screen — no static HTML of its own since #84 |
 | `test/` | 216 unit tests over routing, health probes, identity parsing, Access JWT verification and the bridge's decidable parts |
 | `e2e/` | 18 Playwright specs driving the real Worker with real local D1/R2 |
 
