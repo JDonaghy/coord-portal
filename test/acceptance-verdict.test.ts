@@ -169,4 +169,62 @@ describe("buildVerdict", () => {
     const v = buildVerdict([{ id: "a", status: "pass" }], new Map())
     expect(v.ciGreen).toBe(true)
   })
+
+  // Issue #92: unexpected-green fails the fix PR itself, since a JIT slice's
+  // clauses passing is exactly what its own fix PR succeeding looks like.
+  // `strict` is the caller-supplied context switch for that one arm — every
+  // other arm (real failures, missing expected_red) must keep failing the
+  // verdict regardless.
+  describe("strict option (issue #92)", () => {
+    it("defaults to strict when no options are passed at all — the bare call must keep today's behavior", () => {
+      const v = buildVerdict([{ id: "red-1", status: "pass" }], registered)
+      expect(v.ciGreen).toBe(false)
+      expect(v.unexpectedGreen).toEqual(["red-1"])
+    })
+
+    it("strict: true fails on unexpected-green, same as the default (the default-branch case)", () => {
+      const v = buildVerdict([{ id: "red-1", status: "pass" }], registered, { strict: true })
+      expect(v.ciGreen).toBe(false)
+    })
+
+    it("strict: false does not fail on unexpected-green, but still reports the ids (the pull-request case)", () => {
+      // red-2 must still show up (registered but not yet fixed) so this
+      // exercises exactly the unexpected-green arm, with nothing missing.
+      const v = buildVerdict(
+        [
+          { id: "red-1", status: "pass" },
+          { id: "red-2", status: "fail" },
+        ],
+        registered,
+        { strict: false },
+      )
+      expect(v.ciGreen).toBe(true)
+      expect(v.unexpectedGreen).toEqual(["red-1"])
+    })
+
+    it("strict: false still fails on a real (unregistered) failure — only the unexpected-green arm bends", () => {
+      const v = buildVerdict(
+        [
+          { id: "red-1", status: "pass" },
+          { id: "red-2", status: "fail" },
+          { id: "surprise", status: "fail" },
+        ],
+        registered,
+        { strict: false },
+      )
+      expect(v.ciGreen).toBe(false)
+      expect(v.realFailures.map((t) => t.id)).toEqual(["surprise"])
+    })
+
+    it("strict: false still fails when an expected_red id is missing from the run entirely", () => {
+      const v = buildVerdict([{ id: "red-1", status: "pass" }], registered, { strict: false })
+      expect(v.ciGreen).toBe(false) // red-1 unexpectedly green (fine, lenient) but red-2 is missing entirely
+      expect(v.missingExpectedRedIds).toEqual(["red-2"])
+    })
+
+    it("strict: false is still not green on zero tests — leniency never masks an empty run", () => {
+      const v = buildVerdict([], new Map(), { strict: false })
+      expect(v.ciGreen).toBe(false)
+    })
+  })
 })
