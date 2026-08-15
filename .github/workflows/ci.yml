@@ -78,7 +78,19 @@ jobs:
       # The trailing positional arg is the milestone token itself: Playwright
       # matches it by substring against each spec's resolved path (see the
       # config's header comment), so `ms-1` selects only `tests/acceptance/ms-1/**`.
+      #
+      # continue-on-error: a JIT test-author slice is *deliberately* red
+      # against work that hasn't landed yet (tests/acceptance/*/manifest.yml's
+      # `expected_red:` block), so Playwright's own exit code can no longer be
+      # the gate — every such slice would be unmergeable by construction
+      # (issue #87). The two steps below are the real gate: they run
+      # unconditionally (continue-on-error only stops THIS step's exit code
+      # from failing the job; it does not skip what follows) and
+      # acceptance-verdict.mjs is the one whose exit code the job actually
+      # depends on. If either of those steps is ever skipped, a genuinely
+      # broken suite goes green — do not add an `if:` to them.
       - name: Run sealed acceptance suite (${{ matrix.milestone }})
+        continue-on-error: true
         run: npm run test:acceptance -- ${{ matrix.milestone }} --reporter=list,html,json
         env:
           PLAYWRIGHT_JSON_OUTPUT_NAME: acceptance-results.json
@@ -88,6 +100,15 @@ jobs:
       # every leg of the matrix gets this guard, not just the old single job.
       - name: Assert the suite didn't silently run zero tests
         run: node scripts/assert-acceptance-ran.mjs acceptance-results.json
+      # The actual pass/fail gate (issue #87): reads the same JSON report as
+      # the guard above and reconciles it against this milestone's
+      # `expected_red:` registry — a registered-red failure doesn't fail the
+      # job, but an unregistered failure, a registered id that unexpectedly
+      # passed, or a registered id missing from the run entirely all do. See
+      # the script's header for the exact verdict and how it relates to
+      # `coord acceptance run --all --ci` in claude-coordinator.
+      - name: Verify acceptance verdict against expected_red
+        run: node scripts/acceptance-verdict.mjs acceptance-results.json ${{ matrix.milestone }}
       # The crash issue #81 was filed over left no message and no stack in
       # the job log — wrangler had already written the detail to its own log
       # file, which nobody collected. Grab it alongside the Playwright report
