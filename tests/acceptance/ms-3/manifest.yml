@@ -23,6 +23,19 @@
 # driven with. #51's slice should assert what is left — fail-closed on an unset
 # key, `MAIL_PROVIDER` selection — not re-assert these.
 
+# NOTE for #94 (a REPAIR, not a slice): issue #94 adds no test ids and no
+# `expected_red` entry, so this file is unchanged below except for this comment.
+# It repaired one existing #49 test — "the delivery-state columns arrive as a
+# numbered migration past the ms-1 head" — which read the applied migration head
+# off `#d1` on `/`, the day-one placeholder ms-1 #84 deletes, and so false-failed
+# a correct #84 implementation. The head is now read from `GET /api/health` →
+# `checks.d1.detail`, the probe contract.md § "The applied migration head —
+# pinned black-box probe (amendment, issue #94)" pins. The id is byte-identical
+# and the assertion is unchanged (still a strict `> 9`), so the id stays in #49's
+# block below where it has always been. It is GREEN on purpose: the migration it
+# asserts shipped in #49, and the repair's success condition is precisely that
+# it passes both before and after `/` stops carrying a diagnostics readout.
+
 issues:
   49:
     - "[chromium] ms-3/49-outbox-delivery-state.spec.ts › ms-3 issue 49 outbox delivery state › a decided send is born queued, and the outbox says so"

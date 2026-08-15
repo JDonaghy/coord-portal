@@ -73,6 +73,17 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from "@
  */
 const OUTBOX = "/outbox"
 
+/**
+ * Contract § "The applied migration head — pinned black-box probe (amendment,
+ * issue #94)": `GET /api/health`, field `checks.d1.detail`, string form
+ * `schema NNNN` — "the pinned black-box probe for the applied migration head,
+ * and the only one this contract pins". Unauthenticated by design (a Cloudflare
+ * Access **Bypass** application), and pinned reachable at its own path by
+ * `ms-1/contract.md`, so it needs no session and cannot be pulled out from under
+ * this suite by a customer-facing redesign.
+ */
+const HEALTH = "/api/health"
+
 // ── the pinned delivery vocabulary ──────────────────────────────────────────
 
 /**
@@ -682,28 +693,44 @@ test.describe("ms-3 issue 49 outbox delivery state", () => {
   })
 
   test("the delivery-state columns arrive as a numbered migration past the ms-1 head", async ({
-    page,
+    request,
   }) => {
     // Contract § "`outbox` schema additions (issue #49)": "New numbered
     // migration… `e2e/smoke.spec.ts` currently pins `/schema 0009/`… Per #49's
     // own note, this pin moves in the same commit that adds the migration."
-    // The landing page's D1 readout is the only black-box place a customer-facing
-    // build reports which migration head actually applied, and #49's own Notes
-    // warn that a duplicate leading number is "exactly the defect that cost #14
-    // two rounds, twice" — a migration that failed to apply, or was never added,
-    // shows up here rather than as five confusing DOM failures above.
-    await page.goto("/")
-    const readout = page.locator("#d1")
-    await expect(readout, "the landing page reports the applied migration head").toHaveText(
-      /schema\s*\d+/,
-    )
+    // #49's own Notes warn that a duplicate leading number is "exactly the defect
+    // that cost #14 two rounds, twice" — a migration that failed to apply, or was
+    // never added, shows up here rather than as five confusing DOM failures above.
+    //
+    // The head is read from `GET /api/health` → `checks.d1.detail`, which
+    // contract § "The applied migration head — pinned black-box probe" pins as
+    // the probe for this state, "full stop". Deliberately NOT off a customer
+    // page: the same clause records that `/` "carries no `#d1` readout, no schema
+    // string, and no diagnostics of any kind" as of ms-1 issue #84, and forbids
+    // any test in this milestone from probing schema/migration/binding state
+    // through a customer page at all.
+    const response = await request.get(HEALTH, { failOnStatusCode: false })
+    expect(
+      response.status(),
+      `\`GET ${HEALTH}\` is the pinned probe for the applied migration head, and answers ` +
+        "without a session by design (contract § \"The applied migration head\", item 2)",
+    ).toBe(200)
 
-    const shown = flat(await readout.innerText())
+    const body = (await response.json()) as { checks?: { d1?: { detail?: unknown } } }
+    const detail = body?.checks?.d1?.detail
+    const shown = flat(typeof detail === "string" ? detail : JSON.stringify(detail ?? null))
+    expect(
+      shown,
+      `\`checks.d1.detail\` reports the applied migration head in the pinned \`schema NNNN\` ` +
+        `form — ${HEALTH} answered "${shown}"`,
+    ).toMatch(/schema\s*\d+/)
+
     const head = Number(/schema\s*(\d+)/.exec(shown)?.[1])
     expect(
       head,
       `#49 adds a new numbered migration for status/provider_message_id/attempts/last_error, ` +
-        `so the applied head must move past ms-1's 0009 — the readout still says "${shown}"`,
+        `so the applied head must move past ms-1's 0009 — \`checks.d1.detail\` still says ` +
+        `"${shown}"`,
     ).toBeGreaterThan(9)
 
     // TODO(test-author): deliberately a strict inequality, not `=== 10`. #49's
@@ -712,10 +739,13 @@ test.describe("ms-3 issue 49 outbox delivery state", () => {
     // would freeze a number the issue itself refuses to freeze. This asserts only
     // that the head moved.
     //
-    // TODO(test-author): the `#d1` / "schema NNNN" readout is not pinned by
-    // `ms-3/contract.md` itself — it is inherited from the `e2e/smoke.spec.ts:19`
-    // pin the contract names, and from ms-1's landing page. If a worker changes
-    // that readout's format, this assertion needs a contract amendment rather
-    // than a silent edit.
+    // (The TODO that used to sit here — flagging that the `#d1` / "schema NNNN"
+    // readout was not pinned by `ms-3/contract.md` itself, but inherited from
+    // `e2e/smoke.spec.ts:19` and ms-1's landing page — is resolved by issue #94.
+    // Contract § "The applied migration head — pinned black-box probe" now pins
+    // the probe, the field and the string form outright, so a format change is a
+    // contract amendment by construction rather than a silent edit. The unsealed
+    // smoke spec's own `/schema \d+/` pin is separate and not governed here, per
+    // item 4 of that section.)
   })
 })
