@@ -154,11 +154,10 @@ issues:
 
 # Ids OBSERVED failing against the unimplemented state, per issue. Anything not
 # listed here that is red in CI is an unexpected regression, not a known gap.
-expected_red:
-  84:
-    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › the bare domain no longer serves the day-one placeholder"
-    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › a signed-in customer reaches their submission from the bare domain"
-    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › a signed-in customer with no submissions is pointed at the intake form"
-    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › the front door names the signed-in customer"
-    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › the front door links no health endpoint and no repository"
-    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › an anonymous visitor at the bare domain sees no engineer-facing page"
+# #84's six entries were cleared 2026-08-15, after PR #91 merged and made them
+# green. `coord merge`'s automatic clearer skipped them (acceptance_sha did not
+# match the merged commit after a rebase) and `coord acceptance expected-red
+# --clear` then no-oped, so this was applied by the coordinator by hand. The
+# seventh id in #84's `issues:` block above was always the green control and was
+# never registered here.
+expected_red: {}
