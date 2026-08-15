@@ -103,12 +103,26 @@ jobs:
       # The actual pass/fail gate (issue #87): reads the same JSON report as
       # the guard above and reconciles it against this milestone's
       # `expected_red:` registry — a registered-red failure doesn't fail the
-      # job, but an unregistered failure, a registered id that unexpectedly
-      # passed, or a registered id missing from the run entirely all do. See
-      # the script's header for the exact verdict and how it relates to
-      # `coord acceptance run --all --ci` in claude-coordinator.
+      # job, but an unregistered failure, or a registered id missing from the
+      # run entirely, always does. See the script's header for the exact
+      # verdict and how it relates to `coord acceptance run --all --ci` in
+      # claude-coordinator.
+      #
+      # A registered id that unexpectedly PASSED is the fourth arm, and it's
+      # context-dependent (issue #92): on `main` it means the manifest's
+      # `expected_red:` entry is stale and must be cleared by a human, so it
+      # fails the job there. On a pull request it means the PR's own fix just
+      # started working — failing the job for that makes every fix PR
+      # unmergeable at the exact moment it succeeds — so it's reported but
+      # left to `coord.acceptance.clear_expected_red_via_pr` to clear
+      # post-merge. `--context` is how this workflow tells the script which
+      # case it's in; `github.event_name` is exactly "pull_request" or
+      # "push" here since those are the only two triggers above. Passed
+      # explicitly rather than left for the script to infer from `GITHUB_*`
+      # env vars, per #92: inferring context is untestable and is how a gate
+      # quietly disarms itself on a runner that sets things differently.
       - name: Verify acceptance verdict against expected_red
-        run: node scripts/acceptance-verdict.mjs acceptance-results.json ${{ matrix.milestone }}
+        run: node scripts/acceptance-verdict.mjs acceptance-results.json ${{ matrix.milestone }} --context=${{ github.event_name }}
       # The crash issue #81 was filed over left no message and no stack in
       # the job log — wrangler had already written the detail to its own log
       # file, which nobody collected. Grab it alongside the Playwright report

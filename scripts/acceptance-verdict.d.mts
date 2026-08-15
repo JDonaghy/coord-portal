@@ -21,10 +21,23 @@ export interface Verdict {
   ciGreen: boolean
 }
 
+export interface BuildVerdictOptions {
+  /** When true (the default), an expected_red id that unexpectedly passes
+   * fails the verdict (`ciGreen`) — the default-branch behavior. When
+   * false — the pull-request context, issue #92 — such ids are still
+   * collected into `unexpectedGreen` but do not fail the verdict; they're
+   * deferred to the post-merge clearer. */
+  strict?: boolean
+}
+
 export declare class VerdictError extends Error {}
 
 export declare function parsePlaywrightReport(reportText: string): TestResult[]
 
 export declare function loadExpectedRed(manifestText: string, source: string): Map<string, number>
 
-export declare function buildVerdict(tests: TestResult[], expectedRed: Map<string, number>): Verdict
+export declare function buildVerdict(
+  tests: TestResult[],
+  expectedRed: Map<string, number>,
+  opts?: BuildVerdictOptions,
+): Verdict

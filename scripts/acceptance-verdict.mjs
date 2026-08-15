@@ -43,14 +43,31 @@
 //   failing id NOT in expected_red     -> job fails (a real regression —
 //                                          this must not regress, #87)
 //   failing id IN expected_red         -> fine; this is the whole point
-//   passing id IN expected_red         -> job fails (the registration is
-//                                          stale, or the assertion never
-//                                          exercised the bug at all — the
-//                                          #1965 vacuous-assertion case)
+//   passing id IN expected_red         -> STRICT: job fails. LENIENT: job
+//                                          passes, id still reported (#92)
 //   expected_red id absent from the
 //   run entirely                       -> job fails (a renamed or deleted
 //                                          test must not silently drain the
 //                                          registry)
+//
+// Issue #92: a JIT slice's `expected_red` clauses turning green is exactly
+// what a *successful* fix PR looks like — the ids in question are the ones
+// that PR itself is implementing. Failing the job for that on the PR that
+// did the work makes every such PR unmergeable at the moment it starts
+// working, and there is no way to clear the registration from inside the
+// PR (`tests/acceptance/**` is sealed; the coordinator self-clearing it is
+// the failure #88 already blocked once). So `unexpected-green` is STRICT
+// (fails the job) only on the default branch, where a green expected_red id
+// really is stale bookkeeping nobody has cleaned up. On a pull request it is
+// LENIENT: the ids are reported, loudly, but the job passes, leaving
+// `coord.acceptance.clear_expected_red_via_pr` to clear the registration
+// after `coord merge` lands the PR. The three other arms of the verdict —
+// real failures, still-red expected_red, and missing expected_red — are
+// unaffected in either context; only the unexpected-green arm bends here.
+// The caller decides which context applies (see `strict` in `buildVerdict`
+// and `--context=` on the CLI below) — this script never inspects `GITHUB_*`
+// env vars to guess, because that would be untestable and it is exactly how
+// a gate silently disarms itself on a runner that sets things differently.
 //
 // Fails closed on a missing, empty, or unparseable results file, or one
 // whose top-level `errors` fired before any test ran (a thrown
@@ -190,8 +207,17 @@ export function loadExpectedRed(manifestText, source) {
 
 /** Applies the four-way expected_red verdict (see file header) to *tests*
  * (`[{id, status}]`, `status` one of "pass"/"fail"/"skip") against
- * *expectedRed* (`Map<id, issueNumber>`). */
-export function buildVerdict(tests, expectedRed) {
+ * *expectedRed* (`Map<id, issueNumber>`).
+ *
+ * `opts.strict` (default `true`) controls only the unexpected-green arm
+ * (issue #92): when `true`, an expected_red id that passed fails the verdict
+ * (`ciGreen`) — today's behavior, and the only correct one on the default
+ * branch. When `false` — the pull-request context — those ids are still
+ * collected into `unexpectedGreen` (callers must still report them; this
+ * function does not silently drop them) but do not affect `ciGreen`. Real
+ * failures and missing expected_red ids fail the verdict in both modes;
+ * `strict` bends nothing else. */
+export function buildVerdict(tests, expectedRed, { strict = true } = {}) {
   const seen = new Set(tests.map((t) => t.id))
   const unexpectedGreen = []
   const expectedRedStillRed = []
@@ -209,7 +235,10 @@ export function buildVerdict(tests, expectedRed) {
   expectedRedStillRed.sort()
 
   const ciGreen =
-    tests.length > 0 && realFailures.length === 0 && unexpectedGreen.length === 0 && missingExpectedRedIds.length === 0
+    tests.length > 0 &&
+    realFailures.length === 0 &&
+    missingExpectedRedIds.length === 0 &&
+    (strict ? unexpectedGreen.length === 0 : true)
 
   return { total: tests.length, realFailures, unexpectedGreen, expectedRedStillRed, missingExpectedRedIds, ciGreen }
 }
@@ -224,13 +253,39 @@ function manifestPathFor(acceptanceRoot, milestone) {
   return null
 }
 
+// Issue #92: the caller (ci.yml) states which GitHub Actions event triggered
+// this run via `--context=<github.event_name>` — "pull_request" or "push".
+// Only "pull_request" is lenient on unexpected-green; every other value,
+// including an unrecognized one, and — critically — the flag's total
+// absence, stays strict. That last case is the point: a bare invocation with
+// no context argument must keep today's behavior exactly, so leniency is
+// something a caller opts INTO, never something it forgets to opt out of.
+const LENIENT_CONTEXT = "pull_request"
+
+function parseArgs(argv) {
+  const positional = []
+  let context
+  for (const arg of argv.slice(2)) {
+    if (arg.startsWith("--context=")) {
+      context = arg.slice("--context=".length)
+    } else {
+      positional.push(arg)
+    }
+  }
+  return { positional, context }
+}
+
 function main(argv) {
-  const reportPath = argv[2] ?? "acceptance-results.json"
-  const milestone = argv[3]
-  const acceptanceRoot = argv[4] ?? "tests/acceptance"
+  const { positional, context } = parseArgs(argv)
+  const reportPath = positional[0] ?? "acceptance-results.json"
+  const milestone = positional[1]
+  const acceptanceRoot = positional[2] ?? "tests/acceptance"
+  const strict = context !== LENIENT_CONTEXT
 
   if (!milestone) {
-    console.error("usage: node scripts/acceptance-verdict.mjs <results.json> <milestone> [acceptance-root]")
+    console.error(
+      "usage: node scripts/acceptance-verdict.mjs <results.json> <milestone> [acceptance-root] [--context=pull_request|push]",
+    )
     process.exit(1)
   }
 
@@ -266,12 +321,13 @@ function main(argv) {
     console.log(`no manifest found for ${milestone} under ${acceptanceRoot} — treating expected_red as empty.`)
   }
 
-  const verdict = buildVerdict(tests, expectedRed)
+  const verdict = buildVerdict(tests, expectedRed, { strict })
 
   console.log(
     `${milestone}: ${verdict.total} test(s), ${verdict.realFailures.length} real failure(s), ` +
       `${verdict.expectedRedStillRed.length} expected-red still red, ` +
-      `${verdict.unexpectedGreen.length} unexpected-green, ${verdict.missingExpectedRedIds.length} missing expected-red`,
+      `${verdict.unexpectedGreen.length} unexpected-green, ${verdict.missingExpectedRedIds.length} missing expected-red ` +
+      `(context: ${context ?? "(none)"}, ${strict ? "strict" : "lenient on unexpected-green"})`,
   )
 
   if (verdict.realFailures.length > 0) {
@@ -279,11 +335,20 @@ function main(argv) {
     for (const t of verdict.realFailures) console.error(`  - ${t.id}`)
   }
   if (verdict.unexpectedGreen.length > 0) {
-    console.error(
-      `\n${verdict.unexpectedGreen.length} expected_red id(s) PASSED — the registration is stale (the fix landed, ` +
-        "clear the manifest entry) or the assertion never exercised the bug (issue #1965 in claude-coordinator). " +
-        "Either way, a human has to look:",
-    )
+    if (strict) {
+      console.error(
+        `\n${verdict.unexpectedGreen.length} expected_red id(s) PASSED — the registration is stale (the fix landed, ` +
+          "clear the manifest entry) or the assertion never exercised the bug (issue #1965 in claude-coordinator). " +
+          "Either way, a human has to look:",
+      )
+    } else {
+      console.error(
+        `\n${verdict.unexpectedGreen.length} expected_red id(s) PASSED on this pull request — DEFERRED, not failing ` +
+          "this job (issue #92): the PR that makes these ids pass is exactly this one succeeding. " +
+          "coord.acceptance.clear_expected_red_via_pr clears the registration after this PR merges. " +
+          "If it doesn't get cleared, the default-branch run of this same check will catch it and fail there:",
+      )
+    }
     for (const id of verdict.unexpectedGreen) console.error(`  - ${id}`)
   }
   if (verdict.missingExpectedRedIds.length > 0) {
@@ -299,7 +364,14 @@ function main(argv) {
     process.exit(1)
   }
 
-  console.log("sealed acceptance verdict: PASS (all failures accounted for by expected_red)")
+  if (!strict && verdict.unexpectedGreen.length > 0) {
+    console.log(
+      `\nsealed acceptance verdict: PASS (lenient — ${verdict.unexpectedGreen.length} unexpected-green id(s) ` +
+        "above deferred to the post-merge clearer)",
+    )
+  } else {
+    console.log("sealed acceptance verdict: PASS (all failures accounted for by expected_red)")
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
