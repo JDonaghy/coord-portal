@@ -1,0 +1,69 @@
+import { readAccessIdentity } from "../identity"
+import { escapeHtml, html, page, publicPage } from "../render"
+import { listSubmissionsForCustomer } from "../submissions"
+import type { Env } from "../types"
+
+/**
+ * GET / — the bare domain.
+ *
+ * Issue #84: until now this path fell through to the static asset
+ * `public/index.html` (now deleted) — the day-one "Nothing is built yet"
+ * placeholder. It is the first thing a customer sees after Cloudflare Access
+ * proves who they are, and for a stranger it is the only front door there is.
+ *
+ * Three branches, matching the issue's three named states:
+ *   1. signed in, with submissions -> redirect straight to `/submissions`.
+ *      #84 explicitly allows either "their list, or straight through to it" —
+ *      `/submissions` is already ownership-scoped (issue #12) and newest-
+ *      first, so this route has nothing to add by rendering its own copy of
+ *      that list.
+ *   2. signed in, with none -> a short screen that names them and points at
+ *      `/intake`, so arriving here is not "a dead end that also insults the
+ *      work."
+ *   3. not signed in -> what the site is and how to start, in plain
+ *      language — `/start` (issue #31's public lead form) is exactly that
+ *      "how to start" for someone with no account.
+ *
+ * Deliberately does NOT reuse `topbar()` / `publicHeader()` (`src/render.ts`):
+ * both render the brand link as the literal text "coord-portal", and issue
+ * #84 names that string explicitly as vocabulary a customer must never see
+ * ("not 'coord-portal' ... on a page a customer can see"). Every other
+ * authenticated or public screen keeps that brand text — this one route
+ * builds its own minimal header instead of touching the shared one.
+ */
+export async function frontDoor(request: Request, env: Env): Promise<Response> {
+  const identity = readAccessIdentity(request)
+  if (!identity.email) {
+    return html(publicPage("Welcome — coord-portal", anonymousFrontDoor()))
+  }
+
+  const submissions = await listSubmissionsForCustomer(env, identity.email)
+  if (submissions.length > 0) {
+    return new Response(null, { status: 302, headers: { location: "/submissions" } })
+  }
+
+  return html(page("Welcome — coord-portal", emptyFrontDoor(identity.email)))
+}
+
+function anonymousFrontDoor(): string {
+  return `<main>
+  <h1>Tell us what you need. We'll build it and keep you posted.</h1>
+  <p class="lede">
+    Describe the outcome you're after, in plain language — no account needed. We turn it into a
+    design you can approve, keep you posted while it's built, and let you know the moment it's
+    ready.
+  </p>
+  <a class="button primary" href="/start" data-testid="front-door-start">Tell us what you need</a>
+</main>`
+}
+
+function emptyFrontDoor(email: string): string {
+  return `<header class="topbar">
+  <span class="identity" data-testid="identity-email">signed in as ${escapeHtml(email)}</span>
+</header>
+<main>
+  <h1>You don't have any requests yet</h1>
+  <p class="lede">Tell us what you need and we'll take it from there.</p>
+  <a class="button primary" href="/intake" data-testid="nav-new-cta">Send your first request</a>
+</main>`
+}

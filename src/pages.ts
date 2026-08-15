@@ -1,5 +1,6 @@
 import { submissionsDashboard } from "./routes/dashboard"
 import { deliveries } from "./routes/deliveries"
+import { frontDoor } from "./routes/home"
 import { intakeForm, submitIntake } from "./routes/intake"
 import {
   leadDetail,
@@ -22,18 +23,29 @@ const SUBMISSION_PATH = /^\/submissions\/([^/?#]+)$/
  * not `/api/*` and not a static file under `public/`.
  *
  * Returns `null` for anything it does not own, so the caller (`src/index.ts`)
- * can fall through to `env.ASSETS.fetch`, same as it already does for `/`.
+ * can fall through to `env.ASSETS.fetch` for a genuinely unmatched path.
  *
  * Every route here sits behind Cloudflare Access in production (issue #12),
  * **except `/start`** (issue #31): that one route is deliberately public —
  * see `routes/start.ts` — and needs its own Access **Bypass** policy in the
  * dashboard, the same way `/api/health` already has one (README.md, "Access").
+ * `/` (issue #84, `routes/home.ts`) stays behind the *existing* site Access
+ * app — no policy change here — but still branches on whether an identity is
+ * present, because the sealed acceptance harness and any other Access-less
+ * context reach this handler with none.
  * This file's job is only to render; the ownership scoping that keeps a
  * customer to their own submissions lives in `routes/dashboard.ts` and
  * `routes/submission.ts`, next to the queries it constrains.
  */
 export async function handlePages(request: Request, env: Env): Promise<Response | null> {
   const { pathname } = new URL(request.url)
+
+  // The bare domain (issue #84). `public/index.html` — the day-one
+  // placeholder this replaced — is gone, so nothing under `public/` matches
+  // `/` any more and every request for it reaches this handler.
+  if (pathname === "/" && request.method === "GET") {
+    return frontDoor(request, env)
+  }
 
   if (pathname === "/intake") {
     if (request.method === "GET") return intakeForm(request, env)
