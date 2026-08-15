@@ -51,7 +51,10 @@ request may arrive twice.
 - TypeScript. Workers runtime (not Node) — no `fs`, no `process`, no Node built-ins unless polyfilled.
 - `wrangler` for local dev and deploy; CI deploys on merge to the default branch.
 - Auth is Cloudflare Access. The Worker reads the verified identity from the injected JWT and does
-  **not** implement login, sessions, or password handling.
+  **not** implement login, sessions, or password handling. **Before touching anything auth-, mail-
+  or Access-shaped, read [`docs/CLOUDFLARE.md`](docs/CLOUDFLARE.md)** — the four Access
+  applications, which headers the edge strips (the cause of #70's unfixable 401), the Worker
+  secrets, and the DNS records that look like junk and are load-bearing.
 - Mocks are self-contained static HTML against a shared token stylesheet — no build step, no
   framework, no live data. This mirrors `docs/mocks/web/` in the coordinator repo.
 
