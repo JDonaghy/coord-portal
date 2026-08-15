@@ -99,7 +99,32 @@ export interface QueuedRow {
   from_email: string
   subject: string
   body: string
+  /** The call to action this row was queued with (issue #83) — see `resolveCtaHref`. */
+  cta_text: string
+  cta_href: string
   attempts: number
+}
+
+/**
+ * Resolves `outbox.cta_href` (root-relative, e.g. `/submissions/SUB-XXXXXX` —
+ * see `src/notifications.ts`'s `emailContent`) against `env.PUBLIC_BASE_URL`
+ * into an absolute URL a mail client can actually follow (#83 scope item 2:
+ * "a mail client has no origin to resolve it against, so even once carried it
+ * would be dead").
+ *
+ * `null` when `PUBLIC_BASE_URL` is unset, or when the configured value cannot
+ * be resolved into a URL at all — #83 is explicit that a missing or broken
+ * base URL must "leave the email exactly as it is today (no link) rather than
+ * emit `undefined/…` or a relative href." The caller logs the `null` case so
+ * it stays "visible to an operator," per the same sentence.
+ */
+function resolveCtaHref(env: Env, href: string): string | null {
+  if (!env.PUBLIC_BASE_URL) return null
+  try {
+    return new URL(href, env.PUBLIC_BASE_URL).toString()
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -119,7 +144,7 @@ export async function drainOutbox(env: Env): Promise<void> {
   const leaseThreshold = new Date(Date.now() - CLAIM_LEASE_MS).toISOString()
 
   const { results } = await env.DB.prepare(
-    `SELECT id, to_email, from_email, subject, body, attempts
+    `SELECT id, to_email, from_email, subject, body, cta_text, cta_href, attempts
        FROM outbox
       WHERE status = 'queued'
         AND (claimed_at IS NULL OR claimed_at <= ?)
@@ -174,12 +199,29 @@ export async function processRow(env: Env, provider: MailProvider, row: QueuedRo
   // decision that queued the row — a row queued before the var changed should
   // still send to wherever replies go *now*, and a stored copy would make an
   // address change require a migration instead of a config edit.
+  //
+  // The CTA's absolute href is resolved here too, same reasoning (#83): a
+  // property of the deployment, read at send time, never stored. `null` means
+  // `PUBLIC_BASE_URL` is unset or unusable, which must leave this send exactly
+  // as it was before #83 — no link at all, not a broken one — so `ctaText`/
+  // `ctaHref` are omitted from the provider call entirely rather than passed
+  // with a relative or `undefined`-shaped value.
+  const ctaHref = resolveCtaHref(env, row.cta_href)
+  if (!ctaHref) {
+    console.warn(
+      `notify: PUBLIC_BASE_URL is unset or invalid — outbox row ${row.id} is being sent with no ` +
+        "call-to-action link (issue #83). Set PUBLIC_BASE_URL in wrangler.toml's [vars] to carry " +
+        "a clickable link in every notification email.",
+    )
+  }
+
   const outcome = await provider.send({
     to: row.to_email,
     from: row.from_email,
     subject: row.subject,
     body: row.body,
     replyTo: env.REPLY_TO,
+    ...(ctaHref ? { ctaText: row.cta_text, ctaHref } : {}),
   })
 
   if (outcome.ok) {

@@ -98,6 +98,32 @@ EMAIL_FROM = "coord-portal <notify@mail.heurontech.com>"
 # reading their inbox can see it.
 REPLY_TO = "jdonaghy@heurontech.com"
 
+# Issue #83: the portal's own public origin, so a notification email's call to
+# action can be made absolute before it reaches the mail provider. Without
+# this, `outbox.cta_href` (`/submissions/SUB-XXXXXX`, root-relative — fine on
+# the portal's own `/outbox` preview, dead in a mail client with no origin to
+# resolve it against) never became a link a customer could actually follow —
+# the exact defect #83 was filed on, found on the first real customer email
+# this pipeline ever sent.
+#
+# A var, not a secret, same pattern as EMAIL_FROM/REPLY_TO above — read at
+# send time (`src/drain.ts`), not stored per row, for the same reason
+# REPLY_TO is not (a property of the deployment, and the cron path that
+# drives most sends has no request to derive an origin from anyway).
+#
+# `intake.heurontech.com` is safe to use here even though it is NOT verified
+# for outbound mail (see EMAIL_FROM's comment above) — this var only needs to
+# resolve `/submissions/:id`, the portal's own web route, which this Worker
+# does serve on this hostname (`[[routes]]` below).
+#
+# THE ACCEPTANCE ENVIRONMENT DOES NOT USE THIS VALUE. `serve:acceptance` /
+# `serve:test` (package.json) override it to each script's own
+# `http://127.0.0.1:<port>`, matching the Playwright config each drives —
+# same override convention MAIL_PROVIDER and EMAIL_FROM already use, and for
+# the same reason: a sealed slice must resolve links against the server it is
+# actually talking to, not production's hostname.
+PUBLIC_BASE_URL = "https://intake.heurontech.com"
+
 # Issue #50: the drain that sends queued `outbox` rows. Every 5 minutes is
 # plenty for this repo's mail volume (CLAUDE.md: "digest-first, not
 # instant"). At this cadence with no exponential backoff between attempts

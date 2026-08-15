@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { FakeMailProvider, ResendMailProvider, selectMailProvider } from "../src/mailProvider"
+import {
+  composeHtmlBody,
+  composeTextBody,
+  FakeMailProvider,
+  recordedFakeEmails,
+  ResendMailProvider,
+  selectMailProvider,
+} from "../src/mailProvider"
 import type { Env } from "../src/types"
 
 /**
@@ -18,6 +25,59 @@ import type { Env } from "../src/types"
 function env(overrides: Partial<Env> = {}): Env {
   return overrides as Env
 }
+
+describe("composeTextBody / composeHtmlBody (issue #83)", () => {
+  it("composeTextBody is the untouched body when there is no CTA", () => {
+    expect(composeTextBody({ to: "a@example.test", from: "f@example.test", subject: "s", body: "plain" })).toBe(
+      "plain",
+    )
+  })
+
+  it("composeTextBody appends the CTA label and the full absolute URL, visibly, when present", () => {
+    const text = composeTextBody({
+      to: "a@example.test",
+      from: "f@example.test",
+      subject: "s",
+      body: "plain",
+      ctaText: "Review the design",
+      ctaHref: "https://portal.example.test/submissions/SUB-TEXT01",
+    })
+    expect(text).toContain("plain")
+    expect(text).toContain("Review the design")
+    expect(text).toContain("https://portal.example.test/submissions/SUB-TEXT01")
+  })
+
+  it("composeTextBody falls back to a generic label when ctaText is absent but ctaHref is present", () => {
+    const text = composeTextBody({
+      to: "a@example.test",
+      from: "f@example.test",
+      subject: "s",
+      body: "plain",
+      ctaHref: "https://portal.example.test/submissions/SUB-TEXT02",
+    })
+    expect(text).toContain("https://portal.example.test/submissions/SUB-TEXT02")
+  })
+
+  it("composeHtmlBody is undefined with no CTA — no HTML alternative for an email with nothing to link", () => {
+    expect(
+      composeHtmlBody({ to: "a@example.test", from: "f@example.test", subject: "s", body: "plain" }),
+    ).toBeUndefined()
+  })
+
+  it("composeHtmlBody links the CTA href in an anchor, with every part HTML-escaped", () => {
+    const html = composeHtmlBody({
+      to: "a@example.test",
+      from: "f@example.test",
+      subject: "s",
+      body: "plain & simple",
+      ctaText: "Review <the> design",
+      ctaHref: "https://portal.example.test/submissions/SUB-HTML01",
+    })
+    expect(html).toContain('<a href="https://portal.example.test/submissions/SUB-HTML01">')
+    expect(html).toContain("Review &lt;the&gt; design")
+    expect(html).toContain("plain &amp; simple")
+  })
+})
 
 describe("FakeMailProvider", () => {
   const provider = new FakeMailProvider()
@@ -65,6 +125,57 @@ describe("FakeMailProvider", () => {
     const a = await provider.send({ to: "a@example.test", from: "f@example.test", subject: "s", body: "b" })
     const b = await provider.send({ to: "a@example.test", from: "f@example.test", subject: "s", body: "b" })
     expect(a.ok && b.ok && a.providerMessageId !== b.providerMessageId).toBe(true)
+  })
+})
+
+describe("FakeMailProvider recording (issue #51's own scope: \"records the payloads it was handed\", exercised for #83)", () => {
+  // `recordedFakeEmails()` is a module-level singleton (see `src/mailProvider.ts`'s
+  // own doc on why) that accumulates across every test in this file — each test
+  // below uses its own unique recipient, the same isolation strategy
+  // `tests/acceptance/ms-3/83-email-link.spec.ts` uses against the real Worker,
+  // so accumulation across tests never produces a false positive or negative.
+  const provider = new FakeMailProvider()
+
+  it("records what was handed to it, readable back via recordedFakeEmails()", async () => {
+    await provider.send({
+      to: "rota-recorded@example.test",
+      from: "f@example.test",
+      subject: "s",
+      body: "b",
+      ctaText: "Review the design",
+      ctaHref: "https://portal.example.test/submissions/SUB-REC01",
+    })
+
+    const mine = recordedFakeEmails().filter((e) => e.to === "rota-recorded@example.test")
+    expect(mine).toHaveLength(1)
+    expect(mine[0]?.text).toContain("https://portal.example.test/submissions/SUB-REC01")
+    expect(mine[0]?.html).toContain('href="https://portal.example.test/submissions/SUB-REC01"')
+  })
+
+  it("records a send with no CTA using the unmodified body, and no html at all", async () => {
+    await provider.send({
+      to: "rota-nocta@example.test",
+      from: "f@example.test",
+      subject: "s",
+      body: "plain body",
+    })
+
+    const mine = recordedFakeEmails().filter((e) => e.to === "rota-nocta@example.test")
+    expect(mine).toHaveLength(1)
+    expect(mine[0]?.text).toBe("plain body")
+    expect(mine[0]?.html).toBeUndefined()
+  })
+
+  it("records even a deterministically-failed mailfail send — issue #51 records payloads, not outcomes", async () => {
+    await provider.send({
+      to: "rota-mailfail-recorded@example.test",
+      from: "f@example.test",
+      subject: "s",
+      body: "b",
+    })
+
+    const mine = recordedFakeEmails().filter((e) => e.to === "rota-mailfail-recorded@example.test")
+    expect(mine).toHaveLength(1)
   })
 })
 
@@ -141,6 +252,38 @@ describe("ResendMailProvider", () => {
     // empty value, and a malformed `Reply-To` can leave a customer with no
     // reply target at all — worse than the header simply not being there.
     expect(JSON.parse(init.body as string)).not.toHaveProperty("reply_to")
+  })
+
+  // Issue #83: the CTA has to reach "both the fake and the Resend
+  // implementation" — this covers the Resend half, which previously posted
+  // `text` only and had nowhere for a link to be clickable even once carried.
+  it("sends the composed text (with a visible CTA link) and an html body when a CTA is present", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ id: "resend-cta1" }), { status: 200 }))
+    const provider = new ResendMailProvider("test-key")
+    await provider.send({
+      to: "a@example.test",
+      from: "f@example.test",
+      subject: "s",
+      body: "b",
+      ctaText: "Review the design",
+      ctaHref: "https://portal.example.test/submissions/SUB-9",
+    })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const sent = JSON.parse(init.body as string) as { text: string; html: string }
+    expect(sent.text).toContain("https://portal.example.test/submissions/SUB-9")
+    expect(sent.html).toContain('<a href="https://portal.example.test/submissions/SUB-9">')
+  })
+
+  it("omits html entirely, and sends the unmodified body as text, when no CTA is present", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ id: "resend-nocta" }), { status: 200 }))
+    const provider = new ResendMailProvider("test-key")
+    await provider.send({ to: "a@example.test", from: "f@example.test", subject: "s", body: "b" })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const sent = JSON.parse(init.body as string) as { text: string }
+    expect(sent.text).toBe("b")
+    expect(sent).not.toHaveProperty("html")
   })
 })
 
