@@ -16,6 +16,14 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
  * This file exists so a regression here fails fast against `wrangler dev`
  * (seconds) instead of only surfacing through the much slower acceptance run.
  *
+ * The last test in this file covers issue #83 ("the notification email
+ * contains no link") specifically: every other test here only ever reads
+ * `/outbox`, the portal's own rendering of what it decided to send — the
+ * exact surface that stayed green while every real email went out with no
+ * link at all, because nothing read what the drain actually handed the
+ * provider. That test reads `GET /__outbound` instead (`src/routes/outbound.ts`),
+ * the dev-only recording-fake read-back #83 added.
+ *
  * Every address below is invented on the reserved `example.test` TLD —
  * CLAUDE.md rule 1.
  */
@@ -78,6 +86,8 @@ interface Row {
   sentAt: string | null
   attempts: string | null
   lastError: string | null
+  /** The CTA href `/outbox` itself renders (issue #14/#83's `email-cta` hook). */
+  ctaHref: string | null
 }
 
 async function readOutbox(page: Page, email: string): Promise<Row[]> {
@@ -92,12 +102,14 @@ async function readOutbox(page: Page, email: string): Promise<Row[]> {
     const sentAt = preview.getByTestId("delivery-sent-at")
     const attempts = preview.getByTestId("delivery-attempts")
     const lastError = preview.getByTestId("delivery-last-error")
+    const cta = preview.getByTestId("email-cta")
     rows.push({
       status: await preview.getAttribute("data-status"),
       pillText: (await pill.count()) > 0 ? flat(await pill.first().innerText()) : null,
       sentAt: (await sentAt.count()) > 0 ? flat(await sentAt.first().innerText()) : null,
       attempts: (await attempts.count()) > 0 ? flat(await attempts.first().innerText()) : null,
       lastError: (await lastError.count()) > 0 ? flat(await lastError.first().innerText()) : null,
+      ctaHref: (await cta.count()) > 0 ? await cta.first().getAttribute("href") : null,
     })
   }
   return rows
@@ -281,4 +293,66 @@ test("two overlapping drain runs settle as exactly one send, never a doubled row
   expect(rows.length, "no doubled row").toBe(1)
   expect(rows[0]?.status).toBe("sent")
   expect(rows[0]?.attempts, "a doubled claim would show a second attempt").toBeNull()
+})
+
+/**
+ * Issue #83: the notification email contains no link — the CTA is built,
+ * stored and rendered on `/outbox`, then dropped at the provider boundary.
+ * Every assertion above this point in the file only ever reads `/outbox`
+ * itself, the portal's own rendering of what it *decided* to send — exactly
+ * the surface #83 found green while every real email went out linkless. This
+ * test reads the OTHER artefact instead: what the drain actually handed the
+ * mail provider, via `GET /__outbound` (`src/routes/outbound.ts`), the
+ * dev-only read-back of `src/mailProvider.ts`'s recording fake.
+ */
+test("the drain hands the provider an absolute, followable link to the submission (#83)", async ({
+  page,
+  request,
+  baseURL,
+}) => {
+  const email = uniqueEmail("e2e-drain-cta-link")
+  const target = await seedSubmission(page, email)
+  expect(
+    (
+      await push(request, target.reference, 1, {
+        status: "awaiting-signoff",
+        design_round: {
+          round: 1,
+          outcome_definition: "A synthetic outcome for e2e CTA-link coverage.",
+          decomposition: ["one step"],
+        },
+      })
+    ).outcome,
+  ).toBe("applied")
+
+  const [queued] = await awaitOutbox(page, email, 1)
+  expect(queued?.ctaHref, "`/outbox` itself must still render the CTA — #83 did not touch that").not.toBeNull()
+  const ctaPath = new URL(queued?.ctaHref ?? "", baseURL).pathname
+  expect(ctaPath.length, "the CTA must point somewhere with a path").toBeGreaterThan(1)
+
+  await runDrain(request)
+  const [sent] = await readOutbox(page, email)
+  expect(sent?.status).toBe("sent")
+
+  const res = await request.get("/__outbound")
+  expect(res.ok(), "GET /__outbound must exist under MAIL_PROVIDER=fake (#83)").toBe(true)
+  const body = (await res.json()) as { emails: Array<{ to: string; text: string; html?: string }> }
+  const mine = body.emails.filter((e) => e.to === email)
+  expect(mine, `the provider must have been handed exactly one email for ${email}`).toHaveLength(1)
+  const record = mine[0]
+  if (!record) throw new Error("unreachable — length checked above")
+
+  // The text part carries the URL in full, visibly — a text-only client must
+  // be able to reach the submission (#83 scope item 3).
+  expect(record.text).toContain(ctaPath)
+  const textUrls = record.text.match(/https?:\/\/[^\s]+/g) ?? []
+  expect(
+    textUrls.some((u) => new URL(u).hostname.length > 0 && new URL(u).pathname === ctaPath),
+    `expected an absolute, followable URL for ${ctaPath} in the text body; got: ${record.text}`,
+  ).toBe(true)
+
+  // An HTML body rides alongside it, with a real anchor to the same submission.
+  expect(record.html, "#83 scope item 3: an HTML body must be handed alongside the text one").toBeTruthy()
+  expect(record.html).toContain(`href="`)
+  expect(record.html).toContain(ctaPath)
 })

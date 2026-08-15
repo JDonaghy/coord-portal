@@ -1,6 +1,7 @@
 import { drainOutbox } from "./drain"
 import { handlePages } from "./pages"
 import { handleApi } from "./router"
+import { outboundRecordings } from "./routes/outbound"
 import type { Env } from "./types"
 
 /**
@@ -19,6 +20,15 @@ import type { Env } from "./types"
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const { pathname } = new URL(request.url)
+
+    // The recording fake's read-back surface (issue #83) — see
+    // `src/routes/outbound.ts` for why this exists and why it is safe in
+    // production (it 404s there unconditionally). Checked ahead of `/api` and
+    // the page router since it owns exactly one path and nothing else here
+    // needs to know about it.
+    if (pathname === "/__outbound") {
+      return outboundRecordings(env)
+    }
 
     if (pathname === "/api" || pathname.startsWith("/api/")) {
       return handleApi(request, env, ctx)
