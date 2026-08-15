@@ -26,7 +26,6 @@ the engineer side, in the other repo, out of scope for this milestone).
 | `06-request-changes.html` | Request-changes composer open | same route as 05, composer expanded — not a distinct URL |
 | `07-round-history.html` | Versioned round history, oldest round still readable | `GET /submissions/:id/rounds` |
 | `08-submission-needs-input.html` | Question raised, answer composer | `GET /submissions/:id`, status `Needs your input` |
-| `09-submission-onhold.html` | On-hold detail — **provisional, see Notes** | `GET /submissions/:id`, status `On hold` |
 | `10-submission-shipped.html` | Terminal detail | `GET /submissions/:id`, status `Shipped` |
 | `11-email-signoff-ready.html` | Digest email: design ready for sign-off | not a portal route — transactional email |
 | `12-email-needs-input.html` | Digest email: a question was raised | not a portal route — transactional email |
@@ -108,8 +107,11 @@ Needs-your-input (`08`):
 - `pause-banner` (text: **"Work is paused until you answer."**), `question-thread`,
   `question-text`, `answer-field`, `submit-answer` (button text: **"Send answer"**)
 
-On-hold (`09`, provisional — see Notes):
-- `onhold-copy`, `onhold-since`, `onhold-provisional-note`
+On-hold:
+- No dedicated hooks, and no `09` mock. Resolved by note 1 (2026-08-14): a submission stored
+  `on-hold` renders through the same rollup template as `in-progress` (§ "Rollup detail" above),
+  carrying `data-status="in-progress"`. There is no `onhold-*` hook anywhere in this contract and
+  no dedicated on-hold screen to hook into.
 
 Shipped (`10`):
 - `shipped-copy`, `shipped-link`
@@ -131,13 +133,30 @@ Fixed, ordered set. `data-status` slug → exact customer-visible text:
 | `in-progress` | In progress | no | no |
 | `quality-check` | Quality check | no | no |
 | `needs-input` | Needs your input | **yes** | no |
-| `on-hold` | On hold | no (provisional) | no |
+| `on-hold` | *(none — collapses to `in-progress`, see below)* | no | no |
 | `shipped` | Shipped | no | **yes** |
 
 Only `Awaiting your sign-off` and `Needs your input` are customer-actionable; only `Shipped` is
 terminal. Per issue #14, those three states — and *only* those three — ever generate an email
 send. This is a black-box invariant: a test may assert that no other status transition produces
 `email-preview` output.
+
+**The one deliberate exception.** This contract's standing rule, stated outright elsewhere in it,
+is that the portal "renders the status it is given and derives none of its own." `on-hold` is the
+sole carve-out, resolved and binding as of Gate-A sign-off on 2026-08-14 (note 1): a stored
+`status: "on-hold"` does not render its own word at all. It renders with `data-status="in-progress"`
+and pill text **In progress** — the exact `04-submission-in-design.html` rollup template already
+pinned for the `in-progress` slug, byte-for-byte, not a lookalike. Call this a status **map**
+(`on-hold` → `in-progress`, applied at the render boundary only), not a derivation from other
+facts: the daemon still owns `status` outright, the portal still performs zero inference from any
+other field, and it is simply told to draw two different stored words the same way. Treat this as
+resolved and binding, not as a bug or a contradiction of the render-only rule.
+
+`on-hold` is otherwise a completely ordinary member of the nine-word vocabulary: it remains a
+valid stored `status` value and a valid bridge-push target (§ "Sync bridge" — a push setting it
+resolves `applied` / `already_applied` like any other status and is never a transport failure).
+Only its customer-visible pill text and `data-status` attribute are aliased to `in-progress`'s. No
+tenth word is introduced anywhere in this contract.
 
 ## Design-round / sign-off loop (pinned, from issue #13)
 
@@ -231,6 +250,11 @@ Response, 200, one result per update, in request order:
 - **Whole-update atomicity:** if any field in an update is rejected, nothing in that update is
   applied — a partial write must not sneak through on the back of a valid sibling field.
 - An ownership violation is `rejected` with `reason: "not_owned:<field>"`.
+- `status: "on-hold"` is an ordinary member of the pinned vocabulary (§ "Customer status
+  vocabulary") and a push setting it resolves `applied` / `already_applied` exactly like any other
+  status value — never `rejected` for being `on-hold`, and never a transport failure (no 4xx/5xx).
+  Only its customer-visible rendering collapses to `In progress`, and that happens at the portal's
+  render boundary, not at the bridge; the stored `status` field itself is unaffected.
 
 ### `POST /api/bridge/heartbeat`
 
@@ -277,20 +301,29 @@ recorded.
 
 Design of record: `docs/CUSTOMER_PORTAL.md` in `claude-coordinator` (§ *The sync bridge*).
 
-## Notes — open questions and ambiguities (not resolved by this contract)
+## Notes — open questions and ambiguities (not resolved by this contract, except note 1)
 
-1. **On-hold customer visibility is unresolved.** Issue #10 says explicitly: *"Open question
-   carried forward: does On hold surface to customers at all? Flagged as the most opinionated
-   knob in the vocabulary and still unanswered."* `09-submission-onhold.html` renders the literal
-   reading (the word is customer-visible) purely so there is something to react to, and is marked
-   `onhold-provisional-note` inside the mock itself. A test-author writing a spec against this
-   screen should treat it as **optional/skippable** pending a decision in issue #10, not as a
-   required pass condition.
+1. **On-hold does not surface to customers — resolved 2026-08-14.** Issue #10 carried forward an
+   open question: *"does On hold surface to customers at all? Flagged as the most opinionated knob
+   in the vocabulary and still unanswered."* That question was closed at Gate-A sign-off on
+   2026-08-14 and is now binding: a submission the fleet has paused (`status: "on-hold"`) reads to
+   the customer as **In progress**, exactly like every other rollup state. There is no
+   customer-visible On hold — see § "Customer status vocabulary" for the exact mapping, which this
+   contract calls out as its one deliberate exception to "the portal renders the status it is
+   given and derives none of its own." Nothing in this contract is optional or skippable pending a
+   further decision on this point; the decision has been made. `on-hold` itself is untouched as a
+   stored status and a valid bridge-push target (§ "Sync bridge") — only its customer-visible
+   rendering collapsed. The `09-submission-onhold.html` mock and its `onhold-*` hooks are removed
+   as of this amendment; nothing renders them.
 2. **Business-time On-hold threshold (~1 business day, clock pauses nights/weekends/holidays)** is
-   specified in issue #10 as a computation rule, not a rendering rule. This contract pins only
-   that `onhold-since` carries an ISO-8601 timestamp; it does not pin how or where the "~1
-   business day" threshold itself is displayed or computed, since issue #10 does not specify UI
-   for it.
+   specified in issue #10 as a computation rule, not a rendering rule, and remains unresolved as a
+   *computation*. What note 1 resolves is separate and does not depend on it: whatever the daemon
+   computes, it now reaches the customer only as the pushed `status` value, collapsed to **In
+   progress** if that value is `on-hold`. `onhold-since` is no longer a pinned hook — note 1
+   removed it along with the rest of the `onhold-*` set — so this contract pins no customer-visible
+   display of the threshold at all, and none is wanted. If the threshold is ever surfaced to
+   customers, it will need its own hook on the `in-progress` rendering, pinned as a new amendment;
+   nothing today reads it.
 3. **Portal-internal API shapes are not specified anywhere in issues #8, #9, #11, #13.** Only the
    sync bridge (#15) discusses request/response shape, and even that is marked non-final. Workers
    implementing `POST /intake`, approve/request-changes, and answer-submission are free to choose

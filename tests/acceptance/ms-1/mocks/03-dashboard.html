@@ -5,7 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>My requests — coord-portal</title>
 <!-- MOCK — Gate-A screen state: dashboard / submission list, all 9 canonical
-     customer-status-vocabulary values represented (one row each). Route: GET /submissions -->
+     customer-status-vocabulary values represented (one row each). Route: GET /submissions
+
+     AMENDED 2026-08-14 (contract.md note 1): the `on-hold` row below is stored
+     as `status: "on-hold"` but renders with data-status="in-progress" / pill
+     text "In progress" — the pinned collapse. It is not a rendering bug; it
+     demonstrates the one deliberate exception the contract records. -->
 <link rel="stylesheet" href="../../../../public/tokens.css">
 <style>
   header.topbar {
@@ -49,7 +54,8 @@
   .status-pill[data-status="quality-check"]    { background: var(--accent-wash); color: var(--accent-dim); }
   .status-pill[data-status="needs-input"]      { background: var(--attn-wash);   color: var(--attn); }
   .status-pill[data-status="shipped"]          { background: var(--pass-wash);   color: var(--pass); }
-  .status-pill[data-status="on-hold"]          { background: var(--idle-wash);   color: var(--idle); }
+  /* No [data-status="on-hold"] rule: per contract.md note 1, a stored on-hold
+     submission renders with data-status="in-progress" and reuses that rule. */
 </style>
 </head>
 <body>
@@ -139,13 +145,15 @@
       </a>
     </li>
     <li>
-      <a class="submission-row" data-testid="submission-row" data-status="on-hold"
+      <!-- Stored status is "on-hold"; rendered status is "in-progress" — see
+           the AMENDED comment at the top of this file and contract.md note 1. -->
+      <a class="submission-row" data-testid="submission-row" data-status="in-progress"
          href="/submissions/sub_5c2e77">
         <div class="row-main">
           <span class="title">Migrate legacy reports to the new engine</span>
-          <span class="meta">SUB-5C2E77 &middot; on hold since Tue</span>
+          <span class="meta">SUB-5C2E77 &middot; updated 4 days ago</span>
         </div>
-        <span class="status-pill" data-testid="status-pill" data-status="on-hold">On hold</span>
+        <span class="status-pill" data-testid="status-pill" data-status="in-progress">In progress</span>
       </a>
     </li>
     <li>
