@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { drainOutbox, processRow, type QueuedRow } from "../src/drain"
-import type { MailProvider } from "../src/mailProvider"
+import type { MailProvider, OutboundEmail } from "../src/mailProvider"
 import type { Env } from "../src/types"
 
 /**
@@ -34,6 +34,8 @@ interface StoredRow {
   from_email: string
   subject: string
   body: string
+  cta_text: string
+  cta_href: string
   attempts: number
   status: string
   last_error: string | null
@@ -50,6 +52,8 @@ function seedRow(overrides: Partial<StoredRow> = {}): StoredRow {
     from_email: "coord-portal <notify@intake.heurontech.com>",
     subject: "Your design is ready for sign-off",
     body: "We've put together a design. Take a look.",
+    cta_text: "Review the design",
+    cta_href: "/submissions/SUB-DRAIN01",
     attempts: 0,
     status: "queued",
     last_error: null,
@@ -165,9 +169,27 @@ function queuedRowFrom(stored: StoredRow): QueuedRow {
     from_email: stored.from_email,
     subject: stored.subject,
     body: stored.body,
+    cta_text: stored.cta_text,
+    cta_href: stored.cta_href,
     attempts: stored.attempts,
   }
 }
+
+/**
+ * `processRow` (#83) logs a `console.warn` on every send made with
+ * `PUBLIC_BASE_URL` unset or unusable — deliberately, so the gap stays
+ * visible to an operator (see `src/drain.ts`'s `resolveCtaHref`). Every
+ * existing test in this file predates #83 and does not set the var, so
+ * without this it would spam every run's output; silenced globally here and
+ * asserted on directly only where that warning is the point of the test.
+ */
+beforeEach(() => {
+  vi.spyOn(console, "warn").mockImplementation(() => {})
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe("processRow — the claim", () => {
   it("two concurrent claims of the same stale attempts snapshot: exactly one send", async () => {
@@ -434,6 +456,92 @@ describe("processRow — the claim", () => {
     expect(sendCalls, "a live lease must block a second claim attempt").toBe(0)
     expect(store.get("outbox-1")?.attempts, "a blocked claim must not perturb the row").toBe(1)
     expect(store.get("outbox-1")?.status).toBe("queued")
+  })
+})
+
+describe("processRow — the CTA link (issue #83)", () => {
+  it("carries an absolute CTA to the provider when PUBLIC_BASE_URL is set", async () => {
+    const seeded = seedRow({ cta_text: "Review the design", cta_href: "/submissions/SUB-ABC123" })
+    const { DB } = fakeDrainDB([seeded])
+    const env = { DB, PUBLIC_BASE_URL: "https://portal.example.test" } as unknown as Env
+
+    let captured: OutboundEmail | undefined
+    const provider: MailProvider = {
+      async send(email) {
+        captured = email
+        return { ok: true, providerMessageId: "fake-msg-cta" }
+      },
+    }
+
+    await processRow(env, provider, queuedRowFrom(seeded))
+
+    expect(captured?.ctaText).toBe("Review the design")
+    expect(captured?.ctaHref).toBe("https://portal.example.test/submissions/SUB-ABC123")
+  })
+
+  it("resolves a base URL that carries its own path as a prefix, not a replacement", async () => {
+    const seeded = seedRow({ cta_href: "/submissions/SUB-ABC123" })
+    const { DB } = fakeDrainDB([seeded])
+    const env = { DB, PUBLIC_BASE_URL: "https://portal.example.test" } as unknown as Env
+
+    let captured: OutboundEmail | undefined
+    const provider: MailProvider = {
+      async send(email) {
+        captured = email
+        return { ok: true, providerMessageId: "fake-msg-cta2" }
+      },
+    }
+
+    await processRow(env, provider, queuedRowFrom(seeded))
+
+    const url = new URL(captured?.ctaHref ?? "")
+    expect(url.protocol).toBe("https:")
+    expect(url.hostname).toBe("portal.example.test")
+    expect(url.pathname).toBe("/submissions/SUB-ABC123")
+  })
+
+  it("sends no CTA at all, and warns, when PUBLIC_BASE_URL is unset — identical to pre-#83 behaviour", async () => {
+    const seeded = seedRow({ cta_text: "Review the design", cta_href: "/submissions/SUB-ABC123" })
+    const { DB, store } = fakeDrainDB([seeded])
+    const env = { DB } as unknown as Env
+
+    let captured: OutboundEmail | undefined
+    const provider: MailProvider = {
+      async send(email) {
+        captured = email
+        return { ok: true, providerMessageId: "fake-msg-nolink" }
+      },
+    }
+
+    await processRow(env, provider, queuedRowFrom(seeded))
+
+    expect(captured?.ctaHref).toBeUndefined()
+    expect(captured?.ctaText).toBeUndefined()
+    expect(captured?.body).toBe(seeded.body)
+    expect(store.get("outbox-1")?.status, "an unset base URL must not block the send itself").toBe(
+      "sent",
+    )
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("PUBLIC_BASE_URL"))
+  })
+
+  it("sends no CTA at all when PUBLIC_BASE_URL is set but unparseable, never a broken link", async () => {
+    const seeded = seedRow({ cta_href: "/submissions/SUB-ABC123" })
+    const { DB } = fakeDrainDB([seeded])
+    const env = { DB, PUBLIC_BASE_URL: "not a url" } as unknown as Env
+
+    let captured: OutboundEmail | undefined
+    const provider: MailProvider = {
+      async send(email) {
+        captured = email
+        return { ok: true, providerMessageId: "fake-msg-badbase" }
+      },
+    }
+
+    await processRow(env, provider, queuedRowFrom(seeded))
+
+    expect(captured?.ctaHref).toBeUndefined()
+    expect(captured?.ctaText).toBeUndefined()
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("PUBLIC_BASE_URL"))
   })
 })
 

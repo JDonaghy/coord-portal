@@ -1,3 +1,4 @@
+import { escapeHtml } from "./render"
 import type { Env } from "./types"
 
 /**
@@ -27,6 +28,99 @@ export interface OutboundEmail {
    * unchanged wherever the var is not declared.
    */
   replyTo?: string
+  /**
+   * The call to action this email is about (issue #83) — the customer-visible
+   * link back to the submission, and its label. `src/drain.ts` reads these off
+   * `outbox.cta_text` / `outbox.cta_href` and is the only caller that ever
+   * sets them.
+   *
+   * Both optional, and only ever present or absent together: `ctaHref` MUST
+   * already be an absolute URL by the time it reaches this interface —
+   * resolving `outbox.cta_href`'s root-relative form against a configured
+   * base URL is `src/drain.ts`'s job (#83 scope item 2), not this seam's, and
+   * a provider implementation here must never invent an origin on its own.
+   * Absent when the row predates #83, or when `env.PUBLIC_BASE_URL` is unset
+   * at send time — either way the email that goes out must carry no link at
+   * all, not a broken one (#83, "The decision this needs").
+   */
+  ctaText?: string
+  ctaHref?: string
+}
+
+/**
+ * The plain-text body actually handed to the provider (#83 scope item 3): the
+ * notification's own copy, plus — when a call to action is present — that CTA
+ * rendered as visible text with its full, followable URL. Issue #83's own
+ * words: "The text part must still carry the URL in full, visibly — a
+ * text-only client, and every 'view original' reader, must be able to reach
+ * the submission. A bare `<a>` with the URL hidden behind link text fails
+ * that" — so the URL is written out here, not merely referenced.
+ *
+ * No CTA present ⇒ identical to `email.body`, the exact text this repo sent
+ * before #83.
+ */
+export function composeTextBody(email: OutboundEmail): string {
+  if (!email.ctaHref) return email.body
+  const label = email.ctaText ?? "View this submission"
+  return `${email.body}\n\n${label}: ${email.ctaHref}`
+}
+
+/**
+ * The HTML body handed alongside the text one (#83 scope item 3: "Resend
+ * takes `html` and `text` together" — today's `ResendMailProvider` posted
+ * `text` only, which is why the CTA had nowhere to be a clickable link even
+ * once carried). `undefined` when there is no CTA: an email with nothing to
+ * link needs no HTML alternative, and both providers below omit `html`
+ * entirely rather than send an empty one — the same "absent beats malformed"
+ * choice `replyTo` already makes.
+ *
+ * Composed here, at the seam both `FakeMailProvider` and `ResendMailProvider`
+ * share, rather than privately inside `ResendMailProvider` — #83 scope item 1
+ * requires the CTA to reach "both the fake and the Resend implementation",
+ * and a fake that cannot record an HTML body leaves this defect free to recur
+ * behind a green suite.
+ */
+export function composeHtmlBody(email: OutboundEmail): string | undefined {
+  if (!email.ctaHref) return undefined
+  const label = email.ctaText ?? "View this submission"
+  return `<p>${escapeHtml(email.body)}</p><p><a href="${escapeHtml(email.ctaHref)}">${escapeHtml(label)}</a></p>`
+}
+
+/**
+ * One payload `FakeMailProvider` was handed, in the same shape a real send
+ * actually carries (`to`/`from`/`subject`/`text`/`html`/`replyTo`) rather
+ * than the raw `OutboundEmail` — so a caller reading these back (`GET
+ * /__outbound`, `src/routes/outbound.ts`) sees what would have gone out, not
+ * an internal request shape.
+ */
+export interface RecordedOutboundEmail {
+  to: string
+  from: string
+  subject: string
+  text: string
+  html?: string
+  replyTo?: string
+}
+
+/**
+ * Every payload `FakeMailProvider` has ever been handed, this Worker
+ * instance's lifetime — issue #51's own scope: a fake "that records the
+ * payloads it was handed, so a sealed test can assert *what would have been
+ * sent* without sending it." Module-level, not per-instance: `selectMailProvider`
+ * constructs a fresh `FakeMailProvider` on every call, so a singleton array is
+ * the only way a later `GET /__outbound` (a different request) can read what
+ * an earlier drain tick recorded.
+ *
+ * Never cleared programmatically — `npm run serve:acceptance` restarts
+ * `wrangler dev` from a wiped `.wrangler/state` before every run
+ * (`playwright.acceptance.config.ts`'s own "DETERMINISM" note), which resets
+ * this the same way it resets D1.
+ */
+const recordedOutboundEmails: RecordedOutboundEmail[] = []
+
+/** Read-only snapshot of `recordedOutboundEmails` — see its own doc. */
+export function recordedFakeEmails(): readonly RecordedOutboundEmail[] {
+  return recordedOutboundEmails
 }
 
 export type MailSendOutcome =
@@ -51,6 +145,20 @@ export interface MailProvider {
  */
 export class FakeMailProvider implements MailProvider {
   async send(email: OutboundEmail): Promise<MailSendOutcome> {
+    // Recorded regardless of outcome, success or the deterministic `mailfail`
+    // rejection below — issue #51 asks the fake to record "the payloads it
+    // was handed," not only the ones it accepted, and #83's sealed slice only
+    // ever exercises addresses meant to succeed anyway.
+    const html = composeHtmlBody(email)
+    recordedOutboundEmails.push({
+      to: email.to,
+      from: email.from,
+      subject: email.subject,
+      text: composeTextBody(email),
+      ...(html !== undefined ? { html } : {}),
+      ...(email.replyTo ? { replyTo: email.replyTo } : {}),
+    })
+
     const [localPart] = email.to.split("@")
     if ((localPart ?? "").toLowerCase().includes("mailfail")) {
       return { ok: false, error: `the fake mail provider deterministically rejects ${email.to}` }
@@ -77,6 +185,8 @@ export class ResendMailProvider implements MailProvider {
       return { ok: false, error: "RESEND_API_KEY unset" }
     }
 
+    const html = composeHtmlBody(email)
+
     try {
       const response = await fetch("https://api.resend.com/emails", {
         method: "POST",
@@ -87,12 +197,14 @@ export class ResendMailProvider implements MailProvider {
         // `reply_to` is omitted entirely when unset rather than sent as null or
         // "": Resend treats a present-but-empty value as a header to write, and
         // a malformed `Reply-To` is worse than none — some clients then offer
-        // the customer no reply target at all.
+        // the customer no reply target at all. `html` (#83) follows the same
+        // rule: omitted, not sent empty, when there is no CTA to link.
         body: JSON.stringify({
           from: email.from,
           to: email.to,
           subject: email.subject,
-          text: email.body,
+          text: composeTextBody(email),
+          ...(html !== undefined ? { html } : {}),
           ...(email.replyTo ? { reply_to: email.replyTo } : {}),
         }),
       })

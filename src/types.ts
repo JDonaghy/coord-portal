@@ -137,6 +137,30 @@ export interface Env {
    * exists to prevent — silent acceptance into a black hole.
    */
   REPLY_TO?: string
+  /**
+   * The portal's own public origin (issue #83) — var, not secret, declared in
+   * `wrangler.toml`'s `[vars]`, same pattern as `EMAIL_FROM` and `REPLY_TO`.
+   *
+   * `outbox.cta_href` (`src/notifications.ts`) is root-relative
+   * (`/submissions/SUB-XXXXXX`) because it is rendered on the portal's own
+   * `/outbox` page, where a relative href just works. A mail client has no
+   * such origin to resolve it against — #83's whole defect was exactly this:
+   * a correct-looking link that was dead the moment it left the app. This var
+   * is read at send time (`src/drain.ts`), not stored on the row, for the
+   * same reason `REPLY_TO` is not: it is a property of the deployment, and
+   * the cron path that drives most sends has no request to derive an origin
+   * from even if it wanted to.
+   *
+   * Unset ⇒ every notification email is sent with **no call-to-action link at
+   * all** — identical to this repo's behaviour before #83, never a relative
+   * href and never an interpolated `undefined`. `src/drain.ts` logs a warning
+   * on every send this happens to, so the gap stays visible to an operator
+   * instead of silently shipping linkless mail indefinitely (#83, "The
+   * decision this needs"). Production's value is `https://intake.heurontech.com`
+   * (`wrangler.toml`'s own `[[routes]]` pattern) — the same custom domain
+   * `/submissions/:id` actually resolves on, behind Access sign-in.
+   */
+  PUBLIC_BASE_URL?: string
 }
 
 export interface ProbeResult {
