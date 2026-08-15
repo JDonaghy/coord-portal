@@ -60,9 +60,10 @@ issues:
 # the moment the slice was authored. Only issue 71's slice was run to produce
 # this block — the earlier slices' entries are deliberately absent rather than
 # guessed at, since this author never observed them.
-expected_red:
-  71:
-    - "[chromium] ms-2/71-malformed-body.spec.ts › ms-2 issue 71 malformed request bodies › the public form answers the issue's own reproduction with 400, not 500"
-    - "[chromium] ms-2/71-malformed-body.spec.ts › ms-2 issue 71 malformed request bodies › every unparseable body shape lands on the same refusal, not a 5xx"
-    - "[chromium] ms-2/71-malformed-body.spec.ts › ms-2 issue 71 malformed request bodies › a malformed body creates no lead"
-    - "[chromium] ms-2/71-malformed-body.spec.ts › ms-2 issue 71 malformed request bodies › the authenticated intake route no longer 500s on a malformed body either"
+#
+# #71's four entries were cleared 2026-08-15. `coord acceptance expected-red
+# coord-portal` reported them STUCK — issue closed, entries remaining — which is
+# the state that command exists to surface. Standing in for the clearing PR
+# `coord.acceptance.clear_expected_red_via_pr` should have opened when #71's fix
+# merged (2026-08-14T15:23Z) and did not.
+expected_red: {}
