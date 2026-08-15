@@ -315,6 +315,37 @@ customer must never observe evidence of a double-send.
 - `e2e/smoke.spec.ts` currently pins `/schema 0009/` (`e2e/smoke.spec.ts:19`). Per #49's own note,
   this pin moves in the same commit that adds the migration.
 
+### The applied migration head — pinned black-box probe (amendment, issue #94)
+
+The paragraph above tracks where the migration *number* is pinned in the unsealed smoke spec; it
+does not say where a **sealed acceptance test** should read the applied head from. This amendment
+closes that gap, correcting a prior sealed slice that read it from the wrong place.
+
+1. **Pinned probe: `GET /api/health`, field `checks.d1.detail`, string form `schema NNNN`**
+   (matching `/schema\s*\d+/`, `NNNN` the numeric head — see `src/routes/health.ts`'s `probeD1`,
+   which reads `schema_meta.schema_version` and returns it as exactly `` `schema ${row.value}` ``).
+   This is the pinned black-box probe for the applied migration head, and the only one this
+   contract pins.
+2. **Why `/api/health` and not a customer page.** `/api/health` is unauthenticated by design — it
+   is one of the Cloudflare Access applications carrying a **Bypass** policy (`docs/CLOUDFLARE.md`),
+   so it answers without a session — and `ms-1/contract.md` (§ "Auth — Access service token") has
+   already pinned it as reachable at its own path, separate from the site application. It is a
+   diagnostics endpoint whose whole job is to report binding and schema state, so it cannot be
+   pulled out from under this suite by a customer-facing redesign.
+3. **No customer page reports schema, migration, or binding state, and no acceptance test in this
+   milestone may probe that state through one.** `/` in particular is a customer page: as of ms-1
+   issue #84, it carries no `#d1` readout, no schema string, and no diagnostics of any kind. A prior
+   sealed slice read the applied head off `#d1` on `public/index.html` (the day-one placeholder that
+   #84 replaces), justifying it as "the only black-box place a customer-facing build reports which
+   migration head actually applied" — that premise was false (`/api/health` has reported it since
+   day one) and the slice false-failed a correct #84 implementation as a result. This contract does
+   not repeat that mistake and forecloses repeating it: the head is read from `/api/health`, full
+   stop.
+4. **`e2e/smoke.spec.ts`'s own `/schema \d+/` pin is unsealed and separate; this contract does not
+   govern it.** Its pin moves in the same commit that adds a migration, per #49's note above — that
+   is a statement about the unsealed smoke suite, not a black-box contract pin, and nothing in this
+   amendment changes it.
+
 ## Notes — open questions and ambiguities (not resolved by this contract)
 
 1. **`sent_at`'s meaning conflicts between the existing schema and #49's ask, and #49 does not
