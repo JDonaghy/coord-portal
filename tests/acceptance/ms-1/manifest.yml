@@ -136,3 +136,29 @@ issues:
     - "[chromium] ms-1/70-bridge-edge-auth.spec.ts › ms-1 issue 70 bridge edge auth › behind the edge, an unfetchable key set refuses rather than admits"
     - "[chromium] ms-1/70-bridge-edge-auth.spec.ts › ms-1 issue 70 bridge edge auth › a 401 behind the edge says nothing about which check fired"
     - "[chromium] ms-1/70-bridge-edge-auth.spec.ts › ms-1 issue 70 bridge edge auth › the local well-formed-pair path still authorises when not behind the edge"
+
+  # #84 — the bare domain (`GET /`) is still the day-one placeholder. Six of the
+  # seven clauses were measured RED on 2026-08-14 against the unimplemented
+  # state; the seventh ("the health endpoint stays reachable at its own path")
+  # is a deliberate CONTROL that is green today and must stay green — #84 says
+  # to remove the *link*, not the endpoint — so it is absent from
+  # `expected_red` below.
+  84:
+    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › the bare domain no longer serves the day-one placeholder"
+    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › a signed-in customer reaches their submission from the bare domain"
+    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › a signed-in customer with no submissions is pointed at the intake form"
+    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › the front door names the signed-in customer"
+    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › the front door links no health endpoint and no repository"
+    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › an anonymous visitor at the bare domain sees no engineer-facing page"
+    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › the health endpoint stays reachable at its own path"
+
+# Ids OBSERVED failing against the unimplemented state, per issue. Anything not
+# listed here that is red in CI is an unexpected regression, not a known gap.
+expected_red:
+  84:
+    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › the bare domain no longer serves the day-one placeholder"
+    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › a signed-in customer reaches their submission from the bare domain"
+    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › a signed-in customer with no submissions is pointed at the intake form"
+    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › the front door names the signed-in customer"
+    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › the front door links no health endpoint and no repository"
+    - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › an anonymous visitor at the bare domain sees no engineer-facing page"
