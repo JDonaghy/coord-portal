@@ -152,6 +152,38 @@ issues:
     - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › an anonymous visitor at the bare domain sees no engineer-facing page"
     - "[chromium] ms-1/84-front-door.spec.ts › ms-1 issue 84 portal front door › the health endpoint stays reachable at its own path"
 
+  # #74 — "On hold never reaches a customer — collapse it into In progress".
+  # Written against contract.md AS AMENDED 2026-08-14 (note 1, § "Customer
+  # status vocabulary" / "The one deliberate exception", § "`data-testid` hooks
+  # / On-hold"), which closed issue #10's carried-forward open question: a
+  # stored `status: "on-hold"` renders `data-status="in-progress"` with pill
+  # text `In progress`, and no `onhold-*` hook exists anywhere.
+  #
+  # Seven of the nine clauses were measured RED on 2026-08-15 against the
+  # unimplemented state. The other two are deliberate and are NOT in
+  # `expected_red` — both were measured GREEN and must stay green:
+  #
+  #   - "on-hold stays a valid bridge push …" is the CONTROL for issue #74's
+  #     scope point 2. It is what stops the collapse being implemented by
+  #     refusing the write instead of by mapping the render.
+  #   - "no other status's rendering or wording changes" is the RATCHET for
+  #     scope point 1 ("exactly one status is mapped"). A collapse implemented
+  #     as a broad rewrite of the status map breaks here rather than shipping.
+  #
+  # The sealed issue-#10 slice is untouched: it was deliberately written to hold
+  # under either resolution of the open question, so it is the regression net
+  # for this change, not a casualty of it.
+  74:
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › a submission stored as on-hold renders as In progress"
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › a stored on-hold submission uses the rollup template with the In progress step current"
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › a stored on-hold submission and a stored in-progress submission render the same screen"
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › the dashboard renders a stored on-hold submission as In progress"
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › the words On hold never reach the customer"
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › no onhold-* hook resolves anywhere in the app"
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › on-hold stays a valid bridge push — applied, then already_applied"
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › no other status's rendering or wording changes"
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › the collapse applies to on-hold only and is not sticky"
+
 # Ids OBSERVED failing against the unimplemented state, per issue. Anything not
 # listed here that is red in CI is an unexpected regression, not a known gap.
 # #84's six entries were cleared 2026-08-15, after PR #91 merged and made them
@@ -160,4 +192,15 @@ issues:
 # --clear` then no-oped, so this was applied by the coordinator by hand. The
 # seventh id in #84's `issues:` block above was always the green control and was
 # never registered here.
-expected_red: {}
+expected_red:
+  # Measured 2026-08-15, `npm run test:acceptance -- 74-onhold`: 7 failed,
+  # 2 passed. The two that passed — the bridge-push CONTROL and the
+  # other-statuses RATCHET — are correctly absent from this list.
+  74:
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › a submission stored as on-hold renders as In progress"
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › a stored on-hold submission uses the rollup template with the In progress step current"
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › a stored on-hold submission and a stored in-progress submission render the same screen"
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › the dashboard renders a stored on-hold submission as In progress"
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › the words On hold never reach the customer"
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › no onhold-* hook resolves anywhere in the app"
+    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › the collapse applies to on-hold only and is not sticky"
