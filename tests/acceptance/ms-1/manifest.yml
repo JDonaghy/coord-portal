@@ -192,15 +192,12 @@ issues:
 # --clear` then no-oped, so this was applied by the coordinator by hand. The
 # seventh id in #84's `issues:` block above was always the green control and was
 # never registered here.
-expected_red:
-  # Measured 2026-08-15, `npm run test:acceptance -- 74-onhold`: 7 failed,
-  # 2 passed. The two that passed — the bridge-push CONTROL and the
-  # other-statuses RATCHET — are correctly absent from this list.
-  74:
-    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › a submission stored as on-hold renders as In progress"
-    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › a stored on-hold submission uses the rollup template with the In progress step current"
-    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › a stored on-hold submission and a stored in-progress submission render the same screen"
-    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › the dashboard renders a stored on-hold submission as In progress"
-    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › the words On hold never reach the customer"
-    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › no onhold-* hook resolves anywhere in the app"
-    - "[chromium] ms-1/74-onhold-collapse.spec.ts › ms-1 issue 74 on-hold collapses into In progress › the collapse applies to on-hold only and is not sticky"
+# #74's seven entries were measured red 2026-08-15 (`npm run test:acceptance --
+# 74-onhold`: 7 failed, 2 passed — the two that passed were the bridge-push
+# CONTROL and the other-statuses RATCHET, correctly never registered here) and
+# cleared 2026-08-16, after 77dbdd1 landed and made all seven green. Strict
+# unexpected-green then failed main on c86c17c (run 31919588267) with
+# `102 test(s), 0 real failure(s), 7 unexpected-green`. Applied by hand for the
+# third milestone running: `coord merge`'s automatic clearer cannot match quoted
+# ids (claude-coordinator#2296).
+expected_red: {}
