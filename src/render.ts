@@ -209,6 +209,12 @@ const APP_STYLES = `
   .submission-row .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
   .row-main { display: grid; gap: 0.2rem; }
 
+  /* Issue #74: no .status-pill[data-status="on-hold"] rule below — the
+     customer detail screen collapses on-hold into in-progress and never
+     emits that slug. Checked the operator surfaces (leads, deliveries)
+     before deleting it: neither renders .status-pill at all, they use a
+     distinct .lead-status-pill (src/routes/leads.ts), so nothing else
+     depended on this rule. */
   .status-pill[data-status="in-design"]        { background: var(--accent-wash); color: var(--accent-dim); }
   .status-pill[data-status="awaiting-signoff"] { background: var(--attn-wash);   color: var(--attn); }
   .status-pill[data-status="planned"]          { background: var(--idle-wash);   color: var(--idle); }
