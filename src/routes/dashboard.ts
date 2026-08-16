@@ -2,6 +2,7 @@ import { readAccessIdentity } from "../identity"
 import { escapeHtml, html, page, topbar } from "../render"
 import { derivedStatus, loadSignoffStates } from "../rounds"
 import {
+  customerFacingStatus,
   listSubmissionsForCustomer,
   statusText,
   titleOf,
@@ -35,9 +36,15 @@ export async function submissionsDashboard(request: Request, env: Env): Promise<
       .filter((submission) => submission.status === "awaiting-signoff")
       .map((submission) => submission.reference),
   )
+  // `customerFacingStatus` applies issue #74's `on-hold` -> `in-progress`
+  // collapse — the same mapping `detailFor` in `src/routes/submission.ts`
+  // applies to the detail screen, so a row on this list and its own detail
+  // screen never disagree about what the customer is shown.
   const rows = submissions.map((submission) => ({
     submission,
-    display: derivedStatus(submission.status, states.get(submission.reference) ?? null),
+    display: customerFacingStatus(
+      derivedStatus(submission.status, states.get(submission.reference) ?? null),
+    ),
   }))
 
   return html(page("My requests — coord-portal", dashboard(identity.email, rows)))

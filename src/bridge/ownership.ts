@@ -34,8 +34,10 @@ export const COORD_OWNED_FIELDS = [
   "design_round",
   "artifacts",
   // Issue #10: the business-time On-hold threshold is computed daemon-side;
-  // this is the instant it decided the clock crossed it, rendered verbatim as
-  // `onhold-since` on the On-hold screen if the daemon ever pushes it.
+  // this is the instant it decided the clock crossed it. Still a valid push
+  // (`on-hold` stays a real stored status, issue #74) — the portal just has
+  // no customer-visible surface left that reads it, since #74 collapsed the
+  // On-hold screen into the ordinary in-progress rollup template.
   "onhold_since",
 ] as const
 
