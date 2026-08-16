@@ -110,9 +110,8 @@ issues:
 # carries `undefined`-shaped garbage, which is true of today's linkless email
 # too); it is listed here because it is red NOW for the same missing-surface
 # reason, and it should go green and stay green.
-expected_red:
-  83:
-    - "[chromium] ms-3/83-email-link.spec.ts › ms-3 issue 83 the link in the sent email › the email handed to the provider carries a link to the submission it is about"
-    - "[chromium] ms-3/83-email-link.spec.ts › ms-3 issue 83 the link in the sent email › the link survives for a mail client that renders no HTML"
-    - "[chromium] ms-3/83-email-link.spec.ts › ms-3 issue 83 the link in the sent email › the provider is handed an HTML body alongside the text one"
-    - "[chromium] ms-3/83-email-link.spec.ts › ms-3 issue 83 the link in the sent email › a sent email never carries a broken or unresolved link"
+# #83's four entries were cleared 2026-08-16, after PR #98 merged and made them
+# green. `coord merge` reported expected_red_clear_skipped (acceptance_sha did not
+# match the merged commit after a rebase) and the automatic clearer cannot match
+# quoted ids anyway (claude-coordinator#2296), so this was applied by hand.
+expected_red: {}
