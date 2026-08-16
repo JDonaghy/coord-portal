@@ -10,12 +10,18 @@ import { expect, test, type Page } from "@playwright/test"
  *
  * SCOPE. #10 rolls engineer-side state up into a fixed nine-word customer
  * vocabulary and renders it: a shared read-only rollup template for the four
- * non-actionable, non-terminal states, dedicated templates for `on-hold` and
- * `shipped`, and — deliberately — nothing that asks the customer for anything
- * on the two actionable states yet (`awaiting-signoff`, `needs-input`), since
- * the sign-off round and the question thread are #13's and #11's surfaces.
+ * non-actionable, non-terminal states, a dedicated template for `shipped`,
+ * and — deliberately — nothing that asks the customer for anything on the two
+ * actionable states yet (`awaiting-signoff`, `needs-input`), since the
+ * sign-off round and the question thread are #13's and #11's surfaces.
  * `status` only ever moves over the sync bridge (#15), so it is used here as
  * the instrument, exactly as the sealed slice does.
+ *
+ * `on-hold` has no template of its own (issue #74, Gate-A amendment, approved
+ * 2026-08-14): it stays a valid stored status and bridge-push target, but the
+ * customer-visible render collapses it into the same rollup template as
+ * `in-progress` — `data-status="in-progress"`, pill text "In progress", no
+ * `onhold-*` hook resolves anywhere.
  *
  * Every string below is invented — see CLAUDE.md rule 1.
  */
@@ -89,21 +95,38 @@ test("the four rollup states render one shared timeline template", async ({ page
   }
 })
 
-test("on-hold renders the pinned copy and asks the customer for nothing", async ({ page, request }) => {
+test("on-hold collapses into the in-progress rollup and asks the customer for nothing", async ({
+  page,
+  request,
+}) => {
   const email = uniqueEmail("e2e-onhold")
   const seeded = await seedSubmission(page, email)
 
   await pushStatus(request, seeded.reference, "on-hold", 1)
   await page.goto(seeded.url)
 
-  await expect(page.getByTestId("status-pill")).toHaveText("On hold")
-  await expect(page.getByTestId("status-pill")).toHaveAttribute("data-status", "on-hold")
-  await expect(page.getByTestId("onhold-copy")).toBeVisible()
+  const detail = page.getByTestId("submission-detail")
+  await expect(detail).toHaveAttribute("data-status", "in-progress")
+  await expect(page.getByTestId("status-pill")).toHaveText("In progress")
+  await expect(page.getByTestId("status-pill")).toHaveAttribute("data-status", "in-progress")
+
+  // The rollup template, not a dedicated on-hold screen.
+  await expect(page.getByTestId("status-timeline")).toBeVisible()
+  await expect(page.getByTestId("rollup-copy")).toBeVisible()
+
+  // No trace of the deleted on-hold template's hooks.
+  await expect(page.getByTestId("onhold-copy")).toHaveCount(0)
+  await expect(page.getByTestId("onhold-since")).toHaveCount(0)
+  await expect(page.getByTestId("onhold-provisional-note")).toHaveCount(0)
+
   await expect(page.getByTestId("approve-button")).toHaveCount(0)
   await expect(page.getByTestId("question-thread")).toHaveCount(0)
 })
 
-test("on-hold renders a pushed onhold_since verbatim, ISO-8601 and all", async ({ page, request }) => {
+test("a pushed onhold_since still applies but resolves no onhold-* hook anywhere", async ({
+  page,
+  request,
+}) => {
   const email = uniqueEmail("e2e-onhold-since")
   const seeded = await seedSubmission(page, email)
 
@@ -122,9 +145,15 @@ test("on-hold renders a pushed onhold_since verbatim, ISO-8601 and all", async (
     headers: SERVICE_TOKEN,
   })
   expect(res.status()).toBe(200)
+  const body = (await res.json()) as { results: Array<{ outcome: string }> }
+  expect(body.results[0]?.outcome).toBe("applied")
 
+  // The push still applies (on-hold and onhold_since stay coord-owned, valid
+  // bridge targets, issue #74) but the portal has no surface left that reads
+  // onhold_since — the collapsed rollup screen never mentions it.
   await page.goto(seeded.url)
-  await expect(page.getByTestId("onhold-since")).toContainText("2026-08-04T09:12:00Z")
+  await expect(page.getByTestId("submission-detail")).toHaveAttribute("data-status", "in-progress")
+  await expect(page.getByTestId("onhold-since")).toHaveCount(0)
 })
 
 test("shipped is terminal and renders its own read-only copy", async ({ page, request }) => {
