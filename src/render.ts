@@ -104,8 +104,8 @@ export function operatorTopbar(email: string, current: OperatorNavCurrent): stri
  * screen it rendered, `/start` included, so a stranger's `GET /start` shipped
  * selectors and comments naming screens — and issues — they could never
  * reach (`ul.submission-list`, `main[data-testid="submission-detail"]`,
- * `.status-pill[data-status="on-hold"]`, the operator's `.lead-row`, and the
- * doc comments below that name mock filenames). None of that renders, which
+ * `.status-pill[data-status="in-progress"]`, the operator's `.lead-row`, and
+ * the doc comments below that name mock filenames). None of that renders, which
  * is exactly why a DOM-level test cannot see it — it is present only in the
  * bytes a browser downloads. Splitting the two stylesheets means `/start`
  * never downloads these bytes at all, rather than relying on any of it being
@@ -216,7 +216,6 @@ const APP_STYLES = `
   .status-pill[data-status="quality-check"]    { background: var(--accent-wash); color: var(--accent-dim); }
   .status-pill[data-status="needs-input"]      { background: var(--attn-wash);   color: var(--attn); }
   .status-pill[data-status="shipped"]          { background: var(--pass-wash);   color: var(--pass); }
-  .status-pill[data-status="on-hold"]          { background: var(--idle-wash);   color: var(--idle); }
 
   .back-link { font-size: var(--step--1); display: inline-block; margin-bottom: 1rem; }
 

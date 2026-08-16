@@ -11,7 +11,7 @@ import {
   type DesignRound,
 } from "../rounds"
 import {
-  getCoordFact,
+  customerFacingStatus,
   getSubmission,
   isRollupStatus,
   statusText,
@@ -30,10 +30,12 @@ import type { Env } from "../types"
  * and arrives over the bridge as one already-collapsed `status` — this route
  * only renders it. `describing` keeps the post-submit receipt template (#9);
  * the four non-actionable, non-terminal states share one read-only rollup
- * template (contract's note on `04-submission-in-design.html`); `on-hold` and
- * `shipped` get their own small templates (`09`, `10`); `needs-input` carries
- * the question channel (#11) and `awaiting-signoff` the design round and its
- * sign-off actions (#13).
+ * template (contract's note on `04-submission-in-design.html`); `shipped`
+ * gets its own small template (`10`); `needs-input` carries the question
+ * channel (#11) and `awaiting-signoff` the design round and its sign-off
+ * actions (#13). `on-hold` has no template of its own — issue #74 (Gate-A
+ * amendment) collapses it into the same rollup template as `in-progress`,
+ * before this dispatch ever sees it (`customerFacingStatus`).
  *
  * The one nuance is that "its status" means the *derived* status — see
  * `derivedStatus` in `src/rounds.ts`. `status` is coord-owned and no portal code
@@ -281,16 +283,23 @@ export function isOwnedBy(submission: Submission, email: string | null): boolean
  * branch renders the same `submission-detail` root and `status-pill` (the
  * hooks the contract pins as present "all statuses") — what changes below it
  * is what issue #10 says is allowed to change: the rollup timeline for the
- * four read-only states, the pinned copy for on-hold and shipped;
- * `needs-input` additionally owns the question channel (#11) and
- * `awaiting-signoff` the design round (#13).
+ * four read-only states, the pinned copy for shipped; `needs-input`
+ * additionally owns the question channel (#11) and `awaiting-signoff` the
+ * design round (#13).
+ *
+ * `display` runs the stored status through `customerFacingStatus` first —
+ * issue #74's collapse of `on-hold` into `in-progress` — the same shape
+ * `derivedStatus` already uses for `awaiting-signoff` inside `signoffDetail`:
+ * a customer-visible value distinct from, and computed from, what is
+ * actually stored. Every other status passes through unchanged, so nothing
+ * below this line needs to know the collapse happened at all.
  */
 async function detailFor(env: Env, email: string | null, submission: Submission): Promise<string> {
   if (submission.status === "describing") return receipt(email, submission)
-  if (isRollupStatus(submission.status)) return rollupDetail(email, submission, submission.status)
-  if (submission.status === "on-hold") return onHoldDetail(env, email, submission)
-  if (submission.status === "shipped") return shippedDetail(email, submission)
-  if (submission.status === "needs-input") return needsInputDetail(env, email, submission)
+  const display = customerFacingStatus(submission.status)
+  if (isRollupStatus(display)) return rollupDetail(email, submission, display)
+  if (display === "shipped") return shippedDetail(email, submission)
+  if (display === "needs-input") return needsInputDetail(env, email, submission)
   return signoffDetail(env, email, submission)
 }
 
@@ -768,47 +777,6 @@ function questionText(value: unknown): string {
   } catch {
     return ""
   }
-}
-
-/**
- * `on-hold` — the literal reading of issue #10's still-open question ("does
- * On hold surface to customers at all?"). The pinned wording and hooks render
- * exactly as `mocks/09-submission-onhold.html`; `onhold-since` renders only
- * when the daemon has actually pushed one (the business-time threshold that
- * decides it is computed daemon-side, never here — see
- * `src/bridge/ownership.ts`), and this state asks the customer for nothing.
- */
-async function onHoldDetail(env: Env, email: string | null, submission: Submission): Promise<string> {
-  const since = await onHoldSince(env, submission.reference)
-  const sinceLine = since
-    ? `<p class="meta" data-testid="onhold-since">on-hold-since: ${escapeHtml(since)}</p>`
-    : ""
-
-  return `${topbar(email, "none")}
-<main data-testid="submission-detail" data-status="${escapeHtml(submission.status)}">
-  ${statusPill(submission.status)}
-  <h1>${escapeHtml(titleOf(submission))}</h1>
-  ${referenceLine(submission)}
-
-  <section class="card">
-    <p data-testid="onhold-copy">
-      This has been paused on our side for more than a business day. We'll pick it back up —
-      there is nothing for you to do right now.
-    </p>
-    ${sinceLine}
-  </section>
-
-  <p class="provisional-flag" data-testid="onhold-provisional-note">
-    This status's wording is still provisional and may change.
-  </p>
-</main>`
-}
-
-const ISO_8601_Z = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/
-
-async function onHoldSince(env: Env, reference: string): Promise<string | null> {
-  const value = await getCoordFact(env, reference, "onhold_since")
-  return typeof value === "string" && ISO_8601_Z.test(value) ? value : null
 }
 
 /** `shipped` — terminal, per `mocks/10-submission-shipped.html`. */

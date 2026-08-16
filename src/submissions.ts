@@ -80,6 +80,24 @@ export function isRollupStatus(status: SubmissionStatus): boolean {
   return (ROLLUP_STATUSES as SubmissionStatus[]).includes(status)
 }
 
+/**
+ * Issue #74 (Gate-A amendment, contract note 1, approved 2026-08-14): "does
+ * On hold surface to customers at all?" is resolved — it does not. A
+ * submission the fleet has paused draws through the exact rollup template
+ * pinned for `in-progress`, byte-for-byte, not a lookalike template of its
+ * own.
+ *
+ * `on-hold` stays a real stored status and a valid bridge-push target — see
+ * `SUBMISSION_STATUS_TEXT` above, still a closed set the bridge validates
+ * against. Only what a customer is ever shown collapses, and it collapses
+ * here, once, so every customer-visible surface (the detail screen, the
+ * dashboard) shares the one mapping instead of each carrying its own copy of
+ * it.
+ */
+export function customerFacingStatus(status: SubmissionStatus): SubmissionStatus {
+  return status === "on-hold" ? "in-progress" : status
+}
+
 export interface Submission {
   id: string
   reference: string
