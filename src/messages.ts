@@ -5,7 +5,7 @@ import type { Env } from "./types"
  * The async chat thread — issue #110's "customers can only answer one
  * question or leave one signoff comment" gap.
  *
- * Portal-owned, submission-scoped (see `migrations/0013_messages.sql` for why
+ * Portal-owned, submission-scoped (see `migrations/0014_messages.sql` for why
  * submission-scoped rather than project-scoped, and why there is deliberately
  * no paired `bridge_events` row the way `question_answers` and `signoffs`
  * both get one).
@@ -59,7 +59,7 @@ function isAuthorRole(value: string): value is MessageAuthorRole {
 /**
  * A row can only ever have been written by `postMessage` below, which never
  * writes anything but `'customer'` or `'operator'` — the `CHECK` constraint on
- * `messages.author_role` (`migrations/0013_messages.sql`) backstops that
+ * `messages.author_role` (`migrations/0014_messages.sql`) backstops that
  * further. `null` here means a row this code has no business ever seeing (a
  * hand edit, a future migration widening the column); skipping it from the
  * read-back is safer than guessing at a role it was never actually posted

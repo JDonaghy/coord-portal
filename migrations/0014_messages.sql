@@ -1,4 +1,4 @@
--- 0013_messages — issue #110: async chat/threaded comments.
+-- 0014_messages — issue #110: async chat/threaded comments.
 --
 -- Before this migration the only customer-authored free text anywhere in the
 -- schema was a single `signoffs.comment` (captured only on "changes
@@ -70,5 +70,5 @@ CREATE TABLE IF NOT EXISTS messages (
 -- trick `outbox` and `bridge_events` already rely on their own primary key for.
 CREATE INDEX IF NOT EXISTS idx_messages_submission_id ON messages (submission_id, created_at, id);
 
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '0013')
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '0014')
   ON CONFLICT(key) DO UPDATE SET value = excluded.value;
