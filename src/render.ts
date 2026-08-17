@@ -288,6 +288,7 @@ const APP_STYLES = `
   }
   .round-history-link { font-size: var(--step--1); }
   .round-history-aside { font-size: var(--step--1); margin-top: 1.5rem; }
+  .follow-up-aside { font-size: var(--step--1); margin-top: 0.5rem; }
   .round-card h2 {
     font-size: var(--step-0); text-transform: uppercase; letter-spacing: 0.06em;
     color: var(--text-dim); margin: 1.25rem 0 0.5rem;
@@ -369,6 +370,20 @@ const APP_STYLES = `
     margin: 0.75rem 0 0; padding: 0.6rem 0.9rem; border-left: 3px solid var(--line-strong);
     color: var(--text-dim); font-size: var(--step--1); font-style: italic;
   }
+
+  /* ── The combined project view (issue #109) ───────────────────────────────
+     routes/project.ts. No dedicated mock — this screen postdates the Gate-A
+     contract's own mocks — so it reuses .card, .round-entry-head and
+     .round-date above rather than inventing a parallel set of classes for
+     what is visually the same kind of block. */
+  main[data-testid="project-detail"] .meta {
+    color: var(--text-faint); font-size: var(--step--1); margin: 0.35rem 0 1.5rem;
+  }
+  main[data-testid="project-detail"] [data-testid="project-timeline"] {
+    display: grid; gap: 1rem;
+  }
+  main[data-testid="project-detail"] .round-entry-head { margin-bottom: 0.5rem; }
+  main[data-testid="project-detail"] h2 { margin: 0 0 0.75rem; }
 
   /* ── The operator's lead inbox and lead detail (issue #33) ───────────────
      tests/acceptance/ms-2/mocks/04-leads-inbox.html, 05-lead-detail.html and

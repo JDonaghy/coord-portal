@@ -1,5 +1,6 @@
 import { appendEventStatement } from "./bridge/events"
 import { generateSubmissionId, generateSubmissionReference } from "./ids"
+import { projectAssignmentForFollowUp } from "./projects"
 import type { Env } from "./types"
 
 /**
@@ -115,6 +116,14 @@ export interface Submission {
    * `src/bridge/updates.ts`.
    */
   coordRevision: number | null
+  /**
+   * The `proj_…` id of the project this submission belongs to, or `null` for
+   * a one-off request with no shared history (issue #109). See
+   * `src/projects.ts` and `NewSubmissionInput.followUpFrom` below for the
+   * only way this is ever set — never inferred from a matching
+   * `customerEmail` alone.
+   */
+  projectId: string | null
 }
 
 export interface NewSubmissionInput {
@@ -124,6 +133,19 @@ export interface NewSubmissionInput {
   doneDefinition: string
   constraints: string | null
   projectScope: string | null
+  /**
+   * The `sub_…` id of an existing submission this one is a follow-up to, or
+   * `null`/omitted for an ordinary, standalone request.
+   *
+   * This is the one deliberate trigger issue #109 picks for "where a project
+   * gets created vs. attached to an existing one" — see the long comment on
+   * `promoteLead` in `src/leads.ts` for why lead promotion is deliberately
+   * *not* the other one, and `routes/submission.ts`'s "Start a follow-up"
+   * link for the only UI path that ever sets this. The caller must already
+   * have checked `isOwnedBy` against this id — `createSubmissionStatements`
+   * trusts it as given, the same way it trusts every other field here.
+   */
+  followUpFrom?: string | null
 }
 
 interface SubmissionRow {
@@ -138,6 +160,7 @@ interface SubmissionRow {
   project_scope: string | null
   created_at: string
   coord_revision: number | null
+  project_id: string | null
 }
 
 function fromRow(row: SubmissionRow): Submission {
@@ -156,6 +179,7 @@ function fromRow(row: SubmissionRow): Submission {
     projectScope: row.project_scope,
     createdAt: row.created_at,
     coordRevision: row.coord_revision,
+    projectId: row.project_id,
   }
 }
 
@@ -209,6 +233,21 @@ export function createSubmissionStatements(
   const reference = options.reference ?? generateSubmissionReference()
   const createdAt = new Date().toISOString()
   const guard = options.guard
+  const followUpFrom = input.followUpFrom ?? null
+
+  // Issue #109: a follow-up submission carries its `project_id` too, minted
+  // (or reused) by `projectAssignmentForFollowUp`. With no follow-up target
+  // the column is a plain bound `NULL` — a fresh, one-off submission, exactly
+  // today's shape.
+  const projectStatements: D1PreparedStatement[] = []
+  let projectIdExpr = "?"
+  let projectIdBindings: unknown[] = [null]
+  if (followUpFrom) {
+    const assignment = projectAssignmentForFollowUp(env, input.customerEmail, followUpFrom, createdAt)
+    projectStatements.push(...assignment.statements)
+    projectIdExpr = assignment.projectIdExpr
+    projectIdBindings = assignment.projectIdBindings
+  }
 
   // `INSERT … SELECT` rather than `INSERT … VALUES` so the guarded and
   // unguarded forms are one statement with one column list, not two that can
@@ -216,8 +255,8 @@ export function createSubmissionStatements(
   // row, which is what VALUES did.
   const insertSubmission = env.DB.prepare(
     `INSERT INTO submissions
-       (id, reference, status, customer_email, outcome, audience, done_definition, constraints, project_scope, created_at)
-     SELECT ?, ?, 'describing', ?, ?, ?, ?, ?, ?, ?
+       (id, reference, status, customer_email, outcome, audience, done_definition, constraints, project_scope, project_id, created_at)
+     SELECT ?, ?, 'describing', ?, ?, ?, ?, ?, ?, ${projectIdExpr}, ?
      ${guard ? guard.clause : ""}`,
   ).bind(
     id,
@@ -228,6 +267,7 @@ export function createSubmissionStatements(
     input.doneDefinition,
     input.constraints,
     input.projectScope,
+    ...projectIdBindings,
     createdAt,
     ...(guard ? guard.bindings : []),
   )
@@ -272,8 +312,15 @@ export function createSubmissionStatements(
       projectScope: input.projectScope,
       createdAt,
       coordRevision: null,
+      // Resolved by SQL above, not known synchronously here — a follow-up's
+      // true `projectId` (freshly minted, or an existing one reused) only
+      // exists once the batch this statement is part of actually commits.
+      // `createSubmission` below reads it back for exactly that reason;
+      // any other caller building its own batch (`promoteLead`) should do the
+      // same if it ever needs this field.
+      projectId: null,
     },
-    statements: [insertSubmission, appendEvent],
+    statements: [...projectStatements, insertSubmission, appendEvent],
   }
 }
 
@@ -296,6 +343,14 @@ export async function createSubmission(
 ): Promise<Submission> {
   const { submission, statements } = createSubmissionStatements(env, input)
   await env.DB.batch(statements)
+  // A follow-up's `projectId` is resolved by the batch above, not known to
+  // `submission` yet (see the comment in `createSubmissionStatements`) — read
+  // the row back rather than guess at what the guarded SQL decided. Skipped
+  // for the ordinary case: it is not a follow-up, so `projectId` is already
+  // correctly `null` and a second round trip would buy nothing.
+  if (input.followUpFrom) {
+    return (await getSubmission(env, submission.id)) ?? submission
+  }
   return submission
 }
 
@@ -324,6 +379,34 @@ export async function listSubmissionsForCustomer(
     `SELECT * FROM submissions WHERE customer_email = ? ORDER BY created_at DESC`,
   )
     .bind(customerEmail)
+    .all<SubmissionRow>()
+  return (results ?? []).map(fromRow)
+}
+
+/**
+ * Every submission under one project, newest first — issue #109's combined
+ * timeline, the counterpart to `listSubmissionsForCustomer` at the project
+ * level.
+ *
+ * Scoped by `customerEmail` for the identical reason that function is: this
+ * is read by an authenticated route (`routes/project.ts`) that must never
+ * render another customer's history, so ownership is a `WHERE` clause here,
+ * not a filter applied after the fact. A project's own `customerEmail`
+ * (`src/projects.ts`) is who it belongs to; every submission under it was
+ * only ever attached by that same customer's own follow-up action, so the two
+ * always agree — this redundant check costs one query parameter and closes
+ * off a row ever rendering to the wrong caller if that invariant is ever
+ * broken by a future write path.
+ */
+export async function listSubmissionsForProject(
+  env: Env,
+  projectId: string,
+  customerEmail: string,
+): Promise<Submission[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM submissions WHERE project_id = ? AND customer_email = ? ORDER BY created_at DESC`,
+  )
+    .bind(projectId, customerEmail)
     .all<SubmissionRow>()
   return (results ?? []).map(fromRow)
 }

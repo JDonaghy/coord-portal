@@ -41,6 +41,18 @@ export function generateLeadReference(): string {
 }
 
 /**
+ * `proj_` + 12 lowercase hex chars — same shape as `generateSubmissionId`,
+ * for the same reason: portal-internal, URL-facing, never accepted from a
+ * caller. A project has no customer-facing reference of its own (issue
+ * #109) — the customer still quotes back a submission's `SUB-XXXXXX`; the
+ * project id only ever appears in a `/projects/:id` URL they got here by
+ * clicking.
+ */
+export function generateProjectId(): string {
+  return `proj_${randomHex(12)}`
+}
+
+/**
  * `evt_` + 24 lowercase hex chars — the opaque id on a sync-bridge event.
  *
  * Deliberately NOT derived from the event's revision. The revision is the

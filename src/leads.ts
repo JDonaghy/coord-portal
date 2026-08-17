@@ -193,6 +193,36 @@ const NOT_CAPTURED_AT_FIRST_CONTACT =
  * byte-identical in shape to the one a customer filling in the intake form
  * produces. From the daemon's side promotion is indistinguishable from ordinary
  * intake, and the daemon never learns a lead was involved.
+ *
+ * ── WHY THIS IS NOT WHERE A PROJECT GETS CREATED (ISSUE #109) ──────────────
+ * `createSubmissionStatements`'s `input` here never sets `followUpFrom`, so a
+ * promoted lead is always a fresh, project-less submission — even when the
+ * lead's email happens to match a customer who already has one. Two reasons,
+ * not one:
+ *
+ *   1. A lead is "first contact from a stranger with no account" by this
+ *      module's own definition (see the module comment). An operator has no
+ *      reliable way to know, at triage time, whether `bo@example.com` writing
+ *      in through `/start` is a brand-new customer or an existing one using a
+ *      different address than the one on file — guessing wrong would silently
+ *      fold one customer's history into another's.
+ *   2. Even a confirmed match is not "the same round of work" the way a
+ *      follow-up is. Issue #109's own sealed-suite constraint
+ *      (`tests/acceptance/ms-1/12-access-auth.spec.ts`, "the dashboard lists
+ *      only the caller's own submissions") already pins two submissions one
+ *      customer creates independently as two separate rows — a promoted lead
+ *      auto-joining a project on nothing but a matching email would be the
+ *      exact inference that test rules out, just reached from the operator
+ *      side instead of `/intake`'s.
+ *
+ * The one deliberate trigger is a signed-in customer explicitly starting a
+ * follow-up from a submission they already own (`routes/submission.ts`'s
+ * "Start a follow-up" link, `NewSubmissionInput.followUpFrom` in
+ * `src/submissions.ts`) — an act only the account owner can take, on a
+ * specific prior submission, never a background inference. If a later issue
+ * wants an operator to *merge* a freshly promoted lead into an existing
+ * customer's project, that is a new, explicit action on this surface, not a
+ * behavior this function should grow implicitly.
  */
 export async function promoteLead(env: Env, lead: Lead): Promise<Lead> {
   if (lead.promotedAt !== null) return lead

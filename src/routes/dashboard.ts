@@ -46,19 +46,65 @@ export async function submissionsDashboard(request: Request, env: Env): Promise<
   // collapse — the same mapping `detailFor` in `src/routes/submission.ts`
   // applies to the detail screen, so a row on this list and its own detail
   // screen never disagree about what the customer is shown.
-  const rows = submissions.map((submission) => ({
-    submission,
-    display: customerFacingStatus(
-      derivedStatus(submission.status, states.get(submission.reference) ?? null),
-    ),
-  }))
+  const displayOf = (submission: Submission): SubmissionStatus =>
+    customerFacingStatus(derivedStatus(submission.status, states.get(submission.reference) ?? null))
+
+  const rows = groupByProject(submissions, displayOf)
 
   return html(page("My requests — coord-portal", dashboard(email, rows)))
 }
 
-interface DashboardRow {
-  submission: Submission
-  display: SubmissionStatus
+/**
+ * One line on `/submissions` — either a one-off submission (today's shape,
+ * unchanged) or a project standing in for every submission under it (issue
+ * #109). `submissions` is already newest-first
+ * (`listSubmissionsForCustomer`); this groups it without re-sorting, which is
+ * what keeps a customer with no projects seeing the exact list they always
+ * have — "no regression for one-off customers" is a property of this
+ * function touching nothing about their rows, not a special case inside it.
+ */
+type DashboardRow =
+  | { kind: "submission"; submission: Submission; display: SubmissionStatus }
+  | { kind: "project"; projectId: string; submissions: Submission[]; display: SubmissionStatus }
+
+/**
+ * Folds a customer's flat submission list into dashboard rows: a submission
+ * with no `projectId` renders exactly as it always has, and every submission
+ * sharing a `projectId` collapses into one row, keyed to the newest member —
+ * the input's own ordering already puts that member first, so this is a
+ * single pass, not a re-sort.
+ */
+function groupByProject(
+  submissions: Submission[],
+  displayOf: (submission: Submission) => SubmissionStatus,
+): DashboardRow[] {
+  const rows: DashboardRow[] = []
+  const groups = new Map<string, DashboardRow & { kind: "project" }>()
+
+  for (const submission of submissions) {
+    if (!submission.projectId) {
+      rows.push({ kind: "submission", submission, display: displayOf(submission) })
+      continue
+    }
+    const existing = groups.get(submission.projectId)
+    if (existing) {
+      existing.submissions.push(submission)
+      continue
+    }
+    // First (newest) sighting of this project — its row's position and
+    // display status come from this submission, the current state of the
+    // relationship.
+    const group: DashboardRow & { kind: "project" } = {
+      kind: "project",
+      projectId: submission.projectId,
+      submissions: [submission],
+      display: displayOf(submission),
+    }
+    groups.set(submission.projectId, group)
+    rows.push(group)
+  }
+
+  return rows
 }
 
 function dashboard(email: string | null, rows: DashboardRow[]): string {
@@ -74,11 +120,14 @@ function dashboard(email: string | null, rows: DashboardRow[]): string {
 
 function list(rows: DashboardRow[]): string {
   return `<ul class="submission-list" data-testid="submission-list">
-${rows.map(row).join("\n")}
+${rows.map((entry) => (entry.kind === "project" ? projectRow(entry) : submissionRow(entry))).join("\n")}
   </ul>`
 }
 
-function row({ submission, display }: DashboardRow): string {
+function submissionRow({
+  submission,
+  display,
+}: DashboardRow & { kind: "submission" }): string {
   const title = titleOf(submission)
   return `    <li>
       <a class="submission-row" data-testid="submission-row" data-status="${escapeHtml(display)}"
@@ -86,6 +135,39 @@ function row({ submission, display }: DashboardRow): string {
         <div class="row-main">
           <span class="title">${escapeHtml(title)}</span>
           <span class="meta">${submission.reference} &middot; ${escapeHtml(submission.createdAt)}</span>
+        </div>
+        <span class="status-pill" data-testid="status-pill" data-status="${escapeHtml(display)}">${escapeHtml(statusText(display))}</span>
+      </a>
+    </li>`
+}
+
+/**
+ * A project's row — same visual shape as `submissionRow` (`.submission-row`
+ * carries both), a distinct `data-testid` so the two are never confused by a
+ * locator, and a link into `/projects/:id` (issue #109's combined view)
+ * rather than any one submission's own detail screen: the point of grouping
+ * is that the customer should not have to know which submission covers which
+ * round.
+ *
+ * `submissions[0]` is the newest member — `groupByProject` guarantees that —
+ * so its title stands in for the project's ("what this is currently about")
+ * and its reference anchors the meta line the same way a standalone row's
+ * does. The count makes the grouping itself legible instead of a customer
+ * wondering why one row's reference does not match what they remember
+ * submitting.
+ */
+function projectRow({ projectId, submissions, display }: DashboardRow & { kind: "project" }): string {
+  const newest = submissions[0]
+  if (!newest) return ""
+  const title = titleOf(newest)
+  const requestCount = submissions.length
+  const countLabel = requestCount === 1 ? "1 request" : `${requestCount} requests`
+  return `    <li>
+      <a class="submission-row" data-testid="project-row" data-status="${escapeHtml(display)}"
+         href="/projects/${projectId}">
+        <div class="row-main">
+          <span class="title">${escapeHtml(title)}</span>
+          <span class="meta">${countLabel} &middot; ${newest.reference} &middot; ${escapeHtml(newest.createdAt)}</span>
         </div>
         <span class="status-pill" data-testid="status-pill" data-status="${escapeHtml(display)}">${escapeHtml(statusText(display))}</span>
       </a>

@@ -429,6 +429,25 @@ function roundHistoryLink(submission: Submission): string {
 }
 
 /**
+ * "Start a follow-up" — issue #109's one deliberate trigger for a project:
+ * a signed-in customer choosing, on a submission they already own, to file
+ * another one that shares its history. Links to `/intake?from=<id>`, which
+ * `routes/intake.ts` treats as ordinary unless it can confirm `isOwnedBy`
+ * against this exact submission — the same check this screen itself already
+ * passed to render at all.
+ *
+ * Rendered only on `shipped`: that is the one state where "the team is done
+ * with this and the customer might want more" is actually true. Every other
+ * template already has the customer's attention on something live — a round
+ * to decide, a question to answer, work in flight — and a second
+ * call-to-action there would compete with it rather than the (still empty)
+ * `describing` receipt, which has nothing yet to be a follow-up *to*.
+ */
+function followUpLink(submission: Submission): string {
+  return `<p class="follow-up-aside"><a href="/intake?from=${encodeURIComponent(submission.id)}" data-testid="start-follow-up">Start a follow-up request</a></p>`
+}
+
+/**
  * `awaiting-signoff` with no round to sign off, and `needs-input` with no open
  * question: customer-actionable per the pinned vocabulary table, but with
  * nothing yet to act on. Renders the pill and reference and deliberately
@@ -661,7 +680,16 @@ ${body}
 </main>`
 }
 
-function roundEntry(round: DesignRound): string {
+/**
+ * One round, rendered as `mocks/07-round-history.html` pins it — badge,
+ * verdict pill, opened date, what-we-understood, decomposition and (only on
+ * a `changes-requested` round) the customer's own comment.
+ *
+ * Exported so `routes/project.ts`'s combined timeline (issue #109) reuses
+ * this exact markup per submission rather than a second copy of it — the
+ * same reasoning `isOwnedBy` above is exported for.
+ */
+export function roundEntry(round: DesignRound): string {
   const items = round.decomposition
     .map((item) => `        <li>${escapeHtml(item)}</li>`)
     .join("\n")
@@ -800,6 +828,7 @@ function shippedDetail(email: string | null, submission: Submission): string {
   </section>
 
   ${roundHistoryLink(submission)}
+  ${followUpLink(submission)}
 </main>`
 }
 
