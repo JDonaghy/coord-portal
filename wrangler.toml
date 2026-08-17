@@ -54,8 +54,20 @@ enabled = true
 # Changing the address here must NOT be accompanied by an edit to
 # `tests/acceptance/**` — that would be amending the oracle to match the
 # implementation, which is the one thing the sealed suite exists to prevent.
+#
+# #105 changed the DISPLAY NAME only, `coord-portal` -> `Heuron Technology`.
+# The mailbox is untouched (still the Resend-verified `mail.heurontech.com`
+# sender #52 established), so nothing about deliverability moves. What moved is
+# the name a recipient actually reads in her inbox list: `coord-portal` is this
+# repo's internal tool name and names no business she has ever dealt with, and
+# a sender name that does not match the brand is precisely the mismatch both
+# spam heuristics and humans distrust. Reported for real (dogfood, SUB-C467AA):
+# a `signoff-ready` send landed in Hotmail's spam folder and was very nearly
+# dismissed as spam even after being found there. The display name is half the
+# fix; the copy and the branded HTML part (`src/notifications.ts`,
+# `src/mailProvider.ts`) are the other half.
 [vars]
-EMAIL_FROM = "coord-portal <notify@mail.heurontech.com>"
+EMAIL_FROM = "Heuron Technology <notify@mail.heurontech.com>"
 
 # Issue #52: where a customer's reply goes.
 #

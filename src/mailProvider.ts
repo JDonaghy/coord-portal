@@ -79,11 +79,129 @@ export function composeTextBody(email: OutboundEmail): string {
  * requires the CTA to reach "both the fake and the Resend implementation",
  * and a fake that cannot record an HTML body leaves this defect free to recur
  * behind a green suite.
+ *
+ * #105 gave that body a visual identity. What #83 shipped was
+ * `<p>body</p><p><a>label</a></p>` — correct, linkable, and completely
+ * anonymous: no colour, no wordmark, nothing a recipient could recognise as
+ * coming from the business she hired. See `BRAND` below.
  */
+
+/**
+ * heurontech.com's design tokens, inlined — issue #105.
+ *
+ * Values lifted from the site redesign (`new/index.html` in the site repo).
+ * That redesign is not live yet, but it *is* the brand going forward, so an
+ * email styled against it is recognisable the moment the site ships and is
+ * merely tasteful before then.
+ *
+ * Every value is inlined into a `style` attribute at the point of use rather
+ * than declared as a CSS custom property in a `<style>` block: Gmail strips
+ * `<style>` from a forwarded message, Outlook has never supported `var()`, and
+ * a token that resolves to nothing renders as unstyled black-on-white — which
+ * is the exact anonymity this change exists to remove. Inline styles are the
+ * one mechanism every mail client honours.
+ *
+ * NOTHING here may cause an external network request. No `<img>` pointing at a
+ * logo on a CDN, no `<link>` pulling "IBM Plex Sans"/"Newsreader" from Google
+ * Fonts. Both are load-bearing: a remote fetch in a message body is itself a
+ * spam signal, most clients block it by default so the brand mark would simply
+ * not render, and a blocked-image placeholder where a wordmark should be looks
+ * *more* suspicious than no wordmark at all. The wordmark is therefore text,
+ * and both font stacks degrade to something every OS already has.
+ */
+const BRAND = {
+  /** Page background behind the card. */
+  paper: "#FBF8F6",
+  /** The card itself, and the CTA's own text colour against `green`. */
+  card: "#FFFFFF",
+  /** Body text. */
+  ink: "#12181A",
+  /** Secondary text — the footer's reason-for-receipt line. */
+  ink2: "#464E50",
+  /** The site's `.btn` fill, reused for the CTA and the wordmark. */
+  green: "#0B3036",
+  /** The site's accent, used once, on the domain line under the wordmark. */
+  ochre: "#B37947",
+  /** Hairlines: the card border and the two internal rules. */
+  rule: "#E2DCD8",
+} as const
+
+/**
+ * Body and UI text. "IBM Plex Sans" is the site's, and is not fetched — a
+ * recipient who happens to have it installed gets it, everyone else falls
+ * through to their platform's system UI face, which is what a personal message
+ * looks like anyway.
+ */
+const SANS = "'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif"
+
+/**
+ * The wordmark only. "Newsreader" is the site's display serif and, like the
+ * sans above, is never fetched; Georgia is on every Windows and macOS install
+ * shipped this century, so the degradation is a serif, not a fallback to the
+ * body face.
+ */
+const SERIF = "'Newsreader', Georgia, 'Times New Roman', serif"
+
+/**
+ * The notification body, as HTML paragraphs — issue #105.
+ *
+ * `emailContent` writes bodies with a blank-line-separated signature
+ * (`src/notifications.ts`'s `SIGNATURE`), and #83's single
+ * `<p>${escapeHtml(body)}</p>` would have collapsed that newline to a space
+ * and run the signature onto the end of the sentence above it. Blank lines
+ * become separate `<p>`s; a lone newline inside a paragraph becomes `<br />`.
+ *
+ * Every fragment of the body still goes through `escapeHtml` exactly as it did
+ * before — `title` is the customer's own words off the intake form, so it is
+ * untrusted input that lands in a document someone else's mail client parses.
+ */
+function htmlParagraphs(body: string): string {
+  return body
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph.length > 0)
+    .map((paragraph) => {
+      const lines = paragraph.split("\n").map(escapeHtml).join("<br />")
+      return `<p style="margin:0 0 16px;">${lines}</p>`
+    })
+    .join("")
+}
+
 export function composeHtmlBody(email: OutboundEmail): string | undefined {
   if (!email.ctaHref) return undefined
   const label = email.ctaText ?? "View this submission"
-  return `<p>${escapeHtml(email.body)}</p><p><a href="${escapeHtml(email.ctaHref)}">${escapeHtml(label)}</a></p>`
+
+  // Table-in-table rather than nested `<div>`s: Outlook's Word rendering engine
+  // ignores `max-width` on a block element, so a div-based card renders full
+  // bleed across a maximised window. The `width="560"` attribute plus the
+  // `max-width` style is the belt-and-braces pair that every mail client
+  // honours one half of.
+  return [
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:0;padding:0;background:${BRAND.paper};">`,
+    `<tr><td align="center" style="padding:24px 12px;">`,
+    `<table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:560px;background:${BRAND.card};border:1px solid ${BRAND.rule};border-radius:10px;">`,
+    `<tr><td style="padding:28px 32px;font-family:${SANS};font-size:16px;line-height:1.6;color:${BRAND.ink};">`,
+    // The brand mark: text, not an image. See `BRAND`'s doc for why.
+    `<p data-email-brand="heuron-technology" style="margin:0;font-family:${SERIF};font-size:20px;line-height:1.3;color:${BRAND.green};">Heuron Technology</p>`,
+    // The one line tying `intake.heurontech.com` — a subdomain the recipient
+    // has never seen — back to the domain she has. Deliberately not a link:
+    // one destination per email keeps the CTA unambiguous, and a second
+    // hostname in an anchor is a spam signal for no reader benefit.
+    `<p style="margin:2px 0 20px;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:${BRAND.ochre};">heurontech.com</p>`,
+    `<hr style="border:0;border-top:1px solid ${BRAND.rule};margin:0 0 20px;height:1px;" />`,
+    htmlParagraphs(email.body),
+    // The CTA as the site's `.btn`, not a bare underlined link. `data-email-cta`
+    // mirrors the `email-cta` hook ms-1's contract pins on the portal's own
+    // preview of this send, so the two surfaces stay greppable together;
+    // `tests/acceptance/ms-3/83-email-link.spec.ts` matches on the `href`
+    // itself, which is unchanged and still the only anchor in the message.
+    `<p style="margin:24px 0 0;"><a data-email-cta="submission" href="${escapeHtml(email.ctaHref)}" style="display:inline-block;background:${BRAND.green};color:${BRAND.card};font-family:${SANS};font-size:16px;font-weight:600;line-height:1.2;text-decoration:none;padding:13px 22px;border-radius:6px;">${escapeHtml(label)}</a></p>`,
+    // "Why am I getting this?" — the question a recipient asks right before she
+    // hits Report Spam, answered in the message rather than left to inference.
+    `<p style="margin:28px 0 0;padding-top:16px;border-top:1px solid ${BRAND.rule};font-size:13px;line-height:1.5;color:${BRAND.ink2};">You are receiving this because you asked Heuron Technology to work on this project. Reply to this email and it reaches me directly.</p>`,
+    `</td></tr></table>`,
+    `</td></tr></table>`,
+  ].join("")
 }
 
 /**

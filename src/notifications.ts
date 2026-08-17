@@ -83,8 +83,15 @@ export function sendTypeForStatus(status: string): SendType | null {
  * names the domain that actually works. The acceptance environment still
  * overrides `EMAIL_FROM` back to the pinned historical literal (package.json),
  * so this constant is not what the sealed mocks are matched against.
+ *
+ * #105 changed the display name here for the same reason it changed
+ * `wrangler.toml`'s: a fallback that sends as `coord-portal` names this repo's
+ * internal tool rather than the business the recipient knows, which is the
+ * brand mismatch that put a real send in a spam folder. A checkout that
+ * forgets the var should degrade to the wrong-but-sendable ADDRESS, not to the
+ * wrong NAME as well. The address is untouched.
  */
-const DEFAULT_EMAIL_FROM = "coord-portal <notify@mail.heurontech.com>"
+const DEFAULT_EMAIL_FROM = "Heuron Technology <notify@mail.heurontech.com>"
 
 /** `env.EMAIL_FROM`, falling back to the historical literal if unset. */
 function emailFrom(env: Env): string {
@@ -293,6 +300,23 @@ export interface EmailContent {
 }
 
 /**
+ * The signature every body closes with — issue #105. One line, first person,
+ * naming a person and the business he works for.
+ *
+ * The defect this fixes is not a missing flourish. The three bodies below used
+ * to be a single canned sentence with no sender, no business name and no
+ * reason-for-receipt, which reads exactly like the boilerplate a bulk sender
+ * emits — a real recipient (dogfood, SUB-C467AA) found one in her spam folder
+ * and still nearly dismissed it as spam after finding it. "We" also named
+ * nobody: the portal fronts a one-person shop, so the site's own plain,
+ * first-person voice is both truer and more trustworthy than a corporate
+ * plural. Kept as one constant so the three bodies cannot drift apart, and so
+ * `composeHtmlBody`'s paragraph split (`src/mailProvider.ts`) has one shape to
+ * honour rather than three.
+ */
+const SIGNATURE = "\n\n— John, Heuron Technology"
+
+/**
  * The copy for each of the three sending states — illustrative, not pinned:
  * the Gate-A contract pins the email's `data-testid` hooks (§ Emails 11-13)
  * but, per its own note on `verdict-pill`-style copy elsewhere, not the exact
@@ -302,6 +326,14 @@ export interface EmailContent {
  * actually reaches the customer") and that no engineer-side identifier ever
  * rides in the body: `title` comes from `titleOf`, the customer's own words
  * from the intake form, never coord-authored text.
+ *
+ * #105 rewrote all three. Each subject now carries "— Heuron Technology" and
+ * each body closes with `SIGNATURE`, so the business the recipient actually
+ * knows is named in the two places she reads before deciding whether this is
+ * junk: the subject line in her inbox list, and the last line of the body.
+ * `preheader`, `ctaText`, `ctaHref` and the round-aware preheader below are
+ * deliberately unchanged — nothing about them was part of the defect, and the
+ * preheader is the one string the sealed suite reads a round number out of.
  */
 export async function emailContent(env: Env, submission: Submission, type: SendType): Promise<EmailContent> {
   const title = titleOf(submission)
@@ -310,9 +342,9 @@ export async function emailContent(env: Env, submission: Submission, type: SendT
   if (type === "signoff-ready") {
     const round = await getCurrentRound(env, submission.reference)
     return {
-      subject: "Your design is ready for sign-off",
+      subject: "Design ready for review — Heuron Technology",
       preheader: round ? `${title} — Round ${round.round}` : title,
-      body: `We've put together a design for "${title}." Take a look and either approve it or tell us what to change.`,
+      body: `Hi — I've put together a design for "${title}." Take a look and either approve it or tell me what to change.${SIGNATURE}`,
       ctaText: "Review the design",
       ctaHref,
     }
@@ -320,18 +352,18 @@ export async function emailContent(env: Env, submission: Submission, type: SendT
 
   if (type === "needs-input") {
     return {
-      subject: "We have a question for you",
+      subject: "A quick question about your project — Heuron Technology",
       preheader: title,
-      body: `Work on "${title}" is paused until you answer one question.`,
+      body: `Work on "${title}" is paused until you answer one question.${SIGNATURE}`,
       ctaText: "Answer the question",
       ctaHref,
     }
   }
 
   return {
-    subject: "Your work has shipped",
+    subject: "Your project has shipped — Heuron Technology",
     preheader: title,
-    body: `"${title}" is live.`,
+    body: `"${title}" is live. Thanks for working with me on this.${SIGNATURE}`,
     ctaText: "View the result",
     ctaHref,
   }
