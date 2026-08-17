@@ -41,6 +41,7 @@ function submission(overrides: Partial<Submission> = {}): Submission {
     projectScope: null,
     createdAt: "2026-01-01T00:00:00Z",
     coordRevision: 3,
+    projectId: null,
     ...overrides,
   }
 }

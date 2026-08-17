@@ -11,12 +11,14 @@ import {
 } from "./routes/leads"
 import { matchMockBundlePath, mockBundle } from "./routes/mocks"
 import { outbox } from "./routes/outbox"
+import { projectDetail } from "./routes/project"
 import { startForm, submitStart } from "./routes/start"
 import { submissionDetail, submissionRounds, submitSubmissionAction } from "./routes/submission"
 import type { Env } from "./types"
 
 const SUBMISSION_ROUNDS_PATH = /^\/submissions\/([^/?#]+)\/rounds$/
 const SUBMISSION_PATH = /^\/submissions\/([^/?#]+)$/
+const PROJECT_PATH = /^\/projects\/([^/?#]+)$/
 
 /**
  * Server-rendered portal pages — everything in this milestone's scope that is
@@ -61,6 +63,17 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
 
   if (pathname === "/submissions" && request.method === "GET") {
     return submissionsDashboard(request, env)
+  }
+
+  // The combined view for a customer relationship spanning more than one
+  // submission (issue #109) — the counterpart `/submissions/:id` links to
+  // once two or more of a customer's own submissions share a project. GET
+  // only: a project has nothing a customer writes to directly (see
+  // `routes/project.ts`).
+  const projectMatch = pathname.match(PROJECT_PATH)
+  if (projectMatch && request.method === "GET") {
+    const id = projectMatch[1]
+    if (id) return projectDetail(request, env, id)
   }
 
   // The outbox (issue #14) — a black-box read-back of what the portal decided
