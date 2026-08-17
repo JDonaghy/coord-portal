@@ -1,5 +1,6 @@
 import { parseFormData } from "../formData"
 import { resolveSiteIdentity } from "../identity"
+import { listLifecycleEvents, type LifecycleEvent, type LifecycleEventKind } from "../lifecycle"
 import { getOpenQuestion, recordAnswer, type OpenQuestion } from "../questions"
 import { escapeHtml, html, page, topbar } from "../render"
 import {
@@ -201,7 +202,7 @@ async function submitSignoff(
       return html(
         page(
           `${submission.reference} — coord-portal`,
-          awaitingSignoffDetail(email, submission, current, {
+          await awaitingSignoffDetail(env, email, submission, current, {
             composerOpen: true,
             error: "Tell us what should change before submitting.",
           }),
@@ -304,8 +305,8 @@ export function isOwnedBy(submission: Submission, email: string | null): boolean
 async function detailFor(env: Env, email: string | null, submission: Submission): Promise<string> {
   if (submission.status === "describing") return receipt(email, submission)
   const display = customerFacingStatus(submission.status)
-  if (isRollupStatus(display)) return rollupDetail(email, submission, display)
-  if (display === "shipped") return shippedDetail(email, submission)
+  if (isRollupStatus(display)) return rollupDetail(env, email, submission, display)
+  if (display === "shipped") return shippedDetail(env, email, submission)
   if (display === "needs-input") return needsInputDetail(env, email, submission)
   return signoffDetail(env, email, submission)
 }
@@ -386,16 +387,18 @@ function rollupCopy(status: SubmissionStatus): string {
  * copy — is a pure function of that one value, so the loop's return to
  * `In design` needs no separate template and no portal write to `status`.
  */
-function rollupDetail(
+async function rollupDetail(
+  env: Env,
   email: string | null,
   submission: Submission,
   display: SubmissionStatus,
-): string {
+): Promise<string> {
   const current = currentTimelineStep(display)
   const steps = TIMELINE_STEPS.map((step) => {
     const currentAttr = step === current ? ' data-current="true"' : ""
     return `    <li data-testid="timeline-step" data-step="${step}"${currentAttr}>${escapeHtml(statusText(step))}</li>`
   }).join("\n")
+  const events = await listLifecycleEvents(env, submission.reference)
 
   return `${topbar(email, "none")}
 <main data-testid="submission-detail" data-status="${escapeHtml(display)}">
@@ -411,6 +414,7 @@ ${steps}
     <p data-testid="rollup-copy">${escapeHtml(rollupCopy(display))}</p>
   </section>
 
+  ${activityTimeline(events)}
   ${roundHistoryLink(submission)}
 </main>`
 }
@@ -426,6 +430,63 @@ ${steps}
  */
 function roundHistoryLink(submission: Submission): string {
   return `<p class="round-history-aside"><a href="/submissions/${submission.id}/rounds">See all design rounds</a></p>`
+}
+
+/* ────────────────────── the dev-lifecycle timeline (#111) ────────────────── */
+
+/**
+ * Kind slug -> the customer-visible text. Portal-owned, exactly the shape
+ * `VERDICT_TEXT` (`src/rounds.ts`) already uses for a round's verdict: coord
+ * names *what happened*, this side decides *what that is called* on a
+ * customer's screen. Nothing here names an issue, a PR, a branch or a check
+ * by anything but its plain-language meaning — see `src/lifecycle.ts`.
+ */
+const LIFECYCLE_EVENT_TEXT: Record<LifecycleEventKind, string> = {
+  "work-started": "Development started",
+  "review-opened": "In code review",
+  "checks-passing": "Automated checks passing",
+  "checks-attention": "Automated checks need attention",
+  "preview-ready": "Preview available",
+  merged: "Changes merged",
+  deployed: "Deployed",
+}
+
+/**
+ * The read-only timeline issue #111 asks for, "alongside the existing
+ * design-round history" — one entry per lifecycle event the coordinator has
+ * pushed, oldest first, so it reads as the story of the work rather than an
+ * inbox. Renders nothing when coord has never pushed one: an empty "Activity"
+ * card is a worse first impression than no card at all, the same call
+ * `mockBundleSection` makes for a round with no mock yet.
+ *
+ * `preview-ready` is the only kind that ever carries a link — #107's
+ * Cloudflare Pages build, already sanitised against issue #16's wall in
+ * `src/lifecycle.ts` before it ever reaches storage, so this template does
+ * not have to re-decide whether a URL is safe to print.
+ */
+function activityTimeline(events: LifecycleEvent[]): string {
+  if (events.length === 0) return ""
+
+  const items = events
+    .map((event) => {
+      const link =
+        event.url !== null
+          ? ` &middot; <a href="${escapeHtml(event.url)}" data-testid="activity-preview-link" target="_blank" rel="noopener noreferrer">View preview &rarr;</a>`
+          : ""
+      return `      <li data-testid="activity-entry" data-kind="${escapeHtml(event.kind)}">
+        <span class="activity-label">${escapeHtml(LIFECYCLE_EVENT_TEXT[event.kind])}</span>
+        <span class="activity-date">${escapeHtml(event.occurredAt)}</span>${link}
+      </li>`
+    })
+    .join("\n")
+
+  return `  <section class="card activity-timeline" data-testid="activity-timeline">
+    <h2>Activity</h2>
+    <ul class="activity-list">
+${items}
+    </ul>
+  </section>
+`
 }
 
 /**
@@ -454,7 +515,12 @@ function followUpLink(submission: Submission): string {
  * nothing that asks the customer for anything — an affordance with no proposal
  * behind it is worse than no affordance.
  */
-function actionableDetail(email: string | null, submission: Submission): string {
+async function actionableDetail(
+  env: Env,
+  email: string | null,
+  submission: Submission,
+): Promise<string> {
+  const events = await listLifecycleEvents(env, submission.reference)
   return `${topbar(email, "none")}
 <main data-testid="submission-detail" data-status="${escapeHtml(submission.status)}">
   ${statusPill(submission.status)}
@@ -464,6 +530,8 @@ function actionableDetail(email: string | null, submission: Submission): string 
   <section class="card">
     <p>We'll email you the moment this is ready to look at.</p>
   </section>
+
+  ${activityTimeline(events)}
 </main>`
 }
 
@@ -490,12 +558,12 @@ async function signoffDetail(
   submission: Submission,
 ): Promise<string> {
   const current = await getCurrentRound(env, submission.reference)
-  if (!current) return actionableDetail(email, submission)
+  if (!current) return actionableDetail(env, email, submission)
 
   const display = derivedStatus(submission.status, { round: current.round, verdict: current.verdict })
-  if (display !== "awaiting-signoff") return rollupDetail(email, submission, display)
+  if (display !== "awaiting-signoff") return rollupDetail(env, email, submission, display)
 
-  return awaitingSignoffDetail(email, submission, current)
+  return awaitingSignoffDetail(env, email, submission, current)
 }
 
 interface ComposerState {
@@ -539,17 +607,19 @@ interface ComposerState {
  * comment comes back with the composer still open and the customer's place
  * kept.
  */
-function awaitingSignoffDetail(
+async function awaitingSignoffDetail(
+  env: Env,
   email: string | null,
   submission: Submission,
   round: DesignRound,
   state: ComposerState = {},
-): string {
+): Promise<string> {
   const next = round.round + 1
   const checked = state.composerOpen ? " checked" : ""
   const errorBlock = state.error
     ? `<p class="composer-error" data-testid="changes-error" role="alert">${escapeHtml(state.error)}</p>`
     : ""
+  const events = await listLifecycleEvents(env, submission.reference)
 
   return `${topbar(email, "none")}
 <main data-testid="submission-detail" data-status="awaiting-signoff">
@@ -596,6 +666,8 @@ ${mockBundleSection(submission, round)}
       <button type="submit" class="primary" data-testid="submit-changes">Submit changes</button>
     </div>
   </form>
+
+  ${activityTimeline(events)}
 </main>`
 }
 
@@ -741,7 +813,7 @@ ${comment}
  */
 async function needsInputDetail(env: Env, email: string | null, submission: Submission): Promise<string> {
   const open = await getOpenQuestion(env, submission.reference)
-  if (!open) return actionableDetail(email, submission)
+  if (!open) return actionableDetail(env, email, submission)
   return pausedDetail(email, submission, open)
 }
 
@@ -815,7 +887,8 @@ function questionText(value: unknown): string {
 }
 
 /** `shipped` — terminal, per `mocks/10-submission-shipped.html`. */
-function shippedDetail(email: string | null, submission: Submission): string {
+async function shippedDetail(env: Env, email: string | null, submission: Submission): Promise<string> {
+  const events = await listLifecycleEvents(env, submission.reference)
   return `${topbar(email, "none")}
 <main data-testid="submission-detail" data-status="${escapeHtml(submission.status)}">
   ${statusPill(submission.status)}
@@ -827,6 +900,7 @@ function shippedDetail(email: string | null, submission: Submission): string {
     <a class="button primary" href="#" data-testid="shipped-link">View the result &rarr;</a>
   </section>
 
+  ${activityTimeline(events)}
   ${roundHistoryLink(submission)}
   ${followUpLink(submission)}
 </main>`

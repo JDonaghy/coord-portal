@@ -39,6 +39,13 @@ export const COORD_OWNED_FIELDS = [
   // no customer-visible surface left that reads it, since #74 collapsed the
   // On-hold screen into the ordinary in-progress rollup template.
   "onhold_since",
+  // Issue #111: one entry in the dev-lifecycle timeline (a PR opening, tests
+  // going green, a preview build becoming available). Handled like
+  // `design_round` — read into its own append-only archive
+  // (`src/lifecycle.ts`) rather than the generic `coord_facts` last-value
+  // mirror, because a customer watching this timeline should still see "PR
+  // opened" after "Merged" lands.
+  "lifecycle_event",
 ] as const
 
 export type PortalOwnedField = (typeof PORTAL_OWNED_FIELDS)[number]

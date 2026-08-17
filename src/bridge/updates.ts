@@ -1,3 +1,4 @@
+import { lifecycleStatementsForPush } from "../lifecycle"
 import { recordNotificationForStatus } from "../notifications"
 import { roundStatementsForPush } from "../rounds"
 import { getSubmissionByReference, isSubmissionStatus } from "../submissions"
@@ -150,7 +151,10 @@ async function applyUpdate(env: Env, raw: unknown, ctx?: ExecutionContext): Prom
   }
 
   for (const [field, value] of Object.entries(update.fields)) {
-    if (field === "status" || !isCoordOwnedField(field)) continue
+    // `lifecycle_event` (#111) is append-only, like `design_round` below it —
+    // a second push must not overwrite the first the way this loop's
+    // last-value mirror would. It gets its own archive instead.
+    if (field === "status" || field === "lifecycle_event" || !isCoordOwnedField(field)) continue
     // Coord-owned facts this milestone has no column for. Kept verbatim rather
     // than dropped: acknowledging a write and then discarding it is the one
     // behaviour a sync bridge must never have. #10/#13 render them.
@@ -174,6 +178,14 @@ async function applyUpdate(env: Env, raw: unknown, ctx?: ExecutionContext): Prom
   // round can never exist without the push that authorised it.
   statements.push(
     ...(await roundStatementsForPush(env, submissionId, update.fields, update.revision, updatedAt)),
+  )
+
+  // Issue #111's timeline entry, if this push carries one — same
+  // batch-not-awaited-elsewhere shape as the round archive just above, and no
+  // extra D1 read: unlike a round, an event never needs to look at what is
+  // already stored to know where it lands.
+  statements.push(
+    ...lifecycleStatementsForPush(env, submissionId, update.fields, update.revision, updatedAt),
   )
 
   // No event is emitted here, ever. The portal only publishes customer-authored
