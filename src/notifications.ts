@@ -26,6 +26,49 @@ import type { Env } from "./types"
  * *decided* to send.
  */
 
+/**
+ * NOTE (issue #110, chat thread): a posted message does NOT join
+ * `SENDING_TYPES` below, deliberately. Issue #110 asks "does a new message
+ * trigger an email... or is it portal-only?" and flags that #83/#98's
+ * CTA-link gap — a call to action built, stored and rendered on `/outbox`,
+ * and dropped at the actual provider boundary, live for a whole milestone
+ * before anyone noticed — is the failure mode to check against before
+ * deciding. That gap does not repeat here, for two independent reasons
+ * rather than one:
+ *
+ *   1. A message is never lost. `src/messages.ts`'s `postMessage` is a
+ *      single durable INSERT with no delivery leg at all — there is no
+ *      provider boundary for a message to be dropped at the way #83's CTA
+ *      was, no cache, no queue with a retry policy that can silently
+ *      exhaust. It is visible to both parties the moment either reloads
+ *      `/submissions/:id`, which is this milestone's explicitly-scoped bar
+ *      (issue #110's own non-goal: "not proposing real-time delivery... a
+ *      page that shows new messages on reload/refresh is enough for v1").
+ *   2. Every existing transactional email's call to action already lands on
+ *      `/submissions/:id` (`emailContent` below, `ctaHref`) — the exact page
+ *      the thread lives on. A customer who gets any of the three pinned
+ *      emails is already one click from the thread; there is no separate
+ *      "message" surface that could go unlinked the way #83's CTA did.
+ *
+ * A dedicated "you have a new message" email is a legitimate future
+ * refinement (paired with the "digest-first, not instant" restraint this
+ * module already argues for above) but is out of scope here: it would need
+ * its own decision about the *operator* side (this module has no concept of
+ * sending TO an operator today — every row in `outbox` is addressed to
+ * `submission.customerEmail`), and about coalescing multiple messages sent in
+ * one sitting, neither of which #110 asks this milestone to solve.
+ *
+ * #98 could not be located anywhere in this repo's history, code or tests as
+ * of this change — grepping the tree for "#98" or "issue #98" turns up
+ * nothing. If it names a real, resolved defect it lives in a different repo
+ * (most likely the coordinator's own issue tracker) and its resolution could
+ * not be checked from here; the two points above are this change's own
+ * answer to "don't silently drop a customer message," reasoned from what
+ * #83's actual defect and fix were (see `src/drain.ts`, `src/mailProvider.ts`,
+ * `tests/acceptance/ms-3/83-email-link.spec.ts`), not from a document this
+ * repo does not have.
+ */
+
 /** Contract § `data-testid` hooks, Emails (11-13): the pinned `data-email-type`s. */
 export const SENDING_TYPES = ["signoff-ready", "needs-input", "shipped"] as const
 

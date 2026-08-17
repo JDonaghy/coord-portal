@@ -371,6 +371,48 @@ const APP_STYLES = `
     color: var(--text-dim); font-size: var(--step--1); font-style: italic;
   }
 
+  /* ── The message thread (issue #110) ──────────────────────────────────────
+     src/routes/submission.ts's messageThreadSection — rendered on every
+     submission-detail template except the describing receipt (see that
+     route's module comment), and reused as-is by src/routes/leads.ts for the
+     operator's thread on a promoted lead's /leads/:id. Not scoped to
+     main[data-testid=submission-detail] the way most of this sheet's other
+     per-screen rules are, because it deliberately renders inside two
+     different <main>s. No dedicated mock — this feature postdates the
+     Gate-A contract's own mocks. */
+  .message-thread { margin-top: 2rem; }
+  .message-thread h2 {
+    font-size: var(--step-0); text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-dim); margin: 0 0 0.75rem;
+  }
+  ul.message-list { list-style: none; margin: 0 0 1.25rem; padding: 0; display: grid; gap: 0.75rem; }
+  .message-item {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 0.85rem 1rem;
+  }
+  /* A message from the operator (the business, not the coordinator daemon —
+     see src/messages.ts) is visually distinct from the customer's own words,
+     the same way an email client sets a reply apart from the original. */
+  .message-item[data-author-role="operator"] { border-left: 3px solid var(--accent); }
+  .message-item[data-author-role="customer"] { border-left: 3px solid var(--line-strong); }
+  .message-meta {
+    display: flex; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.35rem;
+    font-size: var(--step--1); color: var(--text-faint);
+  }
+  .message-author { font-weight: 600; color: var(--text-dim); }
+  .message-body { margin: 0; white-space: pre-wrap; }
+  .message-thread-empty { color: var(--text-faint); font-size: var(--step--1); margin: 0 0 1.25rem; }
+  form.message-form textarea {
+    width: 100%; font: inherit; padding: 0.65rem 0.75rem; border-radius: var(--r-md);
+    border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); resize: vertical;
+  }
+  form.message-form .actions { display: flex; justify-content: flex-end; margin-top: 0.75rem; }
+  .message-error {
+    background: var(--fail-wash); color: var(--fail); border: 1px solid var(--fail);
+    border-radius: var(--r-md); padding: 0.75rem 1rem; font-size: var(--step--1);
+    font-weight: 600; margin-bottom: 1rem;
+  }
+
   /* ── The combined project view (issue #109) ───────────────────────────────
      routes/project.ts. No dedicated mock — this screen postdates the Gate-A
      contract's own mocks — so it reuses .card, .round-entry-head and

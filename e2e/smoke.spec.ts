@@ -31,7 +31,7 @@ test("the static site and the API share one origin", async ({ page }) => {
   // Pinned to the migration head on purpose: it moves in the same commit that
   // adds a migration, so a migration that silently failed to apply shows up
   // here rather than as a confusing 500 three screens later.
-  expect(body.checks.d1.detail).toMatch(/schema 0012/)
+  expect(body.checks.d1.detail).toMatch(/schema 0013/)
   expect(body.checks.r2.ok).toBe(true)
 })
 

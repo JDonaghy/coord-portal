@@ -1,5 +1,6 @@
 import { parseFormData } from "../formData"
 import { resolveSiteIdentity } from "../identity"
+import { listMessages, postMessage, type Message, type MessageAuthorRole } from "../messages"
 import { getOpenQuestion, recordAnswer, type OpenQuestion } from "../questions"
 import { escapeHtml, html, page, topbar } from "../render"
 import {
@@ -61,19 +62,35 @@ export async function submissionDetail(
     // Same 404 either way (issue #12: "a customer can only ever see their own
     // submissions"). Knowing the URL is not authorisation, and a 404 that only
     // fires for someone else's id would itself confirm the id exists.
-    return html(page("Not found — coord-portal", notFound()), { status: 404 })
+    //
+    // This stays true for an operator too (issue #110's chat thread does not
+    // reopen it): `tests/acceptance/ms-2/33-lead-triage-promotion.spec.ts`,
+    // "the promoted submission reference is plain text the operator cannot
+    // open", sealed-asserts `GET /submissions/:id` still 404s for an operator
+    // — "ms-1's ownership scoping is not reopened for the operator." The
+    // operator's half of the thread lives on `/leads/:id`
+    // (`src/routes/leads.ts`) instead, reached the way an operator already
+    // reaches everything else about a promoted lead, never through this
+    // customer-only route.
+    return notFoundResponse()
   }
 
-  const main = await detailFor(env, email, submission)
+  const thread = { messages: await listMessages(env, submission.reference) }
+  const main = await detailFor(env, email, submission, thread)
   return html(page(`${submission.reference} — coord-portal`, main))
 }
 
 /**
  * POST /submissions/:id — everything the customer can *say* about one
- * submission: answering an open question (#11), and approving or requesting
- * changes on the current design round (#13).
+ * submission: answering an open question (#11), approving or requesting
+ * changes on the current design round (#13), and — issue #110 — posting a
+ * message to the thread. Every one of these is customer-only, exactly
+ * as it was before #110 — an operator's half of the thread is a separate
+ * route, `POST /leads/:id/message` (`src/routes/leads.ts`), not this one; see
+ * `submissionDetail`'s module comment for why this route never reopens ms-1's
+ * ownership scoping for an operator.
  *
- * One route, dispatched on an `action` field, because all three are the same
+ * One route, dispatched on an `action` field, because all four are the same
  * shape: a plain form post to the page that rendered it, no client-side script
  * required, and a 303 back so a reload never resubmits. Which round or question
  * the write belongs to is always derived server-side and never read from the
@@ -87,8 +104,14 @@ export async function submitSubmissionAction(
 ): Promise<Response> {
   const email = await resolveSiteIdentity(request, env)
   const submission = await getSubmission(env, id)
-  if (!submission || !isOwnedBy(submission, email)) {
-    return html(page("Not found — coord-portal", notFound()), { status: 404 })
+  // The `email === null` disjunct is redundant with `isOwnedBy` (which already
+  // requires a non-null email) in every case it can actually happen — it is
+  // here so the compiler, not just the reader, knows `email` is a `string`
+  // below this guard, the same way `submissionRounds` above stays satisfied
+  // with `isOwnedBy` alone because it never needs to hand `email` anywhere
+  // that requires non-null.
+  if (!submission || !isOwnedBy(submission, email) || email === null) {
+    return notFoundResponse()
   }
 
   // `request.formData()` throws a raw `TypeError` — an unhandled 500 — when
@@ -107,15 +130,15 @@ export async function submitSubmissionAction(
   // through `parseFormData`, which turns that throw into `null`: any failure
   // there gets the same 404, not a 5xx.
   const contentType = request.headers.get("content-type") ?? ""
-  if (!isFormContentType(contentType)) {
-    return html(page("Not found — coord-portal", notFound()), { status: 404 })
-  }
+  if (!isFormContentType(contentType)) return notFoundResponse()
 
   const form = await parseFormData(request)
-  if (!form) {
-    return html(page("Not found — coord-portal", notFound()), { status: 404 })
-  }
+  if (!form) return notFoundResponse()
   const action = stringField(form, "action")
+
+  if (action === "message") {
+    return submitMessage(env, submission, { role: "customer", email }, form)
+  }
 
   if (action === "approve" || action === "request-changes") {
     return submitSignoff(env, email, submission, action, form)
@@ -141,7 +164,8 @@ async function submitAnswer(
   const open =
     submission.status === "needs-input" ? await getOpenQuestion(env, submission.reference) : null
   if (!open) {
-    const main = await detailFor(env, email, submission)
+    const thread = { messages: await listMessages(env, submission.reference) }
+    const main = await detailFor(env, email, submission, thread)
     return html(page(`${submission.reference} — coord-portal`, main), { status: 409 })
   }
 
@@ -149,10 +173,11 @@ async function submitAnswer(
   if (!answer) {
     // "an empty answer does not end the pause": nothing is recorded, and the
     // same open question is redisplayed so the composer stays reachable.
+    const thread = { messages: await listMessages(env, submission.reference) }
     return html(
       page(
         `${submission.reference} — coord-portal`,
-        pausedDetail(email, submission, open, "Please write an answer before sending."),
+        pausedDetail(email, submission, open, thread, "Please write an answer before sending."),
       ),
       { status: 400 },
     )
@@ -191,17 +216,19 @@ async function submitSignoff(
   if (!current || current.verdict !== "pending") {
     // Nothing is awaiting this customer's sign-off — already decided, superseded,
     // or the submission has moved on. Re-render what is actually true.
-    const main = await detailFor(env, email, submission)
+    const thread = { messages: await listMessages(env, submission.reference) }
+    const main = await detailFor(env, email, submission, thread)
     return html(page(`${submission.reference} — coord-portal`, main), { status: 409 })
   }
 
   if (action === "request-changes") {
     const comment = stringField(form, "changesComment") || stringField(form, "comment")
     if (!comment) {
+      const thread = { messages: await listMessages(env, submission.reference) }
       return html(
         page(
           `${submission.reference} — coord-portal`,
-          awaitingSignoffDetail(email, submission, current, {
+          awaitingSignoffDetail(email, submission, current, thread, {
             composerOpen: true,
             error: "Tell us what should change before submitting.",
           }),
@@ -222,6 +249,43 @@ async function submitSignoff(
   })
 }
 
+/**
+ * Posting a message (#110) — customer-only on this route (see
+ * `submitSubmissionAction`'s module comment for the operator's separate
+ * route). `actor.email` is `resolveSiteIdentity`'s reading, never taken from
+ * the form: the same "who is speaking is derived server-side, never asserted
+ * by the client" rule every other write on this route already follows.
+ *
+ * Purely additive — see `src/messages.ts`'s module comment for why this never
+ * touches `submissions.status`, a design round or a signoff. A blank message
+ * does not get sent: the current screen is redisplayed with an error and
+ * nothing recorded — the same shape `submitAnswer`'s blank-answer branch
+ * already uses.
+ */
+async function submitMessage(
+  env: Env,
+  submission: Submission,
+  actor: { role: MessageAuthorRole; email: string },
+  form: FormData,
+): Promise<Response> {
+  const body = stringField(form, "body")
+  if (!body) {
+    const thread = {
+      messages: await listMessages(env, submission.reference),
+      error: "Write a message before sending.",
+    }
+    const main = await detailFor(env, actor.email, submission, thread)
+    return html(page(`${submission.reference} — coord-portal`, main), { status: 400 })
+  }
+
+  await postMessage(env, submission.reference, actor.role, actor.email, body)
+
+  return new Response(null, {
+    status: 303,
+    headers: { location: `/submissions/${submission.id}` },
+  })
+}
+
 function stringField(form: FormData, name: string): string {
   const value = form.get(name)
   return typeof value === "string" ? value.trim() : ""
@@ -235,8 +299,11 @@ function stringField(form: FormData, name: string): string {
  * (a `multipart/form-data` header with a missing or malformed `boundary=`
  * still passes here and throws in `request.formData()`); that failure mode
  * is handled separately, by wrapping the parse itself in try/catch.
+ *
+ * Exported so `src/routes/leads.ts`'s `POST /leads/:id/message` (issue #110)
+ * shares this exact check rather than a second copy of it.
  */
-function isFormContentType(contentType: string): boolean {
+export function isFormContentType(contentType: string): boolean {
   const value = contentType.toLowerCase()
   return (
     value.startsWith("application/x-www-form-urlencoded") || value.startsWith("multipart/form-data")
@@ -260,7 +327,7 @@ export async function submissionRounds(
   const email = await resolveSiteIdentity(request, env)
   const submission = await getSubmission(env, id)
   if (!submission || !isOwnedBy(submission, email)) {
-    return html(page("Not found — coord-portal", notFound()), { status: 404 })
+    return notFoundResponse()
   }
 
   const rounds = await listRounds(env, submission.reference)
@@ -285,6 +352,11 @@ export function isOwnedBy(submission: Submission, email: string | null): boolean
   return email !== null && submission.customerEmail === email
 }
 
+/** The one 404 every refusal on this route renders — see `submissionDetail`'s module comment. */
+function notFoundResponse(): Response {
+  return html(page("Not found — coord-portal", notFound()), { status: 404 })
+}
+
 /**
  * Dispatches to the one template `data-status` actually calls for. Every
  * branch renders the same `submission-detail` root and `status-pill` (the
@@ -300,14 +372,118 @@ export function isOwnedBy(submission: Submission, email: string | null): boolean
  * a customer-visible value distinct from, and computed from, what is
  * actually stored. Every other status passes through unchanged, so nothing
  * below this line needs to know the collapse happened at all.
+ *
+ * `thread` (issue #110) rides along unchanged through every branch: the
+ * message thread is "purely informational alongside the existing structured
+ * signoff/question flow" (see `src/messages.ts`), so it is rendered
+ * identically regardless of which status template it lands inside — every
+ * branch below appends it via `messageThreadSection`, the one exception being
+ * `receipt` (the `describing` template), which does not: that screen's own
+ * copy already tells the customer "No one is chatting with you right now,"
+ * and a chat box under that sentence would contradict it.
  */
-async function detailFor(env: Env, email: string | null, submission: Submission): Promise<string> {
+async function detailFor(
+  env: Env,
+  email: string | null,
+  submission: Submission,
+  thread: ThreadContext,
+): Promise<string> {
   if (submission.status === "describing") return receipt(email, submission)
   const display = customerFacingStatus(submission.status)
-  if (isRollupStatus(display)) return rollupDetail(email, submission, display)
-  if (display === "shipped") return shippedDetail(email, submission)
-  if (display === "needs-input") return needsInputDetail(env, email, submission)
-  return signoffDetail(env, email, submission)
+  if (isRollupStatus(display)) return rollupDetail(email, submission, display, thread)
+  if (display === "shipped") return shippedDetail(email, submission, thread)
+  if (display === "needs-input") return needsInputDetail(env, email, submission, thread)
+  return signoffDetail(env, email, submission, thread)
+}
+
+/**
+ * Every message-thread renderer's second half — the list (or empty state)
+ * plus the composer — bundled with an optional composer error so
+ * `submitMessage`'s blank-body redisplay does not need a fifth positional
+ * parameter threaded through every status template between it and here.
+ */
+export interface ThreadContext {
+  messages: Message[]
+  error?: string
+}
+
+/**
+ * The message thread (#110), appended to every status template except the
+ * `describing` receipt — see `detailFor`'s module comment.
+ *
+ * `viewerRole` decides how each message's author is labelled
+ * (`messageAuthorLabel`): this file only ever calls it with `"customer"`
+ * (every caller is a customer-owned template — see `detailFor`), but the
+ * function itself is shape-agnostic and exported so `src/routes/leads.ts`'s
+ * operator-side thread on `/leads/:id` can reuse it with `"operator"` rather
+ * than a second copy of this rendering.
+ *
+ * `postUrl` is the only submission-specific thing this function needs — the
+ * form posts back to whichever route rendered it, same as every other form in
+ * this portal. Here that is always `/submissions/:id` (the shared
+ * action-dispatcher, hence the hidden `action=message` field); on
+ * `/leads/:id` it is the operator's own dedicated `POST /leads/:id/message`,
+ * which has no dispatcher to feed and simply ignores the same hidden field.
+ */
+export function messageThreadSection(
+  postUrl: string,
+  thread: ThreadContext,
+  viewerRole: MessageAuthorRole,
+): string {
+  const errorBlock = thread.error
+    ? `<p class="message-error" data-testid="message-error" role="alert">${escapeHtml(thread.error)}</p>`
+    : ""
+  const list =
+    thread.messages.length > 0
+      ? `<ul class="message-list" data-testid="message-list">
+${thread.messages.map((message) => messageItem(message, viewerRole)).join("\n")}
+    </ul>`
+      : `<p class="message-thread-empty" data-testid="message-thread-empty">No messages yet.</p>`
+
+  return `  <section class="message-thread" data-testid="message-thread">
+    <h2>Messages</h2>
+    ${list}
+    ${errorBlock}
+    <form class="message-form" method="POST" action="${escapeHtml(postUrl)}" data-testid="message-form">
+      <input type="hidden" name="action" value="message">
+      <label for="messageBody" class="visually-hidden">Write a message</label>
+      <textarea id="messageBody" name="body" rows="3" required
+        data-testid="message-field" placeholder="Write a message&hellip;"></textarea>
+      <div class="actions">
+        <button type="submit" class="primary" data-testid="submit-message">Send message</button>
+      </div>
+    </form>
+  </section>`
+}
+
+function messageItem(message: Message, viewerRole: MessageAuthorRole): string {
+  return `      <li class="message-item" data-testid="message-item" data-author-role="${message.authorRole}">
+        <div class="message-meta">
+          <span class="message-author" data-testid="message-author">${escapeHtml(messageAuthorLabel(message, viewerRole))}</span>
+          <span class="message-timestamp" data-testid="message-timestamp">${escapeHtml(message.createdAt)}</span>
+        </div>
+        <p class="message-body" data-testid="message-body">${escapeHtml(message.body)}</p>
+      </li>`
+}
+
+/**
+ * "You" for a message the viewer themself posted. Otherwise: the business's
+ * name, never a personal address, for an operator's message read by the
+ * customer — the same brand `SIGNATURE` in `src/notifications.ts` closes
+ * every email with, and for the same reason an operator's own address stays
+ * off a customer-facing screen; or the customer's own email for a customer's
+ * message read by the operator, who has to know which customer it came from
+ * the way every other operator screen in this portal already names them
+ * (`src/routes/leads.ts`'s `lead-contact-email`).
+ *
+ * Exported for the one pure-function unit test this file's rendering logic
+ * gets — see `test/messages.test.ts` — the rest of this module's templates
+ * are covered black-box, per this repo's testing tiers (CLAUDE.md).
+ */
+export function messageAuthorLabel(message: Message, viewerRole: MessageAuthorRole): string {
+  if (message.authorRole === viewerRole) return "You"
+  if (message.authorRole === "operator") return "Heuron Technology"
+  return message.authorEmail
 }
 
 function statusPill(status: SubmissionStatus): string {
@@ -390,6 +566,7 @@ function rollupDetail(
   email: string | null,
   submission: Submission,
   display: SubmissionStatus,
+  thread: ThreadContext,
 ): string {
   const current = currentTimelineStep(display)
   const steps = TIMELINE_STEPS.map((step) => {
@@ -412,6 +589,8 @@ ${steps}
   </section>
 
   ${roundHistoryLink(submission)}
+
+${messageThreadSection(`/submissions/${submission.id}`, thread, "customer")}
 </main>`
 }
 
@@ -454,7 +633,7 @@ function followUpLink(submission: Submission): string {
  * nothing that asks the customer for anything — an affordance with no proposal
  * behind it is worse than no affordance.
  */
-function actionableDetail(email: string | null, submission: Submission): string {
+function actionableDetail(email: string | null, submission: Submission, thread: ThreadContext): string {
   return `${topbar(email, "none")}
 <main data-testid="submission-detail" data-status="${escapeHtml(submission.status)}">
   ${statusPill(submission.status)}
@@ -464,6 +643,8 @@ function actionableDetail(email: string | null, submission: Submission): string 
   <section class="card">
     <p>We'll email you the moment this is ready to look at.</p>
   </section>
+
+${messageThreadSection(`/submissions/${submission.id}`, thread, "customer")}
 </main>`
 }
 
@@ -488,14 +669,15 @@ async function signoffDetail(
   env: Env,
   email: string | null,
   submission: Submission,
+  thread: ThreadContext,
 ): Promise<string> {
   const current = await getCurrentRound(env, submission.reference)
-  if (!current) return actionableDetail(email, submission)
+  if (!current) return actionableDetail(email, submission, thread)
 
   const display = derivedStatus(submission.status, { round: current.round, verdict: current.verdict })
-  if (display !== "awaiting-signoff") return rollupDetail(email, submission, display)
+  if (display !== "awaiting-signoff") return rollupDetail(email, submission, display, thread)
 
-  return awaitingSignoffDetail(email, submission, current)
+  return awaitingSignoffDetail(email, submission, current, thread)
 }
 
 interface ComposerState {
@@ -543,6 +725,7 @@ function awaitingSignoffDetail(
   email: string | null,
   submission: Submission,
   round: DesignRound,
+  thread: ThreadContext,
   state: ComposerState = {},
 ): string {
   const next = round.round + 1
@@ -596,6 +779,8 @@ ${mockBundleSection(submission, round)}
       <button type="submit" class="primary" data-testid="submit-changes">Submit changes</button>
     </div>
   </form>
+
+${messageThreadSection(`/submissions/${submission.id}`, thread, "customer")}
 </main>`
 }
 
@@ -739,10 +924,15 @@ ${comment}
  * "a submission with no open question offers no answer channel" is a
  * black-box guarantee, not an oversight.
  */
-async function needsInputDetail(env: Env, email: string | null, submission: Submission): Promise<string> {
+async function needsInputDetail(
+  env: Env,
+  email: string | null,
+  submission: Submission,
+  thread: ThreadContext,
+): Promise<string> {
   const open = await getOpenQuestion(env, submission.reference)
-  if (!open) return actionableDetail(email, submission)
-  return pausedDetail(email, submission, open)
+  if (!open) return actionableDetail(email, submission, thread)
+  return pausedDetail(email, submission, open, thread)
 }
 
 /**
@@ -758,11 +948,22 @@ async function needsInputDetail(env: Env, email: string | null, submission: Subm
  * `error`, when present, redisplays the same open question with a message
  * instead of advancing anything — the one path that reaches this is a blank
  * answer, which must not end the pause (see `submitAnswer`).
+ *
+ * The message thread (`messageThreadSection`, issue #110) still renders here,
+ * and that is not the same "other customer action" the contract's "no other
+ * customer action... while a question is open" rules out — that guarantee is
+ * about a second *decision* surface (the sign-off screen's approve /
+ * request-changes affordances leaking onto a paused submission, per
+ * `tests/acceptance/ms-1/11-question-channel.spec.ts`'s
+ * `OTHER_ACTION_TESTIDS`), not about silence. A chat message never advances or
+ * blocks anything (`src/messages.ts`), so it is not one of the two decisions
+ * the pause exists to keep the customer from being asked for at once.
  */
 function pausedDetail(
   email: string | null,
   submission: Submission,
   question: OpenQuestion,
+  thread: ThreadContext,
   error?: string,
 ): string {
   const errorBlock = error
@@ -794,6 +995,8 @@ function pausedDetail(
       </div>
     </form>
   </section>
+
+${messageThreadSection(`/submissions/${submission.id}`, thread, "customer")}
 </main>`
 }
 
@@ -815,7 +1018,7 @@ function questionText(value: unknown): string {
 }
 
 /** `shipped` — terminal, per `mocks/10-submission-shipped.html`. */
-function shippedDetail(email: string | null, submission: Submission): string {
+function shippedDetail(email: string | null, submission: Submission, thread: ThreadContext): string {
   return `${topbar(email, "none")}
 <main data-testid="submission-detail" data-status="${escapeHtml(submission.status)}">
   ${statusPill(submission.status)}
@@ -829,6 +1032,8 @@ function shippedDetail(email: string | null, submission: Submission): string {
 
   ${roundHistoryLink(submission)}
   ${followUpLink(submission)}
+
+${messageThreadSection(`/submissions/${submission.id}`, thread, "customer")}
 </main>`
 }
 
