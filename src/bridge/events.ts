@@ -12,17 +12,21 @@ import type { Env } from "../types"
  * each other forever. A one-way stream of "things that happened on this side"
  * is what makes the loop terminate.
  *
- * `submission.created` (#9) and `question.answered` (#11, `src/questions.ts`)
- * are emitted today; `signoff.approved` / `signoff.changes_requested` are
- * #13's screen and do not exist yet. The vocabulary is closed here anyway
- * because it is the half of the contract #15 owns, and #1982 is building
- * against it today.
+ * `submission.created` (#9), `question.answered` (#11, `src/questions.ts`)
+ * and the sign-off pair (#13, `src/rounds.ts`) are emitted today.
+ * `preview.approved` / `preview.changes_requested` (#107, `src/previewReviews.ts`)
+ * are the customer's verdict on a PR's pre-merge preview build — the same
+ * shape as the sign-off pair, one event per decision, for a different
+ * decision. The vocabulary is closed here anyway because it is the half of
+ * the contract #15 owns, and #1982 is building against it today.
  */
 export const BRIDGE_EVENT_TYPES = [
   "submission.created",
   "signoff.approved",
   "signoff.changes_requested",
   "question.answered",
+  "preview.approved",
+  "preview.changes_requested",
 ] as const
 
 export type BridgeEventType = (typeof BRIDGE_EVENT_TYPES)[number]

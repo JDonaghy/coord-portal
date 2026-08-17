@@ -2,6 +2,11 @@ import { parseFormData } from "../formData"
 import { resolveSiteIdentity } from "../identity"
 import { listLifecycleEvents, type LifecycleEvent, type LifecycleEventKind } from "../lifecycle"
 import { listMessages, postMessage, type Message, type MessageAuthorRole } from "../messages"
+import {
+  derivedQualityCheckStatus,
+  getCurrentPreviewReview,
+  recordPreviewReview,
+} from "../previewReviews"
 import { getOpenQuestion, recordAnswer, type OpenQuestion } from "../questions"
 import { escapeHtml, html, page, topbar } from "../render"
 import {
@@ -144,6 +149,9 @@ export async function submitSubmissionAction(
   if (action === "approve" || action === "request-changes") {
     return submitSignoff(env, email, submission, action, form)
   }
+  if (action === "approve-preview" || action === "request-preview-changes") {
+    return submitPreviewReviewAction(env, email, submission, action, form)
+  }
   return submitAnswer(env, email, submission, form)
 }
 
@@ -242,6 +250,62 @@ async function submitSignoff(
     // Approving asks for no comment — the contract pins `round-comment` as
     // "present only on rounds where changes were requested".
     await recordSignoff(env, submission.reference, current.round, "approved", null)
+  }
+
+  return new Response(null, {
+    status: 303,
+    headers: { location: `/submissions/${submission.id}` },
+  })
+}
+
+/**
+ * Approving, or requesting changes on, the submission's current preview build
+ * (#107). Mirrors `submitSignoff` above exactly, one decision swapped for
+ * another: which preview URL is being decided comes from `submission.previewUrl`,
+ * never from the form, and only when nobody has already reviewed that exact
+ * URL — see `getCurrentPreviewReview`. A stale form (the operator queued a
+ * new preview, or the customer already decided this one in another tab)
+ * re-renders whatever is actually true rather than silently accepting a
+ * decision on a build nobody is looking at anymore.
+ *
+ * A blank comment does not record anything, same as `submitSignoff`'s: the
+ * composer is redisplayed, open, with the message.
+ */
+async function submitPreviewReviewAction(
+  env: Env,
+  email: string | null,
+  submission: Submission,
+  action: "approve-preview" | "request-preview-changes",
+  form: FormData,
+): Promise<Response> {
+  const previewUrl = submission.status === "quality-check" ? submission.previewUrl : null
+  const current = previewUrl ? await getCurrentPreviewReview(env, submission.reference, previewUrl) : null
+
+  if (!previewUrl || current) {
+    const thread = { messages: await listMessages(env, submission.reference) }
+    const main = await detailFor(env, email, submission, thread)
+    return html(page(`${submission.reference} — coord-portal`, main), { status: 409 })
+  }
+
+  if (action === "request-preview-changes") {
+    const comment = stringField(form, "previewComment")
+    if (!comment) {
+      const thread = { messages: await listMessages(env, submission.reference) }
+      return html(
+        page(
+          `${submission.reference} — coord-portal`,
+          await previewReviewDetail(env, email, submission, previewUrl, thread, {
+            composerOpen: true,
+            error: "Tell us what should change before submitting.",
+          }),
+        ),
+        { status: 400 },
+      )
+    }
+    await recordPreviewReview(env, submission.reference, previewUrl, "changes-requested", comment)
+  } else {
+    // Approving asks for no comment — same rule the design round's sign-off follows.
+    await recordPreviewReview(env, submission.reference, previewUrl, "approved", null)
   }
 
   return new Response(null, {
@@ -391,6 +455,9 @@ async function detailFor(
 ): Promise<string> {
   if (submission.status === "describing") return receipt(email, submission)
   const display = customerFacingStatus(submission.status)
+  if (display === "quality-check" && submission.previewUrl) {
+    return qualityCheckDetail(env, email, submission, thread)
+  }
   if (isRollupStatus(display)) return rollupDetail(env, email, submission, display, thread)
   if (display === "shipped") return shippedDetail(env, email, submission, thread)
   if (display === "needs-input") return needsInputDetail(env, email, submission, thread)
@@ -930,6 +997,127 @@ export function mockBundleHref(submission: Submission, round: DesignRound): stri
   if (!bundle) return null
   if (/^https?:\/\//i.test(bundle) || bundle.startsWith("/")) return bundle
   return `/submissions/${submission.id}/rounds/${round.round}/mock`
+}
+
+/* ─────────────────────── the pre-merge preview gate (#107) ─────────────── */
+
+/**
+ * `quality-check` with a preview queued — issue #107.
+ *
+ * Three outcomes, the same shape `signoffDetail` above already uses for the
+ * design-round loop, and none of them a write to `submissions.status`:
+ *
+ *   no review yet on this exact URL  -> the preview, with Approve / Request changes.
+ *   changes requested                -> `In progress`. Nothing is left to look
+ *                                        at until a new preview lands.
+ *   approved                         -> the ordinary read-only `quality-check`
+ *                                        card. Approving does not move the
+ *                                        submission anywhere by itself — the
+ *                                        operator's merge and eventual
+ *                                        `shipped` push are separate, manual
+ *                                        steps (design doc, "this issue does
+ *                                        not automate that step").
+ *
+ * `qualityCheckDetail` is only ever reached once `submission.previewUrl` is
+ * set (see `detailFor`'s dispatch) — a `quality-check` submission with no
+ * preview queued yet falls through to the ordinary rollup template instead,
+ * the same "an affordance with no proposal behind it is worse than no
+ * affordance" call `actionableDetail` already makes for the sign-off loop.
+ */
+async function qualityCheckDetail(
+  env: Env,
+  email: string | null,
+  submission: Submission,
+  thread: ThreadContext,
+): Promise<string> {
+  const previewUrl = submission.previewUrl
+  if (!previewUrl) return rollupDetail(env, email, submission, "quality-check", thread)
+
+  const current = await getCurrentPreviewReview(env, submission.reference, previewUrl)
+  if (!current) return previewReviewDetail(env, email, submission, previewUrl, thread)
+
+  const display = derivedQualityCheckStatus(submission.status, { verdict: current.verdict })
+  return rollupDetail(env, email, submission, display, thread)
+}
+
+interface PreviewComposerState {
+  /** Re-open the request-changes composer server-side after a rejected submit. */
+  composerOpen?: boolean
+  error?: string
+}
+
+/**
+ * The preview-review screen and its request-changes composer — deliberately
+ * "the same UI shape as the existing design-round signoff, not a new
+ * interaction pattern" (design doc): the disclosure mechanism, the CSS
+ * classes and the keyboard behaviour are exactly `awaitingSignoffDetail`'s
+ * (see that function's doc comment for why the toggle is a real checkbox and
+ * not a `<label role="button">` alone). Only the content — a link to the real
+ * build instead of a mock, no round number, no decomposition — differs.
+ */
+async function previewReviewDetail(
+  env: Env,
+  email: string | null,
+  submission: Submission,
+  previewUrl: string,
+  thread: ThreadContext,
+  state: PreviewComposerState = {},
+): Promise<string> {
+  const checked = state.composerOpen ? " checked" : ""
+  const errorBlock = state.error
+    ? `<p class="composer-error" data-testid="preview-changes-error" role="alert">${escapeHtml(state.error)}</p>`
+    : ""
+  const events = await listLifecycleEvents(env, submission.reference)
+
+  return `${topbar(email, "none")}
+<main data-testid="submission-detail" data-status="quality-check">
+  ${statusPill("quality-check")}
+  <h1>${escapeHtml(titleOf(submission))}</h1>
+  ${referenceLine(submission)}
+
+  <input class="composer-toggle" type="checkbox" id="request-preview-changes-toggle" aria-label="Request changes"${checked}>
+
+  <section class="round-card" data-testid="preview-review" data-verdict="pending">
+    <div class="round-head">
+      <span class="round-badge" data-testid="preview-badge">Preview build</span>
+    </div>
+
+    <h2>Take a look</h2>
+    <p>This is the real, live build — what you approve here is what ships.</p>
+    <a class="mock-bundle-link" href="${escapeHtml(previewUrl)}" data-testid="preview-link"
+       target="_blank" rel="noopener noreferrer">
+      Open the preview &rarr;
+    </a>
+
+    <div class="round-actions">
+      <form method="POST" action="/submissions/${submission.id}" class="inline-form">
+        <input type="hidden" name="action" value="approve-preview">
+        <button type="submit" class="primary" data-testid="approve-preview-button">Approve</button>
+      </form>
+      <label class="secondary" role="button" for="request-preview-changes-toggle" data-testid="request-preview-changes-button">Request changes</label>
+    </div>
+  </section>
+
+  <form class="composer" method="POST" action="/submissions/${submission.id}"
+        data-testid="request-preview-changes-form" aria-label="Request changes to the preview">
+    <input type="hidden" name="action" value="request-preview-changes">
+    <h2>What should change?</h2>
+    <p class="hint">Your notes go straight to the team, and this moves back to <strong>In progress</strong> until a new preview is ready.</p>
+    ${errorBlock}
+    <label for="previewComment" class="visually-hidden">Requested changes</label>
+    <textarea id="previewComment" name="previewComment" rows="5" required
+      data-testid="preview-comment"
+      placeholder="Tell us what to change and why."></textarea>
+    <div class="actions">
+      <label class="ghost" role="button" for="request-preview-changes-toggle" data-testid="cancel-preview-changes">Cancel</label>
+      <button type="submit" class="primary" data-testid="submit-preview-changes">Submit changes</button>
+    </div>
+  </form>
+
+  ${activityTimeline(events)}
+
+${messageThreadSection(`/submissions/${submission.id}`, thread, "customer", email)}
+</main>`
 }
 
 /**

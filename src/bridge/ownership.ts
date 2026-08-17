@@ -24,6 +24,15 @@ export const PORTAL_OWNED_FIELDS = [
   "signoff_verdict",
   "signoff_comment",
   "answer",
+  // Issue #107: the customer's verdict on a preview build — the portal-owned
+  // mirror of `signoff_verdict` / `signoff_comment` above, listed for the
+  // same reason those are: nothing on the wire is ever actually named this
+  // (the verdict is written by a form POST, not a bridge push), but naming it
+  // here means a coord daemon that tries anyway gets a clear `not_owned:...`
+  // reason instead of the less specific `unknown_field:...` every other
+  // unrecognised field falls back to.
+  "preview_verdict",
+  "preview_comment",
 ] as const
 
 /** Engineer-authored. The portal mirrors these read-only. */
@@ -46,6 +55,13 @@ export const COORD_OWNED_FIELDS = [
   // mirror, because a customer watching this timeline should still see "PR
   // opened" after "Merged" lands.
   "lifecycle_event",
+  // Issue #107: the PR's Cloudflare Pages preview URL, pushed alongside
+  // `status: 'quality-check'` — see `migrations/0015_preview_reviews.sql`.
+  // Handled like `status` itself: written directly to
+  // `submissions.preview_url` by `src/bridge/updates.ts`, not the generic
+  // `coord_facts` mirror — see that migration's module comment for why a
+  // real column, not a JSON-encoded fact row.
+  "preview_url",
 ] as const
 
 export type PortalOwnedField = (typeof PORTAL_OWNED_FIELDS)[number]

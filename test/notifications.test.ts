@@ -42,6 +42,7 @@ function submission(overrides: Partial<Submission> = {}): Submission {
     createdAt: "2026-01-01T00:00:00Z",
     coordRevision: 3,
     projectId: null,
+    previewUrl: null,
     ...overrides,
   }
 }
@@ -78,14 +79,16 @@ function fakeDb(options: { round?: Record<string, unknown> | null } = {}) {
 }
 
 describe("sendTypeForStatus", () => {
-  it("maps exactly the three sending states to their pinned data-email-type", () => {
+  it("maps exactly the four sending states to their pinned data-email-type", () => {
     expect(sendTypeForStatus("awaiting-signoff")).toBe("signoff-ready")
     expect(sendTypeForStatus("needs-input")).toBe("needs-input")
     expect(sendTypeForStatus("shipped")).toBe("shipped")
+    // Issue #107: the pre-merge preview gate — the fourth actionable status.
+    expect(sendTypeForStatus("quality-check")).toBe("preview-ready")
   })
 
   it("maps every other slug in the pinned vocabulary to nothing", () => {
-    for (const status of ["describing", "in-design", "planned", "in-progress", "quality-check", "on-hold"]) {
+    for (const status of ["describing", "in-design", "planned", "in-progress", "on-hold"]) {
       expect(sendTypeForStatus(status)).toBeNull()
     }
   })
@@ -98,8 +101,8 @@ describe("sendTypeForStatus", () => {
 })
 
 describe("SENDING_TYPES", () => {
-  it("is exactly signoff-ready / needs-input / shipped", () => {
-    expect([...SENDING_TYPES]).toEqual(["signoff-ready", "needs-input", "shipped"])
+  it("is exactly signoff-ready / needs-input / shipped / preview-ready", () => {
+    expect([...SENDING_TYPES]).toEqual(["signoff-ready", "needs-input", "shipped", "preview-ready"])
   })
 })
 
@@ -145,6 +148,20 @@ describe("emailContent", () => {
     const content = await emailContent(env, submission(), "shipped")
     expect(content.body.length).toBeGreaterThan(0)
     expect(content.ctaText.length).toBeGreaterThan(0)
+    expect(queryCount()).toBe(0)
+  })
+
+  it("preview-ready: links to the portal page, not the raw preview URL, and reads no round", async () => {
+    const { env, queryCount } = fakeDb()
+    const content = await emailContent(
+      env,
+      submission({ previewUrl: "https://preview.example.test/build-42" }),
+      "preview-ready",
+    )
+    expect(content.ctaText.length).toBeGreaterThan(0)
+    expect(content.ctaHref).toBe("/submissions/sub_000001")
+    expect(content.body).not.toContain("preview.example.test")
+    // No reason to read a design round for a preview review — the branch must not.
     expect(queryCount()).toBe(0)
   })
 
@@ -284,6 +301,20 @@ describe("recordNotificationForStatus", () => {
     // left to their column defaults, never bound explicitly here. This column
     // is `queued_at` (decision time), not delivery time.
     expect(queuedAt).toBe("2026-01-03T00:00:00Z")
+  })
+
+  it("inserts a preview-ready row when a push moves the submission to quality-check", async () => {
+    const { env, inserted } = fakeDb()
+    await recordNotificationForStatus(
+      env,
+      submission({ previewUrl: "https://preview.example.test/build-42" }),
+      "quality-check",
+      5,
+      "2026-01-03T00:00:00Z",
+    )
+    expect(inserted).toHaveLength(1)
+    const [, , type] = inserted[0] as [string, string, string]
+    expect(type).toBe("preview-ready")
   })
 })
 

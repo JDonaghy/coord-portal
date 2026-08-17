@@ -1,4 +1,4 @@
-import { lifecycleStatementsForPush } from "../lifecycle"
+import { lifecycleStatementsForPush, sanitizePreviewUrl } from "../lifecycle"
 import { recordNotificationForStatus } from "../notifications"
 import { roundStatementsForPush } from "../rounds"
 import { getSubmissionByReference, isSubmissionStatus } from "../submissions"
@@ -125,6 +125,18 @@ async function applyUpdate(env: Env, raw: unknown, ctx?: ExecutionContext): Prom
   const updatedAt = new Date().toISOString()
   const statements: D1PreparedStatement[] = []
 
+  // Issue #107: a `preview_url` this push carries, sanitised by the exact
+  // rule `src/lifecycle.ts` already applies to a `preview-ready` timeline
+  // entry — well-formed `https:`, never a `github.com` link. Silently
+  // dropped rather than rejected when it fails that check (or is not a
+  // string at all): the same "acknowledge and do nothing with a passenger
+  // this side cannot render" call `roundStatementsForPush` makes, not the
+  // hard rejection `status` gets — an unusable preview link is not a reason
+  // to bounce a whole update that may also legitimately carry `status:
+  // quality-check`.
+  const previewUrl =
+    "preview_url" in update.fields ? sanitizePreviewUrl(update.fields["preview_url"]) : null
+
   // The watermark moves in the same batch as the write it authorises, so a
   // half-applied update cannot exist even if this Worker dies mid-flight.
   //
@@ -134,27 +146,37 @@ async function applyUpdate(env: Env, raw: unknown, ctx?: ExecutionContext): Prom
   // customer's screen backwards. Losing to a newer write is fine — the daemon
   // is told `applied`, and what it wanted is already superseded by its own more
   // recent intent.
+  const setClauses = ["coord_revision = ?"]
+  const setBindings: unknown[] = [update.revision]
   if (typeof status === "string") {
-    statements.push(
-      env.DB.prepare(
-        `UPDATE submissions SET status = ?, coord_revision = ?
-          WHERE reference = ? AND (coord_revision IS NULL OR coord_revision < ?)`,
-      ).bind(status, update.revision, submissionId, update.revision),
-    )
-  } else {
-    statements.push(
-      env.DB.prepare(
-        `UPDATE submissions SET coord_revision = ?
-          WHERE reference = ? AND (coord_revision IS NULL OR coord_revision < ?)`,
-      ).bind(update.revision, submissionId, update.revision),
-    )
+    setClauses.push("status = ?")
+    setBindings.push(status)
   }
+  if (previewUrl !== null) {
+    setClauses.push("preview_url = ?")
+    setBindings.push(previewUrl)
+  }
+  statements.push(
+    env.DB.prepare(
+      `UPDATE submissions SET ${setClauses.join(", ")}
+        WHERE reference = ? AND (coord_revision IS NULL OR coord_revision < ?)`,
+    ).bind(...setBindings, submissionId, update.revision),
+  )
 
   for (const [field, value] of Object.entries(update.fields)) {
     // `lifecycle_event` (#111) is append-only, like `design_round` below it —
     // a second push must not overwrite the first the way this loop's
-    // last-value mirror would. It gets its own archive instead.
-    if (field === "status" || field === "lifecycle_event" || !isCoordOwnedField(field)) continue
+    // last-value mirror would. It gets its own archive instead. `preview_url`
+    // (#107) already landed on its own `submissions` column above; a second
+    // copy in the generic `coord_facts` mirror would be a duplicate no reader
+    // ever looks at.
+    if (
+      field === "status" ||
+      field === "lifecycle_event" ||
+      field === "preview_url" ||
+      !isCoordOwnedField(field)
+    )
+      continue
     // Coord-owned facts this milestone has no column for. Kept verbatim rather
     // than dropped: acknowledging a write and then discarding it is the one
     // behaviour a sync bridge must never have. #10/#13 render them.

@@ -224,25 +224,36 @@ test("a raised question sends exactly one needs-input email", async ({ page, req
   expect(sent.ctaText.length).toBeGreaterThan(0)
 })
 
-test("shipped work sends exactly one final email, and nothing before it", async ({ page, request }) => {
+test("shipped work sends exactly one final email, and nothing before it but the preview gate", async ({
+  page,
+  request,
+}) => {
   const email = uniqueEmail("e2e-shipped")
   const target = await seedSubmission(page, email)
 
   let revision = 1
-  for (const status of ["in-design", "planned", "in-progress", "quality-check"]) {
+  for (const status of ["in-design", "planned", "in-progress"]) {
     expect((await push(request, target.reference, revision++, { status })).outcome).toBe("applied")
   }
-  expect((await readOutbox(page, email)).length, "the run-up to shipping is silent").toBe(0)
+  expect((await readOutbox(page, email)).length, "the run-up to quality-check is silent").toBe(0)
+
+  // Issue #107: `quality-check` is the third customer-actionable state and
+  // sends its own email — it is not part of "the run-up" this test's name
+  // otherwise describes, it is the pre-merge gate this issue adds.
+  expect(
+    (await push(request, target.reference, revision++, { status: "quality-check" })).outcome,
+  ).toBe("applied")
+  await awaitOutbox(page, email, 1)
 
   expect((await push(request, target.reference, revision++, { status: "shipped" })).outcome).toBe(
     "applied",
   )
-  const [sent] = await awaitOutbox(page, email, 1)
-  expect(sent.type).toBe("shipped")
-  expect(sent.to).toContain(email)
+  const sent = await awaitOutbox(page, email, 2)
+  expect(sent.map((s) => s.type)).toEqual(["preview-ready", "shipped"])
+  expect(sent[1]?.to).toContain(email)
 })
 
-test("only the three sending states ever produce an email — coord churn never does", async ({
+test("only the four sending states ever produce an email — coord churn never does", async ({
   page,
   request,
 }) => {
@@ -250,7 +261,7 @@ test("only the three sending states ever produce an email — coord churn never 
   const target = await seedSubmission(page, email)
 
   let revision = 1
-  for (const status of ["describing", "in-design", "planned", "in-progress", "quality-check"]) {
+  for (const status of ["describing", "in-design", "planned", "in-progress"]) {
     expect((await push(request, target.reference, revision++, { status })).outcome).toBe("applied")
     expect(
       (await readOutbox(page, email)).length,
@@ -278,12 +289,18 @@ test("only the three sending states ever produce an email — coord churn never 
   expect((await readOutbox(page, email)).length, "field churn with no status is not news").toBe(0)
 
   // Positive control: absence is only meaningful next to a presence the same
-  // mechanism did observe.
+  // mechanism did observe. `quality-check` (#107) is the fourth sending state.
+  expect(
+    (await push(request, target.reference, revision++, { status: "quality-check" })).outcome,
+  ).toBe("applied")
+  const afterQualityCheck = await awaitOutbox(page, email, 1)
+  expect(afterQualityCheck[0]?.type).toBe("preview-ready")
+
   expect((await push(request, target.reference, revision++, { status: "shipped" })).outcome).toBe(
     "applied",
   )
-  const sent = await awaitOutbox(page, email, 1)
-  expect(sent[0]?.type).toBe("shipped")
+  const sent = await awaitOutbox(page, email, 2)
+  expect(sent[1]?.type).toBe("shipped")
 })
 
 test("a replayed push never re-sends an email", async ({ page, request }) => {

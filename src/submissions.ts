@@ -124,6 +124,16 @@ export interface Submission {
    * `customerEmail` alone.
    */
   projectId: string | null
+  /**
+   * The PR's live Cloudflare Pages preview build, or `null` until the
+   * operator queues one — issue #107's pre-merge approval gate. Coord-owned,
+   * pushed alongside `status: 'quality-check'` and written to this column
+   * directly (see `migrations/0015_preview_reviews.sql`, `src/bridge/updates.ts`).
+   * A single current value, not a version history — "the PR itself is the
+   * history" (design doc). See `src/previewReviews.ts` for the customer's
+   * verdict on it.
+   */
+  previewUrl: string | null
 }
 
 export interface NewSubmissionInput {
@@ -161,6 +171,7 @@ interface SubmissionRow {
   created_at: string
   coord_revision: number | null
   project_id: string | null
+  preview_url: string | null
 }
 
 function fromRow(row: SubmissionRow): Submission {
@@ -180,6 +191,7 @@ function fromRow(row: SubmissionRow): Submission {
     createdAt: row.created_at,
     coordRevision: row.coord_revision,
     projectId: row.project_id,
+    previewUrl: row.preview_url,
   }
 }
 
@@ -319,6 +331,9 @@ export function createSubmissionStatements(
       // any other caller building its own batch (`promoteLead`) should do the
       // same if it ever needs this field.
       projectId: null,
+      // No preview build exists yet for a submission that was just created —
+      // `preview_url` only ever arrives later, over the bridge (issue #107).
+      previewUrl: null,
     },
     statements: [...projectStatements, insertSubmission, appendEvent],
   }
