@@ -73,6 +73,17 @@ export function generateOutboxId(): string {
   return `ntf_${randomHex(24)}`
 }
 
+/**
+ * `msg_` + 24 lowercase hex chars — one row in the message thread (issue
+ * #110). Same shape as `generateEventId` / `generateOutboxId` and for the
+ * same reason: an opaque, portal-internal handle for one row, never a
+ * customer-facing reference — a message is read back in place on
+ * `/submissions/:id`, never quoted by id the way a `SUB-XXXXXX` reference is.
+ */
+export function generateMessageId(): string {
+  return `msg_${randomHex(24)}`
+}
+
 function randomHex(length: number): string {
   const bytes = crypto.getRandomValues(new Uint8Array(Math.ceil(length / 2)))
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0"))

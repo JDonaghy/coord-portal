@@ -1,3 +1,4 @@
+import { parseFormData } from "../formData"
 import {
   getLead,
   leadStatus,
@@ -7,25 +8,41 @@ import {
   type Lead,
   type LeadStatus,
 } from "../leads"
+import { listMessages, postMessage } from "../messages"
 import { readOperator, type Operator } from "../operators"
 import { escapeHtml, html, operatorTopbar, page } from "../render"
 import type { Env } from "../types"
+import { isFormContentType, messageThreadSection, type ThreadContext } from "./submission"
 
 /**
  * The operator's triage surface (issue #33) — "the operator act that turns a
  * stranger into a customer. This is the human gate the whole design leans on:
  * nothing crosses from the public surface into the pipeline without it."
  *
- * Three routes, and there is deliberately no fourth:
+ * Four routes:
  *
  *   GET  /leads              every lead, newest first
  *   GET  /leads/:id          one lead, pre- or post-promotion
  *   POST /leads/:id/promote  the gate itself; idempotent; 303 back to the lead
+ *   POST /leads/:id/message  the operator's half of issue #110's chat thread
  *
  * No decline, dismiss or archive route: issue #33 puts them out of scope, and
  * "a lead that was not promoted stays inert forever" is a property of doing
  * nothing. No route that emails the customer either — that is #14's, and this
  * issue "must not grow an email path of its own".
+ *
+ * ── THE FOURTH ROUTE, AND WHY IT LIVES HERE (issue #110) ───────────────────
+ * The customer's half of the message thread is on `/submissions/:id`
+ * (`src/routes/submission.ts`), gated by `isOwnedBy` — an operator's Access
+ * email is never a submission's `customer_email`, so that route 404s for an
+ * operator by construction, and `tests/acceptance/ms-2/33-lead-triage-promotion.spec.ts`
+ * sealed-asserts exactly that ("ms-1's ownership scoping is not reopened for
+ * the operator"). Rather than carve an operator exception into a route whose
+ * whole contract is "the customer's own", the operator's half of the same
+ * thread lives here, on the one screen an operator already reaches a
+ * promoted lead's submission from — keyed by `lead.promotedSubmissionReference`
+ * (the `SUB-XXXXXX` the two sides of the thread share), never by the
+ * `sub_…` id `/submissions/:id` itself uses.
  *
  * ── THE THING THIS FILE EXISTS TO SAY ──────────────────────────────────────
  * The portal cannot add anyone to a Cloudflare Access policy, and deliberately
@@ -53,15 +70,24 @@ import type { Env } from "../types"
 const LEADS_PATH = "/leads"
 const LEAD_PATH = /^\/leads\/([^/?#]+)$/
 const LEAD_PROMOTE_PATH = /^\/leads\/([^/?#]+)\/promote$/
+const LEAD_MESSAGE_PATH = /^\/leads\/([^/?#]+)\/message$/
 
 /** What `handlePages` needs to know about a `/leads…` URL, or `null`. */
 export function matchLeadsPath(
   pathname: string,
-): { kind: "index" } | { kind: "detail"; id: string } | { kind: "promote"; id: string } | null {
+):
+  | { kind: "index" }
+  | { kind: "detail"; id: string }
+  | { kind: "promote"; id: string }
+  | { kind: "message"; id: string }
+  | null {
   if (pathname === LEADS_PATH) return { kind: "index" }
 
   const promote = pathname.match(LEAD_PROMOTE_PATH)
   if (promote?.[1]) return { kind: "promote", id: promote[1] }
+
+  const message = pathname.match(LEAD_MESSAGE_PATH)
+  if (message?.[1]) return { kind: "message", id: message[1] }
 
   const detail = pathname.match(LEAD_PATH)
   if (detail?.[1]) return { kind: "detail", id: detail[1] }
@@ -103,7 +129,18 @@ export async function leadDetail(request: Request, env: Env, id: string): Promis
   // itself confirm the operator surface exists to anyone who found the URL.
   if (!lead) return leadsNotFound()
 
-  return html(page(`${lead.reference} — coord-portal`, detail(operator, lead)))
+  const thread = await threadFor(env, lead)
+  return html(page(`${lead.reference} — coord-portal`, detail(operator, lead, thread)))
+}
+
+/**
+ * The message thread for a lead's promoted submission (issue #110), or
+ * `null` for a lead that has not been promoted yet — there is no submission,
+ * and therefore no `SUB-XXXXXX` reference, for a message to belong to.
+ */
+async function threadFor(env: Env, lead: Lead): Promise<ThreadContext | null> {
+  if (!lead.promotedSubmissionReference) return null
+  return { messages: await listMessages(env, lead.promotedSubmissionReference) }
 }
 
 /**
@@ -126,6 +163,54 @@ export async function promoteLeadAction(
   if (!lead) return leadsNotFound()
 
   await promoteLead(env, lead)
+
+  return new Response(null, {
+    status: 303,
+    headers: { location: `/leads/${lead.id}` },
+  })
+}
+
+/**
+ * POST /leads/:id/message — the operator's half of issue #110's chat thread.
+ * See this file's module comment for why it lives here rather than on
+ * `/submissions/:id`.
+ *
+ * A lead that has not been promoted yet has no submission and therefore no
+ * `SUB-XXXXXX` for a message to belong to — the same 404 an unknown or
+ * non-operator caller gets, not a 4xx that would hint a message composer
+ * exists somewhere on this screen for a `new` lead (the template never
+ * renders one either; see `detail`, `promoted ? messageThreadSection(...) :
+ * ""`).
+ *
+ * `request.formData()`'s unguarded-throw failure mode (issue #46, #71) is
+ * handled the same way `src/routes/submission.ts`'s `submitSubmissionAction`
+ * handles it: a content-type this cannot parse gets the same 404 as every
+ * other refusal on this route, never a 5xx.
+ */
+export async function postLeadMessage(request: Request, env: Env, id: string): Promise<Response> {
+  const operator = await readOperator(request, env)
+  if (!operator) return leadsNotFound()
+
+  const lead = await getLead(env, id)
+  if (!lead || !lead.promotedSubmissionReference) return leadsNotFound()
+
+  const contentType = request.headers.get("content-type") ?? ""
+  if (!isFormContentType(contentType)) return leadsNotFound()
+
+  const form = await parseFormData(request)
+  if (!form) return leadsNotFound()
+
+  const rawBody = form.get("body")
+  const body = typeof rawBody === "string" ? rawBody.trim() : ""
+  if (!body) {
+    const thread: ThreadContext = {
+      messages: await listMessages(env, lead.promotedSubmissionReference),
+      error: "Write a message before sending.",
+    }
+    return html(page(`${lead.reference} — coord-portal`, detail(operator, lead, thread)), { status: 400 })
+  }
+
+  await postMessage(env, lead.promotedSubmissionReference, "operator", operator.email, body)
 
   return new Response(null, {
     status: 303,
@@ -176,7 +261,7 @@ function emptyInbox(): string {
   </p>`
 }
 
-function detail(operator: Operator, lead: Lead): string {
+function detail(operator: Operator, lead: Lead, thread: ThreadContext | null): string {
   const status = leadStatus(lead)
   const promoted = status === "promoted"
 
@@ -200,6 +285,8 @@ function detail(operator: Operator, lead: Lead): string {
   </dl>
 
   ${promoted ? "" : promoteForm(lead)}
+
+  ${thread ? messageThreadSection(`/leads/${encodeURIComponent(lead.id)}/message`, thread, "operator", operator.email) : ""}
 </main>`
 }
 

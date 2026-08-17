@@ -7,6 +7,7 @@ import {
   leadsInbox,
   leadsNotFound,
   matchLeadsPath,
+  postLeadMessage,
   promoteLeadAction,
 } from "./routes/leads"
 import { matchMockBundlePath, mockBundle } from "./routes/mocks"
@@ -109,6 +110,12 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
     }
     if (leadsMatch.kind === "promote" && request.method === "POST") {
       return promoteLeadAction(request, env, leadsMatch.id)
+    }
+    // The operator's half of issue #110's chat thread — see
+    // `routes/leads.ts`'s module comment for why it lives here rather than
+    // on `/submissions/:id`.
+    if (leadsMatch.kind === "message" && request.method === "POST") {
+      return postLeadMessage(request, env, leadsMatch.id)
     }
     // Any other method on a `/leads…` path gets the same 404 a non-operator
     // gets — see `src/operators.ts`. A 405 would confirm the path exists.
