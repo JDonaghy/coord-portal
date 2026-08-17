@@ -29,11 +29,23 @@ function message(overrides: Partial<Message> = {}): Message {
 
 describe("messageAuthorLabel", () => {
   it("labels the viewer's own message 'You', for a customer viewing their own message", () => {
-    expect(messageAuthorLabel(message({ authorRole: "customer" }), "customer")).toBe("You")
+    expect(
+      messageAuthorLabel(
+        message({ authorRole: "customer", authorEmail: "customer@example.test" }),
+        "customer",
+        "customer@example.test",
+      ),
+    ).toBe("You")
   })
 
   it("labels the viewer's own message 'You', for an operator viewing their own message", () => {
-    expect(messageAuthorLabel(message({ authorRole: "operator" }), "operator")).toBe("You")
+    expect(
+      messageAuthorLabel(
+        message({ authorRole: "operator", authorEmail: "alice@example.test" }),
+        "operator",
+        "alice@example.test",
+      ),
+    ).toBe("You")
   })
 
   it("labels an operator's message with the business name, never the operator's address, for a customer", () => {
@@ -41,6 +53,7 @@ describe("messageAuthorLabel", () => {
       messageAuthorLabel(
         message({ authorRole: "operator", authorEmail: "ops-personal@example.test" }),
         "customer",
+        "customer@example.test",
       ),
     ).toBe("Heuron Technology")
   })
@@ -50,7 +63,23 @@ describe("messageAuthorLabel", () => {
       messageAuthorLabel(
         message({ authorRole: "customer", authorEmail: "someone@example.test" }),
         "operator",
+        "ops@example.test",
       ),
     ).toBe("someone@example.test")
+  })
+
+  it("labels a colleague operator's message with their own email, never 'You' — two distinct operator identities", () => {
+    // OPERATOR_EMAILS (src/operators.ts) is a list: alice@x.com and bob@x.com
+    // can both be configured operators. Alice posts on a lead's thread; Bob
+    // views it. Comparing only `authorRole === viewerRole` (both "operator")
+    // would wrongly render "You" for Alice's message on Bob's screen — the
+    // comparison has to be identity (`authorEmail` vs `viewerEmail`), not role.
+    expect(
+      messageAuthorLabel(
+        message({ authorRole: "operator", authorEmail: "alice@example.test" }),
+        "operator",
+        "bob@example.test",
+      ),
+    ).toBe("alice@example.test")
   })
 })

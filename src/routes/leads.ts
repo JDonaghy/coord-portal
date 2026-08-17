@@ -286,7 +286,7 @@ function detail(operator: Operator, lead: Lead, thread: ThreadContext | null): s
 
   ${promoted ? "" : promoteForm(lead)}
 
-  ${thread ? messageThreadSection(`/leads/${encodeURIComponent(lead.id)}/message`, thread, "operator") : ""}
+  ${thread ? messageThreadSection(`/leads/${encodeURIComponent(lead.id)}/message`, thread, "operator", operator.email) : ""}
 </main>`
 }
 

@@ -418,6 +418,19 @@ export interface ThreadContext {
  * operator-side thread on `/leads/:id` can reuse it with `"operator"` rather
  * than a second copy of this rendering.
  *
+ * `viewerEmail` is the viewer's own actual identity — `resolveSiteIdentity`'s
+ * email on the customer side, `readOperator`'s on the operator side — and is
+ * what `messageAuthorLabel` actually compares a message's `authorEmail`
+ * against to decide "You". `viewerRole` alone used to stand in for this and
+ * was wrong whenever more than one identity can share a role: `OPERATOR_EMAILS`
+ * (`src/operators.ts`) is explicitly a *list*, so two operators both get
+ * `viewerRole === "operator"` and role-equality alone would label a
+ * colleague's message "You". The customer side never had this bug —
+ * `isOwnedBy` restricts a submission's thread to exactly one customer
+ * identity, so role-equality and identity-equality happen to coincide there —
+ * but both call sites now pass the real email so the comparison is identity,
+ * not role, everywhere.
+ *
  * `postUrl` is the only submission-specific thing this function needs — the
  * form posts back to whichever route rendered it, same as every other form in
  * this portal. Here that is always `/submissions/:id` (the shared
@@ -429,6 +442,7 @@ export function messageThreadSection(
   postUrl: string,
   thread: ThreadContext,
   viewerRole: MessageAuthorRole,
+  viewerEmail: string | null,
 ): string {
   const errorBlock = thread.error
     ? `<p class="message-error" data-testid="message-error" role="alert">${escapeHtml(thread.error)}</p>`
@@ -436,7 +450,7 @@ export function messageThreadSection(
   const list =
     thread.messages.length > 0
       ? `<ul class="message-list" data-testid="message-list">
-${thread.messages.map((message) => messageItem(message, viewerRole)).join("\n")}
+${thread.messages.map((message) => messageItem(message, viewerRole, viewerEmail)).join("\n")}
     </ul>`
       : `<p class="message-thread-empty" data-testid="message-thread-empty">No messages yet.</p>`
 
@@ -456,10 +470,10 @@ ${thread.messages.map((message) => messageItem(message, viewerRole)).join("\n")}
   </section>`
 }
 
-function messageItem(message: Message, viewerRole: MessageAuthorRole): string {
+function messageItem(message: Message, viewerRole: MessageAuthorRole, viewerEmail: string | null): string {
   return `      <li class="message-item" data-testid="message-item" data-author-role="${message.authorRole}">
         <div class="message-meta">
-          <span class="message-author" data-testid="message-author">${escapeHtml(messageAuthorLabel(message, viewerRole))}</span>
+          <span class="message-author" data-testid="message-author">${escapeHtml(messageAuthorLabel(message, viewerRole, viewerEmail))}</span>
           <span class="message-timestamp" data-testid="message-timestamp">${escapeHtml(message.createdAt)}</span>
         </div>
         <p class="message-body" data-testid="message-body">${escapeHtml(message.body)}</p>
@@ -467,22 +481,33 @@ function messageItem(message: Message, viewerRole: MessageAuthorRole): string {
 }
 
 /**
- * "You" for a message the viewer themself posted. Otherwise: the business's
- * name, never a personal address, for an operator's message read by the
- * customer — the same brand `SIGNATURE` in `src/notifications.ts` closes
- * every email with, and for the same reason an operator's own address stays
- * off a customer-facing screen; or the customer's own email for a customer's
- * message read by the operator, who has to know which customer it came from
- * the way every other operator screen in this portal already names them
- * (`src/routes/leads.ts`'s `lead-contact-email`).
+ * "You" for a message the viewer themself posted — compared by
+ * `authorEmail`, the viewer's actual identity, not `authorRole`. Role alone
+ * is not enough: `src/operators.ts`'s `OPERATOR_EMAILS` is a list, so two
+ * different operators both carry `viewerRole === "operator"`, and comparing
+ * roles would label a colleague's message "You" (see this function's call
+ * site, `messageThreadSection`, for the full story).
+ *
+ * Otherwise: the business's name, never a personal address, for an
+ * operator's message read by a *customer* — the same brand `SIGNATURE` in
+ * `src/notifications.ts` closes every email with, and for the same reason an
+ * operator's own address stays off a customer-facing screen. An operator
+ * reading a colleague's message, or reading a customer's message, gets that
+ * author's own email — the operator has to know which colleague or which
+ * customer it came from, the way every other operator screen in this portal
+ * already names them (`src/routes/leads.ts`'s `lead-contact-email`).
  *
  * Exported for the one pure-function unit test this file's rendering logic
  * gets — see `test/messages.test.ts` — the rest of this module's templates
  * are covered black-box, per this repo's testing tiers (CLAUDE.md).
  */
-export function messageAuthorLabel(message: Message, viewerRole: MessageAuthorRole): string {
-  if (message.authorRole === viewerRole) return "You"
-  if (message.authorRole === "operator") return "Heuron Technology"
+export function messageAuthorLabel(
+  message: Message,
+  viewerRole: MessageAuthorRole,
+  viewerEmail: string | null,
+): string {
+  if (viewerEmail !== null && message.authorEmail === viewerEmail) return "You"
+  if (message.authorRole === "operator" && viewerRole === "customer") return "Heuron Technology"
   return message.authorEmail
 }
 
@@ -590,7 +615,7 @@ ${steps}
 
   ${roundHistoryLink(submission)}
 
-${messageThreadSection(`/submissions/${submission.id}`, thread, "customer")}
+${messageThreadSection(`/submissions/${submission.id}`, thread, "customer", email)}
 </main>`
 }
 
@@ -644,7 +669,7 @@ function actionableDetail(email: string | null, submission: Submission, thread: 
     <p>We'll email you the moment this is ready to look at.</p>
   </section>
 
-${messageThreadSection(`/submissions/${submission.id}`, thread, "customer")}
+${messageThreadSection(`/submissions/${submission.id}`, thread, "customer", email)}
 </main>`
 }
 
@@ -780,7 +805,7 @@ ${mockBundleSection(submission, round)}
     </div>
   </form>
 
-${messageThreadSection(`/submissions/${submission.id}`, thread, "customer")}
+${messageThreadSection(`/submissions/${submission.id}`, thread, "customer", email)}
 </main>`
 }
 
@@ -996,7 +1021,7 @@ function pausedDetail(
     </form>
   </section>
 
-${messageThreadSection(`/submissions/${submission.id}`, thread, "customer")}
+${messageThreadSection(`/submissions/${submission.id}`, thread, "customer", email)}
 </main>`
 }
 
@@ -1033,7 +1058,7 @@ function shippedDetail(email: string | null, submission: Submission, thread: Thr
   ${roundHistoryLink(submission)}
   ${followUpLink(submission)}
 
-${messageThreadSection(`/submissions/${submission.id}`, thread, "customer")}
+${messageThreadSection(`/submissions/${submission.id}`, thread, "customer", email)}
 </main>`
 }
 
