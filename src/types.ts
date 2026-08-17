@@ -50,6 +50,27 @@ export interface Env {
   ACCESS_TEAM_DOMAIN?: string
   BRIDGE_ACCESS_AUD?: string
   /**
+   * The AUD tag of the **site** Access application (docs/CLOUDFLARE.md's
+   * "site" row) — the one gating every customer- and operator-facing route,
+   * as opposed to `BRIDGE_ACCESS_AUD`'s bridge application. Read by
+   * `src/identity.ts`'s `resolveSiteIdentity()` (issue #1981), which every
+   * route that scopes a query or authorizes a write by Access identity now
+   * calls instead of trusting `readAccessIdentity()`'s unverified claim.
+   *
+   * Per-application, never shared, for the same reason `BRIDGE_ACCESS_AUD`
+   * gives: a token minted for the bridge must not verify against a customer
+   * route, and a token minted for a customer route must not authorise the
+   * daemon. Copy it from the site application's own page in the dashboard.
+   *
+   * Optional for the same reason as everything else in this file — unset must
+   * fail closed, not crash. Unlike the routes that only lose a nice-to-have
+   * when unset (`OPERATOR_EMAILS`), an unset `SITE_ACCESS_AUD` (or
+   * `ACCESS_TEAM_DOMAIN`) behind Cloudflare's edge means `resolveSiteIdentity`
+   * refuses every customer- and operator-facing route for everyone — the same
+   * trade `BRIDGE_ACCESS_AUD` already makes for the bridge.
+   */
+  SITE_ACCESS_AUD?: string
+  /**
    * Who may reach the operator surface (`/leads*`, issue #33) — a comma- or
    * whitespace-separated allowlist of Access identities.
    *

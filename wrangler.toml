@@ -17,6 +17,18 @@ compatibility_date = "2026-08-01"
 # enabled it is a second, unprotected front door to the same Worker that
 # bypasses every Access policy below. This line and the route must always change
 # together.
+#
+# It used to be the ONLY thing standing between that second front door and
+# customer data — a single config line with no backstop inside the
+# application (issue #108/#1981). That gap is closed now: every route that
+# scopes a query or authorizes a write by Access identity verifies the
+# `Cf-Access-Jwt-Assertion` itself (`src/identity.ts`'s `resolveSiteIdentity`,
+# pinned to `SITE_ACCESS_AUD`) rather than trusting whatever email an
+# unverified claim names. This line must still never move — a regression here
+# still hands a stranger a reachable Worker with no Access in front, which is
+# still a real, bad outcome — but it now degrades to every such request being
+# refused (401), not to silently admitting whatever a self-minted
+# `{"alg":"none"}` token claims.
 workers_dev = false
 
 [[routes]]

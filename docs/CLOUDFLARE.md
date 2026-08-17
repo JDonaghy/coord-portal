@@ -109,17 +109,25 @@ Set with `wrangler secret put NAME`. Never in git.
 
 | name | what it is |
 |---|---|
-| `ACCESS_TEAM_DOMAIN` | `<team>.cloudflareaccess.com`. **Verify any guess** by curling its `/cdn-cgi/access/certs` — a 200 with keys means real, a 404 means wrong |
+| `ACCESS_TEAM_DOMAIN` | `<team>.cloudflareaccess.com`. **Verify any guess** by curling its `/cdn-cgi/access/certs` — a 200 with keys means real, a 404 means wrong. Shared by both verified paths below — it names the *team*, not an application |
 | `BRIDGE_ACCESS_AUD` | the **bridge** application's AUD tag, from that application's own page |
+| `SITE_ACCESS_AUD` | the **site** application's AUD tag (issue #108/#1981) — gates every customer- and operator-facing route (`src/identity.ts`'s `resolveSiteIdentity`). Never the same value as `BRIDGE_ACCESS_AUD` — see "Each application has its own AUD tag" above |
 | `BRIDGE_CLIENT_ID` | the service token's client id — the `common_name` the JWT will carry |
 | `BRIDGE_CLIENT_SECRET` | only used by the local `wrangler dev` path; the edge consumes it in production |
 | `RESEND_API_KEY` | transactional mail |
 | `TURNSTILE_*` | bot gate on the public form |
 | `OPERATOR_EMAILS` | who sees operator surfaces |
 
-The bridge fails **closed**: miss any one of the first three and it returns the
-same flat 401 as a genuine auth failure. If the bridge 401s right after a
-deploy, check that all three are set *before* suspecting the code.
+The bridge fails **closed**: miss any one of `ACCESS_TEAM_DOMAIN`,
+`BRIDGE_ACCESS_AUD` or `BRIDGE_CLIENT_ID` and it returns the same flat 401 as a
+genuine auth failure. If the bridge 401s right after a deploy, check that all
+three are set *before* suspecting the code.
+
+Every customer- and operator-facing route fails the same way on
+`ACCESS_TEAM_DOMAIN` or `SITE_ACCESS_AUD`: miss either behind the edge and the
+whole site refuses everyone, including you, with the same flat 401 — not a
+crash, and not a route that quietly falls back to trusting an unverified
+claim. Set both *before* reporting the portal as broken after a fresh deploy.
 
 ---
 
