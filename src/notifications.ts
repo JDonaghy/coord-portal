@@ -69,8 +69,15 @@ import type { Env } from "./types"
  * repo does not have.
  */
 
-/** Contract § `data-testid` hooks, Emails (11-13): the pinned `data-email-type`s. */
-export const SENDING_TYPES = ["signoff-ready", "needs-input", "shipped"] as const
+/**
+ * Contract § `data-testid` hooks, Emails (11-13): the pinned `data-email-type`s,
+ * plus `preview-ready` — issue #107's pre-merge approval gate, the fourth
+ * sending type this portal has ever had. `quality-check` earns the same
+ * "instant-ish, not a digest" treatment `awaiting-signoff` gets: it is the
+ * one other status a customer must actually act on, not merely a status
+ * report to skim later.
+ */
+export const SENDING_TYPES = ["signoff-ready", "needs-input", "shipped", "preview-ready"] as const
 
 export type SendType = (typeof SENDING_TYPES)[number]
 
@@ -85,6 +92,14 @@ const TYPE_FOR_STATUS: Partial<Record<string, SendType>> = {
   "awaiting-signoff": "signoff-ready",
   "needs-input": "needs-input",
   shipped: "shipped",
+  // Issue #107: the moment a submission reaches `quality-check` is exactly
+  // the moment the customer has something new to act on — the real, live
+  // preview build, not a mock. Same restraint as every other entry here: a
+  // later push that merely revises `preview_url` while `status` stays at
+  // `quality-check` never reaches this map at all (see
+  // `src/bridge/updates.ts`'s "only a push that actually names `status`
+  // counts").
+  "quality-check": "preview-ready",
 }
 
 export function sendTypeForStatus(status: string): SendType | null {
@@ -399,6 +414,21 @@ export async function emailContent(env: Env, submission: Submission, type: SendT
       preheader: title,
       body: `Work on "${title}" is paused until you answer one question.${SIGNATURE}`,
       ctaText: "Answer the question",
+      ctaHref,
+    }
+  }
+
+  if (type === "preview-ready") {
+    // Issue #107: linked to the portal submission page, exactly like
+    // `signoff-ready` above — never the raw preview URL directly. The
+    // customer approves or requests changes from there, same as a design
+    // round; the raw link only ever appears once they're behind Access on
+    // that page (`src/routes/submission.ts`).
+    return {
+      subject: "A preview is ready for your review — Heuron Technology",
+      preheader: title,
+      body: `The real build for "${title}" is up and ready for you to look at. Take a look and either approve it or tell me what to change.${SIGNATURE}`,
+      ctaText: "Review the preview",
       ctaHref,
     }
   }

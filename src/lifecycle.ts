@@ -194,8 +194,15 @@ function asTimestamp(value: unknown): string | null {
  * build. Accepted only as a well-formed `https:` URL whose host is not
  * `github.com` (or a subdomain of it) — the narrow exception to issue #16's
  * wall stays narrow even when the daemon's own idea of a "preview" drifts.
+ *
+ * Exported so `src/bridge/updates.ts` applies this exact rule to the
+ * `preview_url` pushed onto `submissions` (#107's approval gate) rather than
+ * a second copy of it — the timeline's `lifecycle_event.url` and the gate's
+ * `submissions.preview_url` are the same fact (the current PR preview build),
+ * pushed two different ways, and both must refuse the identical thing: a line
+ * back into the engineer's world.
  */
-function sanitizePreviewUrl(value: unknown): string | null {
+export function sanitizePreviewUrl(value: unknown): string | null {
   if (typeof value !== "string") return null
   const trimmed = value.trim()
   if (!trimmed) return null

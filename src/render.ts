@@ -278,6 +278,18 @@ const APP_STYLES = `
     overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
   }
 
+  /* Also the preview-review card (issue #107, previewReviewDetail in
+     src/routes/submission.ts). Deliberately the same classes, not a parallel
+     set: the design doc pins the preview approval gate as "the same UI shape
+     as the existing design-round signoff, not a new interaction pattern",
+     and .round-card / .round-head / .round-badge / .round-actions /
+     .composer-toggle / form.composer are all already generic enough (nothing
+     below is named after "round" in a way that assumes a round number
+     exists) to serve a second, structurally identical disclosure without a
+     second copy of this rule set. The two never render on the same page —
+     one submission is never simultaneously awaiting-signoff and
+     quality-check — so the sibling-combinator rules below never have two
+     unrelated targets to choose between. */
   .round-card {
     background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 1.5rem;
   }
