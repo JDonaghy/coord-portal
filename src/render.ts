@@ -452,6 +452,16 @@ const APP_STYLES = `
   .email-subject { padding: 1.25rem 1.5rem 0; font-size: var(--step-1); font-weight: 700; margin: 0; }
   .email-preheader { padding: 0 1.5rem; color: var(--text-faint); font-size: var(--step--1); margin: 0.35rem 0 1rem; }
   .email-body { padding: 0 1.5rem 1.5rem; }
+  /*
+   * #105 gave every notification body a blank-line-separated signature
+   * ("— John, Heuron Technology", see src/notifications.ts). The sent email's
+   * HTML part splits that into real paragraphs (composeHtmlBody); this is the
+   * portal's own preview of the same string, rendered inside a single <p> whose
+   * markup shape the ms-1 mocks pin, so the line break is honoured here with CSS
+   * instead. Without this the signature runs onto the end of the sentence above
+   * it and the preview stops matching what was actually sent.
+   */
+  .email-body p { white-space: pre-line; }
   .email-cta {
     display: inline-block; margin-top: 1rem; background: var(--accent); color: white !important;
     text-decoration: none; border-radius: var(--r-md); padding: 0.65rem 1.25rem; font-weight: 600;

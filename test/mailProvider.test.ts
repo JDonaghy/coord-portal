@@ -73,9 +73,126 @@ describe("composeTextBody / composeHtmlBody (issue #83)", () => {
       ctaText: "Review <the> design",
       ctaHref: "https://portal.example.test/submissions/SUB-HTML01",
     })
-    expect(html).toContain('<a href="https://portal.example.test/submissions/SUB-HTML01">')
+    expect(html).toContain('href="https://portal.example.test/submissions/SUB-HTML01"')
     expect(html).toContain("Review &lt;the&gt; design")
     expect(html).toContain("plain &amp; simple")
+    // The escaping is the point, not the shell: neither the customer's own
+    // words nor the label may reach the recipient's mail client as markup.
+    expect(html).not.toContain("Review <the> design")
+    expect(html).not.toContain("plain & simple")
+  })
+
+  // ── issue #105: the branded shell ────────────────────────────────────────
+  //
+  // The defect: a `signoff-ready` send landed in a real recipient's spam folder
+  // and was nearly dismissed as spam even after she found it, because nothing
+  // about it identified the business she had hired. #83's HTML part was
+  // `<p>body</p><p><a>label</a></p>` — linkable, and completely anonymous.
+
+  /** The exact CTA-bearing email the assertions below all render. */
+  function brandedHtml(): string {
+    const html = composeHtmlBody({
+      to: "a@example.test",
+      from: "Heuron Technology <notify@mail.heurontech.com>",
+      subject: "Design ready for review — Heuron Technology",
+      body: 'Hi — I\'ve put together a design for "A rota."\n\n— John, Heuron Technology',
+      ctaText: "Review the design",
+      ctaHref: "https://portal.example.test/submissions/SUB-BRAND1",
+    })
+    expect(html, "a CTA-bearing email always has an HTML part").toBeDefined()
+    return html as string
+  }
+
+  it("composeHtmlBody names Heuron Technology in the HTML part", () => {
+    // #105 Acceptance: "A `signoff-ready` email's HTML part visibly identifies
+    // 'Heuron Technology'". The wordmark is text — see `BRAND`'s doc for why it
+    // may never be an image.
+    const html = brandedHtml()
+    expect(html).toContain(">Heuron Technology<")
+    // And the CTA's unfamiliar destination is tied back to the domain the
+    // recipient does know.
+    expect(html).toContain("heurontech.com")
+  })
+
+  it("composeHtmlBody makes no external network request — no remote image, no font fetch", () => {
+    // #105 Acceptance, second half. A blocked-image placeholder where a brand
+    // mark should be reads as *more* suspicious than no brand mark, and a
+    // remote fetch in a message body is itself a spam signal. Both font stacks
+    // must therefore degrade locally rather than be pulled from a CDN.
+    const html = brandedHtml()
+    expect(html, "no <img> — the wordmark is text").not.toMatch(/<\s*img\b/i)
+    expect(html, "no <link> — fonts are never fetched").not.toMatch(/<\s*link\b/i)
+    expect(html, "no @import of a remote stylesheet").not.toMatch(/@import/i)
+    expect(html, "no <script> in an email, ever").not.toMatch(/<\s*script\b/i)
+    // Nothing anywhere in the markup reaches off-host except the CTA itself.
+    const urls = html.match(/https?:\/\/[^\s"'<>]+/gi) ?? []
+    expect(urls).toEqual(["https://portal.example.test/submissions/SUB-BRAND1"])
+  })
+
+  it("composeHtmlBody carries the brand palette inline, not as custom properties", () => {
+    // Outlook has never supported `var()` and Gmail strips `<style>` from a
+    // forwarded message; a token that resolves to nothing renders as unstyled
+    // black-on-white, which is the exact anonymity this change removes.
+    const html = brandedHtml()
+    expect(html).toContain("#0B3036") // --green, the CTA fill
+    expect(html).toContain("#FBF8F6") // --paper, the page behind the card
+    expect(html).toContain("#E2DCD8") // --rule, the card border
+    expect(html).not.toContain("var(--")
+    expect(html).not.toMatch(/<\s*style\b/i)
+  })
+
+  it("composeHtmlBody renders the CTA as a filled button, not a bare link", () => {
+    const html = brandedHtml()
+    const anchor = /<a\b[^>]*>/i.exec(html)?.[0] ?? ""
+    expect(anchor).toContain("background:#0B3036")
+    expect(anchor).toContain("color:#FFFFFF")
+    expect(anchor).toContain("text-decoration:none")
+    // Still exactly one destination in the message: the submission.
+    expect(html.match(/<a\b/gi)).toHaveLength(1)
+  })
+
+  it("composeHtmlBody splits the signature onto its own paragraph", () => {
+    // `emailContent`'s bodies close with a blank-line-separated signature.
+    // #83's single `<p>${body}</p>` would have collapsed that to a space and
+    // run "— John, Heuron Technology" onto the end of the sentence above it.
+    const html = brandedHtml()
+    expect(html).toContain("<p style=\"margin:0 0 16px;\">— John, Heuron Technology</p>")
+    expect(html).not.toContain('for &quot;A rota.&quot; — John')
+  })
+
+  it("composeHtmlBody turns a single newline into a break, not a lost line", () => {
+    const html = composeHtmlBody({
+      to: "a@example.test",
+      from: "f@example.test",
+      subject: "s",
+      body: "line one\nline two",
+      ctaHref: "https://portal.example.test/submissions/SUB-BRAND2",
+    })
+    expect(html).toContain("line one<br />line two")
+  })
+
+  it("composeHtmlBody answers 'why am I getting this?' in the body", () => {
+    // The question a recipient asks immediately before hitting Report Spam.
+    const html = brandedHtml()
+    expect(html).toContain("You are receiving this because you asked Heuron Technology")
+  })
+
+  it("composeTextBody is untouched by the branded shell — no markup in the text part", () => {
+    // `tests/acceptance/ms-3/83-email-link.spec.ts` splits the recorded payload
+    // into "looks like markup" and "does not", and requires the full followable
+    // URL to appear in a string that does NOT look like markup. A text-only
+    // client, and every "view original" reader, still needs that.
+    const text = composeTextBody({
+      to: "a@example.test",
+      from: "f@example.test",
+      subject: "s",
+      body: 'Hi — I\'ve put together a design for "A rota."\n\n— John, Heuron Technology',
+      ctaText: "Review the design",
+      ctaHref: "https://portal.example.test/submissions/SUB-BRAND3",
+    })
+    expect(text).not.toMatch(/<\s*(a|p|div|table|td|br|span|h[1-6])\b/i)
+    expect(text).toContain("https://portal.example.test/submissions/SUB-BRAND3")
+    expect(text).toContain("— John, Heuron Technology")
   })
 })
 
@@ -272,7 +389,13 @@ describe("ResendMailProvider", () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     const sent = JSON.parse(init.body as string) as { text: string; html: string }
     expect(sent.text).toContain("https://portal.example.test/submissions/SUB-9")
-    expect(sent.html).toContain('<a href="https://portal.example.test/submissions/SUB-9">')
+    // The anchor now carries #105's button styling, so this matches the `href`
+    // rather than the whole open tag — the same thing
+    // `tests/acceptance/ms-3/83-email-link.spec.ts` matches on.
+    expect(sent.html).toMatch(/<a\b[^>]*href="https:\/\/portal\.example\.test\/submissions\/SUB-9"/)
+    // The Resend adapter gets the branded shell too, not just the fake: #83's
+    // whole reason for composing at this seam.
+    expect(sent.html).toContain("Heuron Technology")
   })
 
   it("omits html entirely, and sends the unmodified body as text, when no CTA is present", async () => {

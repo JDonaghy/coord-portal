@@ -154,6 +154,82 @@ describe("emailContent", () => {
       expect(content.subject).not.toMatch(/#\d+/)
     }
   })
+
+  // ── issue #105: the copy names a business and a person ────────────────────
+  //
+  // Reported for real (dogfood, SUB-C467AA): a `signoff-ready` send landed in
+  // Hotmail's spam folder and was nearly dismissed as spam even after being
+  // found there. The three bodies were one canned sentence each, with no
+  // sender, no business name and no reason-for-receipt — indistinguishable
+  // from the boilerplate a bulk sender emits.
+
+  it("every subject names Heuron Technology, so the inbox list is not anonymous", async () => {
+    const { env } = fakeDb({ round: null })
+    for (const type of SENDING_TYPES) {
+      const content = await emailContent(env, submission(), type)
+      expect(content.subject, `${type} subject`).toContain("Heuron Technology")
+    }
+  })
+
+  it("every body closes with a first-person signature naming the sender", async () => {
+    const { env } = fakeDb({ round: null })
+    for (const type of SENDING_TYPES) {
+      const content = await emailContent(env, submission(), type)
+      expect(content.body, `${type} body`).toContain("— John, Heuron Technology")
+      // Blank-line separated, so `composeHtmlBody` renders it as its own
+      // paragraph rather than running it onto the sentence above.
+      expect(content.body, `${type} body`).toMatch(/\n\n— John, Heuron Technology$/)
+    }
+  })
+
+  it("speaks as one person, not an anonymous corporate 'we'", async () => {
+    // The portal fronts a one-person shop. "We've put together a design" named
+    // nobody; the site's own voice is first-person singular, and matching it is
+    // both truer and more trustworthy.
+    const { env } = fakeDb({ round: null })
+    for (const type of SENDING_TYPES) {
+      const content = await emailContent(env, submission(), type)
+      expect(content.body, `${type} body`).not.toMatch(/\b(we|we've|us|our)\b/i)
+    }
+  })
+
+  it("the new copy still leaks no engineer-side identifier", async () => {
+    // ms-1 contract note 6, treated as an absolute by
+    // `tests/acceptance/ms-1/14-notifications.spec.ts`: an email is the one
+    // customer-facing surface that leaves the product and is kept forever, so
+    // rewritten copy must clear the same wall the old copy did.
+    const { env } = fakeDb({ round: null })
+    const forbidden = /#\d+|\bissue\s*#?\d+|\bepic\b|\bmilestone\b|\bpull request\b|\bPR\b|\bbranch|\bcommit|\bworktree\b|\bagent\b|\bworker\b|\bgithub\b|\bdaemon\b|\bcoord\b/i
+    for (const type of SENDING_TYPES) {
+      const content = await emailContent(env, submission(), type)
+      for (const [field, value] of Object.entries(content)) {
+        expect(value, `${type}.${field}`).not.toMatch(forbidden)
+      }
+    }
+  })
+
+  it("leaves the round-aware preheader and the CTA destination exactly as they were", async () => {
+    // #105 is a copy and branding change. The preheader is the one string the
+    // sealed suite reads a round number out of, and the CTA's destination is
+    // #14's whole premise — neither was part of the defect.
+    const { env } = fakeDb({
+      round: {
+        round: 3,
+        outcome_definition: "Volunteers can see a rota on their phone.",
+        decomposition: "[]",
+        mock_bundle: null,
+        opened_at: "2026-01-02T00:00:00Z",
+        verdict: null,
+        comment: null,
+        decided_at: null,
+      },
+    })
+    const content = await emailContent(env, submission(), "signoff-ready")
+    expect(content.preheader).toContain("Round 3")
+    expect(content.preheader).not.toContain("Heuron")
+    expect(content.ctaText).toBe("Review the design")
+    expect(content.ctaHref).toBe("/submissions/sub_000001")
+  })
 })
 
 describe("recordNotificationForStatus", () => {
