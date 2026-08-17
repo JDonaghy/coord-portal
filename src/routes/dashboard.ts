@@ -1,4 +1,5 @@
-import { readAccessIdentity } from "../identity"
+import { isBehindCloudflareEdge } from "../deployment"
+import { accessRefused, resolveSiteIdentity } from "../identity"
 import { escapeHtml, html, page, topbar } from "../render"
 import { derivedStatus, loadSignoffStates } from "../rounds"
 import {
@@ -19,12 +20,17 @@ import type { Env } from "../types"
  * query bound to the caller's Access identity, never a parameter the request
  * gets to name. See the contract's note 4 and the query-widening probes in
  * the sealed acceptance slice — no `?email=`, `?all=1`, etc. is ever read.
+ *
+ * The identity itself comes from `resolveSiteIdentity` (#1981), not
+ * `readAccessIdentity`: this route returns customer-specific data, so the
+ * email it scopes by is verified behind Cloudflare's edge, not merely
+ * whatever an unverified `Cf-Access-Jwt-Assertion` claims.
  */
 export async function submissionsDashboard(request: Request, env: Env): Promise<Response> {
-  const identity = readAccessIdentity(request)
-  const submissions = identity.email
-    ? await listSubmissionsForCustomer(env, identity.email)
-    : []
+  const email = await resolveSiteIdentity(request, env)
+  if (!email && isBehindCloudflareEdge(request)) return accessRefused()
+
+  const submissions = email ? await listSubmissionsForCustomer(env, email) : []
 
   // The same derived status the detail screen shows (`src/rounds.ts`), so a
   // request the customer has just sent back for changes does not sit on this
@@ -47,7 +53,7 @@ export async function submissionsDashboard(request: Request, env: Env): Promise<
     ),
   }))
 
-  return html(page("My requests — coord-portal", dashboard(identity.email, rows)))
+  return html(page("My requests — coord-portal", dashboard(email, rows)))
 }
 
 interface DashboardRow {

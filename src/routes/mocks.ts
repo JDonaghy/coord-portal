@@ -1,4 +1,4 @@
-import { readAccessIdentity } from "../identity"
+import { resolveSiteIdentity } from "../identity"
 import { html, page } from "../render"
 import { listRounds } from "../rounds"
 import { isOwnedBy } from "./submission"
@@ -32,6 +32,11 @@ import type { Env } from "../types"
  * origin — the same origin as the sign-off buttons. A bundle that could run
  * script could act as the signed-in customer. `script-src 'none'` costs a static
  * mock nothing and closes that entirely.
+ *
+ * The ownership check runs against `resolveSiteIdentity`'s email (#1981), the
+ * same swap `src/routes/submission.ts` makes and for the same reason: this is
+ * customer material gated by `isOwnedBy`, and an unverified claim must not be
+ * able to satisfy it.
  */
 
 const BUNDLE_PATH = /^\/submissions\/([^/?#]+)\/rounds\/(\d+)\/mock(?:\/(.*))?$/
@@ -53,9 +58,9 @@ export async function mockBundle(
   roundNumber: number,
   rest: string,
 ): Promise<Response> {
-  const identity = readAccessIdentity(request)
+  const email = await resolveSiteIdentity(request, env)
   const submission = await getSubmission(env, id)
-  if (!submission || !isOwnedBy(submission, identity.email)) {
+  if (!submission || !isOwnedBy(submission, email)) {
     return notFound()
   }
 

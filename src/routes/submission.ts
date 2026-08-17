@@ -1,5 +1,5 @@
 import { parseFormData } from "../formData"
-import { readAccessIdentity } from "../identity"
+import { resolveSiteIdentity } from "../identity"
 import { getOpenQuestion, recordAnswer, type OpenQuestion } from "../questions"
 import { escapeHtml, html, page, topbar } from "../render"
 import {
@@ -42,22 +42,29 @@ import type { Env } from "../types"
  * path writes it, so a customer who has just requested changes is still stored
  * at `awaiting-signoff` until the fleet notices; what they see is `In design`,
  * because that is true and there is nothing left for them to sign off.
+ *
+ * `isOwnedBy` is checked against `resolveSiteIdentity`'s email (#1981), not
+ * `readAccessIdentity`'s: a forged, unverified claim of someone else's
+ * address must not pass this check. `resolveSiteIdentity` resolving to
+ * `null` (verification failed behind the edge, or nobody is signed in at
+ * all) already fails `isOwnedBy` against every submission — the same 404
+ * below, no separate refusal needed.
  */
 export async function submissionDetail(
   request: Request,
   env: Env,
   id: string,
 ): Promise<Response> {
-  const identity = readAccessIdentity(request)
+  const email = await resolveSiteIdentity(request, env)
   const submission = await getSubmission(env, id)
-  if (!submission || !isOwnedBy(submission, identity.email)) {
+  if (!submission || !isOwnedBy(submission, email)) {
     // Same 404 either way (issue #12: "a customer can only ever see their own
     // submissions"). Knowing the URL is not authorisation, and a 404 that only
     // fires for someone else's id would itself confirm the id exists.
     return html(page("Not found — coord-portal", notFound()), { status: 404 })
   }
 
-  const main = await detailFor(env, identity.email, submission)
+  const main = await detailFor(env, email, submission)
   return html(page(`${submission.reference} — coord-portal`, main))
 }
 
@@ -78,9 +85,9 @@ export async function submitSubmissionAction(
   env: Env,
   id: string,
 ): Promise<Response> {
-  const identity = readAccessIdentity(request)
+  const email = await resolveSiteIdentity(request, env)
   const submission = await getSubmission(env, id)
-  if (!submission || !isOwnedBy(submission, identity.email)) {
+  if (!submission || !isOwnedBy(submission, email)) {
     return html(page("Not found — coord-portal", notFound()), { status: 404 })
   }
 
@@ -111,9 +118,9 @@ export async function submitSubmissionAction(
   const action = stringField(form, "action")
 
   if (action === "approve" || action === "request-changes") {
-    return submitSignoff(env, identity.email, submission, action, form)
+    return submitSignoff(env, email, submission, action, form)
   }
-  return submitAnswer(env, identity.email, submission, form)
+  return submitAnswer(env, email, submission, form)
 }
 
 /**
@@ -250,9 +257,9 @@ export async function submissionRounds(
   env: Env,
   id: string,
 ): Promise<Response> {
-  const identity = readAccessIdentity(request)
+  const email = await resolveSiteIdentity(request, env)
   const submission = await getSubmission(env, id)
-  if (!submission || !isOwnedBy(submission, identity.email)) {
+  if (!submission || !isOwnedBy(submission, email)) {
     return html(page("Not found — coord-portal", notFound()), { status: 404 })
   }
 
@@ -260,7 +267,7 @@ export async function submissionRounds(
   return html(
     page(
       `Round history — ${submission.reference} — coord-portal`,
-      roundHistory(identity.email, submission, rounds),
+      roundHistory(email, submission, rounds),
     ),
   )
 }

@@ -79,7 +79,7 @@ export function matchLeadsPath(
  * harder to triage than a list of first lines.
  */
 export async function leadsInbox(request: Request, env: Env): Promise<Response> {
-  const operator = readOperator(request, env)
+  const operator = await readOperator(request, env)
   if (!operator) return leadsNotFound()
 
   const leads = await listLeads(env)
@@ -94,7 +94,7 @@ export async function leadsInbox(request: Request, env: Env): Promise<Response> 
  * it. The trail from first contact to shipped work stays readable at one URL.
  */
 export async function leadDetail(request: Request, env: Env, id: string): Promise<Response> {
-  const operator = readOperator(request, env)
+  const operator = await readOperator(request, env)
   if (!operator) return leadsNotFound()
 
   const lead = await getLead(env, id)
@@ -119,7 +119,7 @@ export async function promoteLeadAction(
   env: Env,
   id: string,
 ): Promise<Response> {
-  const operator = readOperator(request, env)
+  const operator = await readOperator(request, env)
   if (!operator) return leadsNotFound()
 
   const lead = await getLead(env, id)

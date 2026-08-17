@@ -49,7 +49,7 @@ import { leadsNotFound } from "./leads"
  * scope until the volume exists to justify them.
  */
 export async function deliveries(request: Request, env: Env): Promise<Response> {
-  const operator = readOperator(request, env)
+  const operator = await readOperator(request, env)
   if (!operator) return leadsNotFound()
 
   const rows = await listAllOutbox(env)

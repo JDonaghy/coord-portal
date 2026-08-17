@@ -1,4 +1,5 @@
-import { readAccessIdentity } from "../identity"
+import { isBehindCloudflareEdge } from "../deployment"
+import { accessRefused, resolveSiteIdentity } from "../identity"
 import { escapeHtml, html, page, publicPage } from "../render"
 import { listSubmissionsForCustomer } from "../submissions"
 import type { Env } from "../types"
@@ -24,6 +25,15 @@ import type { Env } from "../types"
  *      language — `/start` (issue #31's public lead form) is exactly that
  *      "how to start" for someone with no account.
  *
+ * Branch 3 only fires off Cloudflare's edge (#1981): the site Access
+ * application gates this whole hostname, so behind the edge a request
+ * reaching this handler with no *verified* identity (`resolveSiteIdentity`,
+ * not `readAccessIdentity`) means Access was bypassed or a token failed
+ * verification, not a stranger — refused, not shown the public front door.
+ * `wrangler dev`, `e2e/` and the sealed acceptance run have no Access in
+ * front, so branch 3 is exactly how they reach this handler with none —
+ * `src/pages.ts`'s own comment on this route.
+ *
  * Deliberately does NOT reuse `topbar()` / `publicHeader()` (`src/render.ts`):
  * both render the brand link as the literal text "coord-portal", and issue
  * #84 names that string explicitly as vocabulary a customer must never see
@@ -32,17 +42,18 @@ import type { Env } from "../types"
  * builds its own minimal header instead of touching the shared one.
  */
 export async function frontDoor(request: Request, env: Env): Promise<Response> {
-  const identity = readAccessIdentity(request)
-  if (!identity.email) {
+  const email = await resolveSiteIdentity(request, env)
+  if (!email) {
+    if (isBehindCloudflareEdge(request)) return accessRefused()
     return html(publicPage("Welcome — coord-portal", anonymousFrontDoor()))
   }
 
-  const submissions = await listSubmissionsForCustomer(env, identity.email)
+  const submissions = await listSubmissionsForCustomer(env, email)
   if (submissions.length > 0) {
     return new Response(null, { status: 302, headers: { location: "/submissions" } })
   }
 
-  return html(page("Welcome — coord-portal", emptyFrontDoor(identity.email)))
+  return html(page("Welcome — coord-portal", emptyFrontDoor(email)))
 }
 
 function anonymousFrontDoor(): string {

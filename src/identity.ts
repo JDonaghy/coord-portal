@@ -9,10 +9,21 @@
  * without passing through Access can set both headers to anything it likes.
  *
  * Therefore `readAccessIdentity`'s `verified` is hard-coded `false` and no
- * caller may make an authorization decision from it. The verified reading is
- * `verifyAccessIdentity()` at the bottom of this file (#70): async, JWKS-backed,
- * signature + `iss` + `aud` + `exp` checked, and it returns `null` — never a
- * half-trusted object — for anything it could not prove.
+ * caller may make an authorization decision from it — it exists only to
+ * personalise a screen that also has to render for someone with no identity
+ * at all (e.g. "signed in as X" in a nav; `GET /api/whoami`'s diagnostic
+ * echo). The verified reading is `verifyAccessIdentity()`, further down
+ * (#70): async, JWKS-backed, signature + `iss` + `aud` + `exp` checked, and it
+ * returns `null` — never a half-trusted object — for anything it could not
+ * prove.
+ *
+ * `resolveSiteIdentity()`, below that, is what closes issue #1981: every
+ * route that scopes a query or authorizes a write by Access identity
+ * (`src/routes/dashboard.ts`, `submission.ts`, `outbox.ts`, `intake.ts`,
+ * `home.ts`, `src/operators.ts`) calls it instead of `readAccessIdentity()`.
+ * Behind Cloudflare's edge it is `verifyAccessIdentity()` pinned to the site
+ * application's own AUD; off it, the same unverified reading as before,
+ * because there is no Access there to verify against.
  *
  * ── MEASURED AGAINST THE LIVE DEPLOYMENT, 2026-08-08 ───────────────────────
  * The two headers are NOT equally trustworthy, and the difference is not
@@ -65,13 +76,18 @@
  * "measured" without a `wrangler tail` line to point at.
  */
 
+import { isBehindCloudflareEdge } from "./deployment"
+import type { Env } from "./types"
+
 export type IdentitySource = "cf-access-header" | "cf-access-jwt" | "none"
 
 export interface AccessIdentity {
   email: string | null
   /**
    * Always false from `readAccessIdentity`, which checks nothing. Never branch
-   * on this expecting true; call `verifyAccessIdentity` if you need proof.
+   * on this expecting true; call `verifyAccessIdentity` (or, for a route that
+   * scopes a query or authorizes a write, `resolveSiteIdentity`) if you need
+   * proof.
    */
   verified: false
   source: IdentitySource
@@ -409,4 +425,72 @@ function base64UrlToBytes(segment: string): Uint8Array | null {
   } catch {
     return null
   }
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * Closing the gap (#1981): the identity a route may actually decide with.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The identity a customer- or operator-facing route may use to **scope a
+ * query or authorize a write** — as opposed to `readAccessIdentity` above,
+ * which stays unverified by design (see the module comment) and is for
+ * personalization only.
+ *
+ * Behind Cloudflare's edge (`isBehindCloudflareEdge` — a header only the edge
+ * itself can set, never the hostname or a config flag: `wrangler dev` rewrites
+ * the hostname to the production domain, so a hostname check would trust a
+ * laptop) this proves the assertion with `verifyAccessIdentity()`, pinned to
+ * the **site** Access application's own AUD (`env.SITE_ACCESS_AUD` — never
+ * `BRIDGE_ACCESS_AUD`; docs/CLOUDFLARE.md is explicit that sharing an AUD
+ * between applications "would let a signed-in human's token be replayed
+ * against the machine API", and using the bridge's here is the same mistake
+ * in the other direction). A forged, expired, wrongly-audienced or unsigned
+ * assertion — the exact `{"alg":"none"}` shape measured live against this
+ * Worker on 2026-08-08, top of this file — resolves to `null`: indistinguishable
+ * from no identity at all, so there is nothing "half-trusted" for a caller to
+ * branch on.
+ *
+ * Off the edge (`wrangler dev`, `e2e/`, the sealed acceptance run) there is no
+ * Access in front and nothing to cryptographically verify, so this falls back
+ * to the same unverified reading every other off-edge gate in this codebase
+ * already relies on (`src/bridge/auth.ts` rule 3, `src/operators.ts`'s
+ * `DEV_OPERATOR_EMAIL` fallback) — there is nothing else for a local identity
+ * to be.
+ *
+ * `env` is typed narrowly rather than as the full `Env` so this module does
+ * not have to import every binding a caller happens to hold; only the two
+ * Access settings are read.
+ */
+export async function resolveSiteIdentity(
+  request: Request,
+  env: Pick<Env, "ACCESS_TEAM_DOMAIN" | "SITE_ACCESS_AUD">,
+): Promise<string | null> {
+  if (isBehindCloudflareEdge(request)) {
+    const verified = await verifyAccessIdentity(request, {
+      teamDomain: env.ACCESS_TEAM_DOMAIN,
+      audience: env.SITE_ACCESS_AUD,
+    })
+    return verified?.email ?? null
+  }
+
+  return readAccessIdentity(request).email
+}
+
+/**
+ * The refusal a route returns when `resolveSiteIdentity` comes back `null`
+ * **behind Cloudflare's edge** — reachable only when Access has already been
+ * bypassed (the `workers_dev` regression this issue is defence-in-depth
+ * against) or a presented assertion fails verification. Ordinary traffic
+ * never reaches this: the site Access application gates the whole hostname
+ * (docs/CLOUDFLARE.md), so a request with no valid session is refused at the
+ * edge and never reaches this Worker at all.
+ *
+ * Empty body, same shape `src/bridge/auth.ts`'s `bridgeUnauthorized` uses and
+ * for the same reason: which of "no assertion", "signature failed", "wrong
+ * audience" or "expired" fired is not something a caller — legitimate or
+ * not — needs to see.
+ */
+export function accessRefused(): Response {
+  return new Response(null, { status: 401, headers: { "cache-control": "no-store" } })
 }

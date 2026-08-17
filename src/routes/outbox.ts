@@ -1,4 +1,5 @@
-import { readAccessIdentity } from "../identity"
+import { isBehindCloudflareEdge } from "../deployment"
+import { accessRefused, resolveSiteIdentity } from "../identity"
 import { DELIVERY_STATUS_TEXT, listOutboxForCustomer, type OutboxEmail } from "../notifications"
 import { escapeHtml, html, page, topbar } from "../render"
 import type { Env } from "../types"
@@ -22,11 +23,17 @@ import type { Env } from "../types"
  * where that guarantee leaves the site (an address is exported to a real
  * inbox that no later fix can recall), so it is scoped at least as tightly as
  * everything else, not less.
+ *
+ * Scoped by `resolveSiteIdentity` (#1981), not `readAccessIdentity` — the
+ * verified email behind Cloudflare's edge, since an unverified claim scoping
+ * who sees which sent addresses is exactly the surface issue #108 is about.
  */
 export async function outbox(request: Request, env: Env): Promise<Response> {
-  const identity = readAccessIdentity(request)
-  const emails = identity.email ? await listOutboxForCustomer(env, identity.email) : []
-  return html(page("Outbox — coord-portal", outboxPage(identity.email, emails)))
+  const email = await resolveSiteIdentity(request, env)
+  if (!email && isBehindCloudflareEdge(request)) return accessRefused()
+
+  const emails = email ? await listOutboxForCustomer(env, email) : []
+  return html(page("Outbox — coord-portal", outboxPage(email, emails)))
 }
 
 function outboxPage(email: string | null, emails: OutboxEmail[]): string {

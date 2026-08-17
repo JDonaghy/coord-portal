@@ -1,5 +1,6 @@
+import { isBehindCloudflareEdge } from "../deployment"
 import { parseFormData } from "../formData"
-import { readAccessIdentity } from "../identity"
+import { accessRefused, resolveSiteIdentity } from "../identity"
 import { escapeHtml, html, page, topbar } from "../render"
 import { createSubmission } from "../submissions"
 import type { Env } from "../types"
@@ -11,9 +12,18 @@ import type { Env } from "../types"
  * form: "It is now asynchronous — a form, not a conversation." One write, no
  * back-and-forth — see the contract's mock `01-intake-form.html`, which this
  * mirrors field-for-field.
+ *
+ * Identity comes from `resolveSiteIdentity` (#1981): this whole hostname sits
+ * behind the site Access application (docs/CLOUDFLARE.md), so a request that
+ * reaches here at all behind Cloudflare's edge with no provable identity means
+ * Access has already been bypassed or a token failed verification — refused,
+ * not rendered with a guessed identity.
  */
-export function intakeForm(request: Request, _env: Env): Response {
-  return html(page("New request — coord-portal", renderForm(request)))
+export async function intakeForm(request: Request, env: Env): Promise<Response> {
+  const email = await resolveSiteIdentity(request, env)
+  if (!email && isBehindCloudflareEdge(request)) return accessRefused()
+
+  return html(page("New request — coord-portal", renderForm(email)))
 }
 
 interface DraftValues {
@@ -32,13 +42,12 @@ const EMPTY_DRAFT: DraftValues = {
   projectScope: "",
 }
 
-function renderForm(request: Request, draft: DraftValues = EMPTY_DRAFT, error?: string): string {
-  const identity = readAccessIdentity(request)
+function renderForm(email: string | null, draft: DraftValues = EMPTY_DRAFT, error?: string): string {
   const errorBlock = error
     ? `<p class="async-note" data-testid="intake-error" role="alert">${escapeHtml(error)}</p>`
     : ""
 
-  return `${topbar(identity.email, "new")}
+  return `${topbar(email, "new")}
 <main>
   <h1>Describe what you want done</h1>
   <p class="lede">No live chat, no back-and-forth right now — write it once, and the team will follow up.</p>
@@ -107,8 +116,17 @@ function renderForm(request: Request, draft: DraftValues = EMPTY_DRAFT, error?: 
  * re-checks server-side (a client is never trusted) and, on a request that
  * skips validation entirely, redisplays the form instead of creating a
  * half-empty submission.
+ *
+ * `customerEmail` comes from `resolveSiteIdentity` (#1981), not
+ * `readAccessIdentity`: this write attributes the new submission to whoever
+ * it names, so behind Cloudflare's edge it must be the verified email, and a
+ * request that cannot prove one is refused before anything is parsed or
+ * written — see the module comment on `intakeForm`.
  */
 export async function submitIntake(request: Request, env: Env): Promise<Response> {
+  const email = await resolveSiteIdentity(request, env)
+  if (!email && isBehindCloudflareEdge(request)) return accessRefused()
+
   // Issue #71: the identical unguarded `request.formData()` throws a raw
   // `TypeError` on a malformed body. This route already has a
   // malformed-request shape — the required-field message below — so a parse
@@ -119,7 +137,7 @@ export async function submitIntake(request: Request, env: Env): Promise<Response
     return html(
       page(
         "New request — coord-portal",
-        renderForm(request, EMPTY_DRAFT, "Please fill in every required field."),
+        renderForm(email, EMPTY_DRAFT, "Please fill in every required field."),
       ),
       { status: 400 },
     )
@@ -135,14 +153,13 @@ export async function submitIntake(request: Request, env: Env): Promise<Response
 
   if (!draft.outcome || !draft.audience || !draft.doneDefinition) {
     return html(
-      page("New request — coord-portal", renderForm(request, draft, "Please fill in every required field.")),
+      page("New request — coord-portal", renderForm(email, draft, "Please fill in every required field.")),
       { status: 400 },
     )
   }
 
-  const identity = readAccessIdentity(request)
   const submission = await createSubmission(env, {
-    customerEmail: identity.email,
+    customerEmail: email,
     outcome: draft.outcome,
     audience: draft.audience,
     doneDefinition: draft.doneDefinition,

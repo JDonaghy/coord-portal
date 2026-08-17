@@ -1,5 +1,5 @@
 import { isBehindCloudflareEdge } from "./deployment"
-import { readAccessIdentity } from "./identity"
+import { resolveSiteIdentity } from "./identity"
 import type { Env } from "./types"
 
 /**
@@ -15,11 +15,17 @@ import type { Env } from "./types"
  *
  * It is still not authentication. Cloudflare Access is (README.md § Access,
  * and CLAUDE.md's "no authentication code in the application") — this module
- * reads the identity Access resolved, via `readAccessIdentity`, and checks it
- * against a configured list. Everything `src/identity.ts` says about that
- * identity being unverified until #1981 applies here unchanged: #70 built
- * `verifyAccessIdentity()` and wired it into the *bridge* only, so the operator
- * allowlist is still checked against an identity nothing has proved.
+ * resolves the identity Access asserted, via `resolveSiteIdentity`
+ * (`src/identity.ts`), and checks it against a configured list.
+ *
+ * #1981 closed the gap this comment used to describe: `resolveSiteIdentity`
+ * verifies the assertion behind Cloudflare's edge — the same JWKS-backed
+ * check #70 built and `src/bridge/auth.ts` has used since, now pinned to the
+ * *site* application's own AUD rather than the bridge's — so a forged
+ * `Cf-Access-Jwt-Assertion` claiming an allowlisted operator's email no longer
+ * reads anyone in. Off the edge (`wrangler dev`, `e2e/`, the sealed acceptance
+ * run) there is no Access to verify against, so the unverified reading still
+ * applies there, same as everywhere else in this codebase.
  *
  * ── HOW IT DECIDES ─────────────────────────────────────────────────────────
  * 1. If `OPERATOR_EMAILS` (or `OPERATOR_EMAIL`) is configured, the caller's
@@ -72,8 +78,8 @@ export interface Operator {
   email: string
 }
 
-export function readOperator(request: Request, env: Env): Operator | null {
-  const email = readAccessIdentity(request).email?.trim()
+export async function readOperator(request: Request, env: Env): Promise<Operator | null> {
+  const email = (await resolveSiteIdentity(request, env))?.trim()
   if (!email) return null
 
   const allowlist = operatorAllowlist(request, env)
