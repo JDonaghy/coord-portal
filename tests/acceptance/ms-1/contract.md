@@ -116,9 +116,10 @@ On-hold:
 Shipped (`10`):
 - `shipped-copy`, `shipped-link`
 
-Emails (`11`–`13`):
-- `email-preview` (`data-email-type` one of `signoff-ready` / `needs-input` / `shipped`),
-  `email-from`, `email-to`, `email-subject`, `email-preheader`, `email-body`, `email-cta`
+Emails (`11`–`13`, extended by issue #107):
+- `email-preview` (`data-email-type` one of `signoff-ready` / `needs-input` / `shipped` /
+  `preview-ready`), `email-from`, `email-to`, `email-subject`, `email-preheader`, `email-body`,
+  `email-cta`
 
 ## Customer status vocabulary (pinned, from issue #10)
 
@@ -131,15 +132,26 @@ Fixed, ordered set. `data-status` slug → exact customer-visible text:
 | `awaiting-signoff` | Awaiting your sign-off | **yes** | no |
 | `planned` | Planned | no | no |
 | `in-progress` | In progress | no | no |
-| `quality-check` | Quality check | no | no |
+| `quality-check` | Quality check | **yes** | no |
 | `needs-input` | Needs your input | **yes** | no |
 | `on-hold` | *(none — collapses to `in-progress`, see below)* | no | no |
 | `shipped` | Shipped | no | **yes** |
 
-Only `Awaiting your sign-off` and `Needs your input` are customer-actionable; only `Shipped` is
-terminal. Per issue #14, those three states — and *only* those three — ever generate an email
-send. This is a black-box invariant: a test may assert that no other status transition produces
-`email-preview` output.
+Only `Awaiting your sign-off`, `Needs your input`, and `Quality check` are customer-actionable;
+only `Shipped` is terminal. Per issue #14, and amended by issue #107 (note 2, below), those four
+states — and *only* those four — ever generate an email send. This is a black-box invariant: a
+test may assert that no other status transition produces `email-preview` output.
+
+**Note 2 (issue #107, 2026-08-18): `quality-check` joins the sending vocabulary.** The pre-merge
+preview-approval gate (docs/CUSTOMER_PORTAL.md, epic #836) makes the moment a submission reaches
+`Quality check` exactly the moment the customer has something new to act on — the live preview
+build, not a mock — so it gets the same "instant-ish, not a digest" treatment `Awaiting your
+sign-off` gets, and its `data-email-type` is `preview-ready`. This amends, and does not
+contradict, the "only three states send" invariant issue #14 originally pinned: the invariant is
+that the vocabulary of sending states is closed and exhaustive, not that its size is frozen at
+three. `Quality check` is also promoted from not-customer-actionable to customer-actionable in the
+table above — the customer approves the preview or requests changes from the submission page,
+exactly the same shape as a design-round sign-off.
 
 **The one deliberate exception.** This contract's standing rule, stated outright elsewhere in it,
 is that the portal "renders the status it is given and derives none of its own." `on-hold` is the
