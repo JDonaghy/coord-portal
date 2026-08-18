@@ -10,19 +10,30 @@ import { expect, test, type APIRequestContext, type Browser, type Page } from "@
  * `mocks/11-email-signoff-ready.html`, `mocks/12-email-needs-input.html`,
  * `mocks/13-email-shipped.html`, without sight of any implementation.
  *
+ * EXTENDED 2026-08-18 against contract.md **as amended by note 2 (issue #107)**,
+ * § "Customer status vocabulary": `quality-check` joins the sending vocabulary
+ * with `data-email-type="preview-ready"`. The amendment is explicit that it
+ * amends this issue's own invariant rather than contradicting it — "the
+ * invariant is that the vocabulary of sending states is closed and exhaustive,
+ * not that its size is frozen at three" — so the invariant this slice exists to
+ * hold is now measured over FOUR states, not three. Three clauses written
+ * against the pre-amendment text had to move with it (they asserted, in as many
+ * words, that reaching `quality-check` was silent); each says so at its site.
+ * Note 2 adds no mock — `preview-ready` is asserted against the same pinned
+ * email DOM as `11`–`13`, which is all the contract gives it.
+ *
  * THE SHAPE UNDER TEST. Issue #14 is one rule with two halves:
  *
  *   REACH    "The async loop only works if 'come back later' actually reaches
- *            the customer." A design round ready for sign-off, a question
- *            raised, and work shipped each put something in the customer's
- *            inbox that brings them back to the submission.
+ *            the customer." A design round ready for sign-off, a preview ready
+ *            to approve, a question raised, and work shipped each put something
+ *            in the customer's inbox that brings them back to the submission.
  *   RESTRAIN "A customer does not need to watch the pipeline breathe." Those
- *            three states, and *only* those three, ever generate a send. The
+ *            four states, and *only* those four, ever generate a send. The
  *            contract states this as a black-box invariant in as many words:
- *            "Per issue #14, those three states — and *only* those three — ever
- *            generate an email send. This is a black-box invariant: a test may
- *            assert that no other status transition produces `email-preview`
- *            output."
+ *            "those four states — and *only* those four — ever generate an
+ *            email send. This is a black-box invariant: a test may assert that
+ *            no other status transition produces `email-preview` output."
  *
  * The restraint half is the one that actually needs an oracle. Reaching the
  * customer fails loudly (nobody comes back); over-sending fails quietly, by
@@ -114,8 +125,12 @@ async function outboxPath(page: Page): Promise<string> {
 
 // ── the pinned email surface ────────────────────────────────────────────────
 
-/** Contract § `data-testid` hooks, Emails (11–13): the pinned `data-email-type`s. */
-const SENDING_TYPES = ["signoff-ready", "needs-input", "shipped"] as const
+/**
+ * Contract § `data-testid` hooks, Emails (11–13, extended by issue #107): the
+ * pinned `data-email-type`s — `signoff-ready` / `needs-input` / `shipped` /
+ * `preview-ready`.
+ */
+const SENDING_TYPES = ["signoff-ready", "needs-input", "shipped", "preview-ready"] as const
 type SendType = (typeof SENDING_TYPES)[number]
 
 /** Contract § Emails (11–13): every hook an `email-preview` must contain. */
@@ -129,24 +144,37 @@ const EMAIL_TESTIDS = [
 ]
 
 /**
- * Contract § "Customer status vocabulary": the three states that send, mapped to
- * the `data-email-type` each one produces. `awaiting-signoff` and `needs-input`
- * are the two customer-actionable states; `shipped` is the terminal one.
+ * Contract § "Customer status vocabulary", as amended by note 2: the four states
+ * that send, mapped to the `data-email-type` each one produces.
+ * `awaiting-signoff`, `quality-check` and `needs-input` are the three
+ * customer-actionable states; `shipped` is the terminal one.
  */
 const TYPE_FOR_STATUS: Record<string, SendType> = {
   "awaiting-signoff": "signoff-ready",
+  "quality-check": "preview-ready",
   "needs-input": "needs-input",
   shipped: "shipped",
 }
 
 /** Every other slug in the pinned vocabulary — none of these may ever send. */
-const SILENT_STATUSES = [
+const SILENT_STATUSES = ["describing", "in-design", "planned", "in-progress", "on-hold"]
+
+/**
+ * The pinned vocabulary in its pinned order (§ "Customer status vocabulary").
+ * Used by the exhaustiveness clause: the send rule is only worth anything if it
+ * is closed over the WHOLE list, not merely correct on the states someone
+ * remembered to try.
+ */
+const VOCABULARY = [
   "describing",
   "in-design",
+  "awaiting-signoff",
   "planned",
   "in-progress",
   "quality-check",
+  "needs-input",
   "on-hold",
+  "shipped",
 ]
 
 // ── bridge transport (the instrument, not the subject) ──────────────────────
@@ -241,6 +269,23 @@ const QUESTION =
   "Should volunteers who swap a shift need the rota owner to confirm it, or is a straight swap enough?"
 
 /**
+ * The artefact that makes `quality-check` customer-actionable under note 2: "the
+ * live preview build, not a mock". `artifacts` is coord-owned (§ sole-writer
+ * table), so this rides in on the same push as the status.
+ *
+ * TODO(test-author): the contract pins NO field name for a preview build — the
+ * sole-writer table lists `artifacts` and nothing finer, and note 2 pins no new
+ * `data-testid` on the submission screen for it either. `kind: "preview"` below
+ * is therefore this suite's synthetic content, not a pinned shape: nothing in
+ * this slice asserts the portal reads it. What is asserted is only what note 2
+ * actually pins — that arriving at `quality-check` sends one `preview-ready`
+ * email.
+ */
+const PREVIEW_ARTIFACTS = [
+  { kind: "preview", url: "https://preview.example.test/rota/build-7/" },
+]
+
+/**
  * One inbox per test. The acceptance database is wiped per *run*, not per *test*
  * (tests/acceptance/README.md § Determinism), and an outbox is cumulative by
  * nature — so isolation here comes from each test owning a distinct synthetic
@@ -260,6 +305,8 @@ const INBOX = {
   wall: "rota-wall@example.test",
   repeat: "rota-repeat@example.test",
   screens: "rota-screens@example.test",
+  preview: "rota-preview@example.test",
+  vocabulary: "rota-vocabulary@example.test",
 }
 
 const REFERENCE = /^SUB-[A-Z0-9]{6}$/
@@ -501,6 +548,88 @@ test.describe("ms-1 issue 14 customer notifications", () => {
     // requires the question to appear, and nothing forbids it either.
   })
 
+  test("a preview ready for approval sends the customer exactly one email", async ({
+    page,
+    request,
+  }) => {
+    // Contract note 2 (issue #107), § "Customer status vocabulary": "the moment
+    // a submission reaches `Quality check` [is] exactly the moment the customer
+    // has something new to act on — the live preview build, not a mock — so it
+    // gets the same 'instant-ish, not a digest' treatment `Awaiting your
+    // sign-off` gets, and its `data-email-type` is `preview-ready`."
+    await asCustomer(page, INBOX.preview)
+    const target = await seedSubmission(page, 0)
+
+    // The run-up. None of it is the customer's business, and asserting that
+    // first is what makes the single send below attributable to `quality-check`
+    // rather than to "something happened".
+    let revision = 6100
+    for (const status of ["in-design", "planned", "in-progress"]) {
+      expect(
+        (await pushStatus(request, target.reference, revision++, status)).outcome,
+        "`status` is coord-owned",
+      ).toBe("applied")
+    }
+    expect(
+      (await readOutbox(page, INBOX.preview)).length,
+      "the run-up to a preview is silent",
+    ).toBe(0)
+
+    // The preview build lands and the submission moves to `quality-check` — one
+    // atomic update, exactly as a design round arrives with its status.
+    expect(
+      (await pushFields(request, target.reference, revision++, {
+        status: "quality-check",
+        artifacts: PREVIEW_ARTIFACTS,
+      })).outcome,
+      "`status` and `artifacts` are both coord-owned",
+    ).toBe("applied")
+
+    const [email] = await awaitOutbox(page, INBOX.preview, 1)
+    expect(
+      email.type,
+      "contract note 2: `quality-check` produces `data-email-type=\"preview-ready\"`",
+    ).toBe("preview-ready")
+    expect(email.missing, "the email carries every pinned hook").toEqual([])
+    expect(email.to, "the send is addressed to the signed-in customer").toContain(INBOX.preview)
+    expect((email.subject ?? "").length, "an email has a subject").toBeGreaterThan(0)
+    expect((email.preheader ?? "").length, "…a preheader").toBeGreaterThan(0)
+    expect((email.body ?? "").length, "…a body").toBeGreaterThan(0)
+
+    // Note 2 promotes `quality-check` to customer-actionable — "the customer
+    // approves the preview or requests changes from the submission page" — so
+    // this email, like the sign-off one, has to land the customer somewhere they
+    // can act.
+    expect(email.ctaHref, "the call to action points somewhere").toBeTruthy()
+    expect(email.ctaHref, "…and not at nothing").not.toBe("#")
+    const destination = new URL(email.ctaHref as string, "http://127.0.0.1:8789")
+    await page.goto(`${destination.pathname}${destination.search}`)
+    await expect(
+      page.getByTestId("submission-detail"),
+      "the call to action lands on the submission",
+    ).toBeVisible()
+    expect(
+      await page.getByTestId("submission-reference").innerText(),
+      "…the one the email was about",
+    ).toContain(target.reference)
+    expect(
+      await page.getByTestId("status-pill").getAttribute("data-status"),
+      "…in the state that generated the send",
+    ).toBe("quality-check")
+
+    // TODO(test-author): note 2 pins no `data-testid` for the preview build
+    // itself — no `preview-link`, no addition to § "`data-testid` hooks" — so
+    // nothing here asserts the screen renders a link to it, only that the email
+    // arrives and returns the customer to the submission. If the preview link is
+    // meant to be a pinned customer-visible hook (on the screen or in the
+    // email's CTA target), the contract needs to say so before it can be tested.
+    //
+    // TODO(test-author): "instant-ish, not a digest" is not asserted as a
+    // latency bound, for the same reason the envelope clause below does not
+    // assert a cadence: the contract pins no window. `awaitOutbox` polls for
+    // 30s, so a queued implementation passes and a never-sending one fails.
+  })
+
   test("shipped work sends the customer exactly one final email", async ({ page, request }) => {
     // Issue #14: "Transactional email for: … work shipped". `shipped` is the
     // only terminal state in the pinned vocabulary.
@@ -508,7 +637,7 @@ test.describe("ms-1 issue 14 customer notifications", () => {
     const target = await seedSubmission(page, 2)
 
     let revision = 5200
-    for (const status of ["in-design", "planned", "in-progress", "quality-check"]) {
+    for (const status of ["in-design", "planned", "in-progress"]) {
       expect(
         (await pushStatus(request, target.reference, revision++, status)).outcome,
         "`status` is coord-owned",
@@ -516,14 +645,33 @@ test.describe("ms-1 issue 14 customer notifications", () => {
     }
     expect(
       (await readOutbox(page, INBOX.shipped)).length,
-      "the whole run-up to shipping is silent",
+      "the non-sending run-up to shipping is silent",
     ).toBe(0)
+
+    // AMENDED by contract note 2 (issue #107). This loop used to include
+    // `quality-check` and assert "the whole run-up to shipping is silent" — that
+    // reading of the run-up is no longer true, because reaching `Quality check`
+    // is now itself a send. The real submission still passes through it on the
+    // way to `Shipped`, so it is kept here, with the email it now owes.
+    expect(
+      (await pushFields(request, target.reference, revision++, {
+        status: "quality-check",
+        artifacts: PREVIEW_ARTIFACTS,
+      })).outcome,
+    ).toBe("applied")
+    const [preview] = await awaitOutbox(page, INBOX.shipped, 1)
+    expect(preview.type, "reaching `quality-check` sends the preview email").toBe("preview-ready")
 
     expect(
       (await pushStatus(request, target.reference, revision++, "shipped")).outcome,
     ).toBe("applied")
 
-    const [email] = await awaitOutbox(page, INBOX.shipped, 1)
+    const sentSoFar = await awaitOutbox(page, INBOX.shipped, 2)
+    const email = sentSoFar[sentSoFar.length - 1]
+    expect(
+      sentSoFar.map((each) => each.type),
+      "one preview email, then one shipped email — nothing else",
+    ).toEqual(["preview-ready", "shipped"])
     expect(email.type, "contract § Emails: `shipped` produces `data-email-type=\"shipped\"`").toBe(
       "shipped",
     )
@@ -543,29 +691,31 @@ test.describe("ms-1 issue 14 customer notifications", () => {
       })).outcome,
     ).toBe("applied")
 
+    const afterwards = await readOutbox(page, INBOX.shipped)
+    expect(afterwards.length, "no send followed the terminal one").toBe(2)
     expect(
-      (await readOutbox(page, INBOX.shipped)).length,
+      afterwards[afterwards.length - 1].type,
       "shipped is the last email about this request",
-    ).toBe(1)
+    ).toBe("shipped")
   })
 
-  test("only the three customer-facing states ever send an email", async ({ page, request }) => {
-    // THE INVARIANT, stated by the contract itself: "those three states — and
-    // *only* those three — ever generate an email send. This is a black-box
-    // invariant: a test may assert that no other status transition produces
-    // `email-preview` output."
+  test("only the four customer-facing states ever send an email", async ({ page, request }) => {
+    // THE INVARIANT, stated by the contract itself and amended by note 2: those
+    // four states — and *only* those four — ever generate an email send. "This
+    // is a black-box invariant: a test may assert that no other status
+    // transition produces `email-preview` output."
+    //
+    // AMENDED by contract note 2 (issue #107): `quality-check` used to be
+    // measured here, as one of six silent statuses. It is now one of the four
+    // that send, and is measured as such in "a preview ready for approval sends
+    // the customer exactly one email"; five silent statuses are left.
     await asCustomer(page, INBOX.silence)
     const target = await seedSubmission(page, 3)
 
     let revision = 5300
     for (const status of SILENT_STATUSES) {
       const result = await pushStatus(request, target.reference, revision++, status)
-      // `on-hold`'s customer visibility is unresolved (contract note 1), so its
-      // push is allowed to be refused — what is NOT allowed, either way, is an
-      // email about it.
-      if (status !== "on-hold") {
-        expect(result.outcome, `\`${status}\` is a coord-owned status push`).toBe("applied")
-      }
+      expect(result.outcome, `\`${status}\` is a coord-owned status push`).toBe("applied")
 
       expect(
         (await readOutbox(page, INBOX.silence)).length,
@@ -582,8 +732,79 @@ test.describe("ms-1 issue 14 customer notifications", () => {
     const sent = await awaitOutbox(page, INBOX.silence, 1)
     expect(
       sent.map((email) => email.type),
-      "six silent transitions and one terminal one produce exactly one email",
+      "five silent transitions and one terminal one produce exactly one email",
     ).toEqual(["shipped"])
+  })
+
+  test("the sending vocabulary is closed and exhaustive over the whole status list", async ({
+    page,
+    request,
+  }) => {
+    // Note 2 pins what the invariant actually IS, now that its size has moved
+    // once: "the invariant is that the vocabulary of sending states is closed
+    // and exhaustive, not that its size is frozen at three." The clause above
+    // measures the silent half against a hand-listed set; this one measures both
+    // halves against the WHOLE pinned vocabulary in its pinned order, so a
+    // status that quietly gains or loses a send fails here even if someone
+    // forgot to update `SILENT_STATUSES` alongside it.
+    await asCustomer(page, INBOX.vocabulary)
+    const target = await seedSubmission(page, 1)
+
+    let revision = 6200
+    const expectedTypes: string[] = []
+
+    for (const status of VOCABULARY) {
+      const fields: Record<string, unknown> = { status }
+      // Each sending state's coord-owned companion facts ride in on the same
+      // update, because that is how coord actually proposes them.
+      if (status === "awaiting-signoff") {
+        fields.design_round = {
+          round: ROUND.round,
+          outcome_definition: ROUND.outcome,
+          mock_bundle_url: ROUND.mockBundleUrl,
+        }
+        fields.decomposition = ROUND.decomposition
+      } else if (status === "quality-check") {
+        fields.artifacts = PREVIEW_ARTIFACTS
+      } else if (status === "needs-input") {
+        fields.question = QUESTION
+      }
+
+      expect(
+        (await pushFields(request, target.reference, revision++, fields)).outcome,
+        `\`${status}\` is an ordinary member of the pinned vocabulary and a valid push`,
+      ).toBe("applied")
+
+      const type = TYPE_FOR_STATUS[status]
+      if (type !== undefined) expectedTypes.push(type)
+
+      const sent = await awaitOutbox(page, INBOX.vocabulary, expectedTypes.length)
+      expect(
+        sent.map((email) => email.type),
+        `after \`${status}\`, the inbox holds exactly the sends the vocabulary owes`,
+      ).toEqual(expectedTypes)
+    }
+
+    expect(
+      expectedTypes,
+      "nine pinned statuses, four sends, in the vocabulary's own order",
+    ).toEqual(["signoff-ready", "preview-ready", "needs-input", "shipped"])
+
+    for (const email of await readOutbox(page, INBOX.vocabulary)) {
+      expect(
+        SENDING_TYPES as readonly string[],
+        "no send carries a `data-email-type` outside the pinned four",
+      ).toContain(email.type)
+    }
+
+    // TODO(test-author): this walks the vocabulary in its pinned order, one
+    // revision per step, which is not the only order a real submission takes —
+    // the contract pins the vocabulary as "fixed, ordered" but pins no legal
+    // transition graph, so nothing here asserts which moves are allowed, only
+    // which ones send. `on-hold` is pushed as an ordinary member (§ "Customer
+    // status vocabulary": a push setting it "resolves `applied` /
+    // `already_applied` like any other status") and, per note 1, sends nothing —
+    // it renders as `In progress`, which is itself silent.
   })
 
   test("the pipeline breathing never reaches the customer's inbox", async ({ page, request }) => {
@@ -598,13 +819,16 @@ test.describe("ms-1 issue 14 customer notifications", () => {
     let revision = 5400
     for (let cycle = 0; cycle < 3; cycle++) {
       // A build fails, work goes back, a decomposition item is re-planned, an
-      // artifact is replaced, the daemon checks in. Five heartbeats of a
+      // artifact is replaced, the daemon checks in. Four heartbeats of a
       // pipeline; zero of them are the customer's business.
+      //
+      // AMENDED by contract note 2 (issue #107): this cycle used to bounce
+      // between `in-progress` and `quality-check`, on the reading that both were
+      // internal churn. `quality-check` is now a sending state, so cycling it
+      // here would be asserting the opposite of what the contract now says.
+      // Re-entry is left alone deliberately — see the TODO below.
       expect(
         (await pushStatus(request, target.reference, revision++, "in-progress")).outcome,
-      ).toBe("applied")
-      expect(
-        (await pushStatus(request, target.reference, revision++, "quality-check")).outcome,
       ).toBe("applied")
       expect(
         (await pushFields(request, target.reference, revision++, {
@@ -626,7 +850,7 @@ test.describe("ms-1 issue 14 customer notifications", () => {
 
     expect(
       (await readOutbox(page, INBOX.churn)).length,
-      "twelve coord-side updates and three heartbeats are not news",
+      "nine coord-side updates and three heartbeats are not news",
     ).toBe(0)
 
     // Positive control, as above.
@@ -635,20 +859,30 @@ test.describe("ms-1 issue 14 customer notifications", () => {
     ).toBe("applied")
     const sent = await awaitOutbox(page, INBOX.churn, 1)
     expect(sent[0].type, "only the terminal state broke the silence").toBe("shipped")
+
+    // TODO(test-author): whether RE-ENTERING a sending state re-sends is still
+    // unpinned — the same gap "a re-applied push does not re-send an email"
+    // records. Note 2 sharpens the question without answering it: a preview
+    // build that is rejected, rebuilt and re-offered puts a submission into
+    // `quality-check` more than once, and the contract says neither "once per
+    // arrival" nor "once per submission". Nothing in this slice asserts either,
+    // so an implementation is free to choose until the contract says otherwise.
   })
 
   test("every email carries the pinned envelope, addressed to the signed-in customer", async ({
     page,
     request,
   }) => {
-    // One submission, driven through all three sending states, so the envelope
-    // is checked against every `data-email-type` the contract pins.
+    // One submission, driven through all FOUR sending states, so the envelope is
+    // checked against every `data-email-type` the contract pins — including
+    // `preview-ready`, which note 2 (issue #107) added without adding a mock, so
+    // this pinned-hook block is the only description it has.
     await asCustomer(page, INBOX.envelope)
     const target = await seedSubmission(page, 1)
 
     let revision = 5500
     const expectedTypes: SendType[] = []
-    for (const status of ["awaiting-signoff", "needs-input", "shipped"]) {
+    for (const status of ["awaiting-signoff", "needs-input", "quality-check", "shipped"]) {
       const fields: Record<string, unknown> =
         status === "awaiting-signoff"
           ? {
@@ -662,7 +896,9 @@ test.describe("ms-1 issue 14 customer notifications", () => {
             }
           : status === "needs-input"
             ? { status, question: QUESTION }
-            : { status }
+            : status === "quality-check"
+              ? { status, artifacts: PREVIEW_ARTIFACTS }
+              : { status }
       expect((await pushFields(request, target.reference, revision++, fields)).outcome).toBe(
         "applied",
       )
@@ -679,7 +915,7 @@ test.describe("ms-1 issue 14 customer notifications", () => {
     for (const email of sent) {
       expect(
         SENDING_TYPES as readonly string[],
-        "contract § Emails pins `signoff-ready` / `needs-input` / `shipped`",
+        "contract § Emails pins `signoff-ready` / `needs-input` / `shipped` / `preview-ready`",
       ).toContain(email.type)
       expect(
         email.missing,
@@ -862,10 +1098,23 @@ test.describe("ms-1 issue 14 customer notifications", () => {
     ).toBe("applied")
     await awaitOutbox(page, INBOX.wall, 2)
 
+    // AMENDED by contract note 2 (issue #107): the `preview-ready` email is a
+    // fourth customer-facing artefact that leaves the product, so the wall is
+    // measured across it too. It is the likeliest of the four to leak, because
+    // the thing it is about — a preview BUILD — is the closest any of them gets
+    // to engineer-side machinery.
+    expect(
+      (await pushFields(request, target.reference, revision++, {
+        status: "quality-check",
+        artifacts: PREVIEW_ARTIFACTS,
+      })).outcome,
+    ).toBe("applied")
+    await awaitOutbox(page, INBOX.wall, 3)
+
     expect((await pushStatus(request, target.reference, revision++, "shipped")).outcome).toBe(
       "applied",
     )
-    const sent = await awaitOutbox(page, INBOX.wall, 3)
+    const sent = await awaitOutbox(page, INBOX.wall, 4)
 
     for (const email of sent) {
       // Positive control first: an email that failed to render leaks nothing and

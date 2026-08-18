@@ -70,11 +70,25 @@ issues:
     - "[chromium] ms-1/13-design-rounds.spec.ts › ms-1 issue 13 design rounds › coord may never write the customer's sign-off verdict or comment"
     - "[chromium] ms-1/13-design-rounds.spec.ts › ms-1 issue 13 design rounds › a submission not awaiting sign-off offers no sign-off actions"
     - "[chromium] ms-1/13-design-rounds.spec.ts › ms-1 issue 13 design rounds › a sign-off decision reaches coord once, and replays from a cursor"
+  # #14's slice was EXTENDED 2026-08-18 against contract.md as amended by note 2
+  # (issue #107, commit d6e56a3): `quality-check` joins the email-sending
+  # vocabulary as `data-email-type="preview-ready"`. Two ids are new; one was
+  # RENAMED, because its title stated the size of the invariant and the
+  # amendment moved it:
+  #
+  #   "only the three customer-facing states ever send an email"
+  #     → "only the four customer-facing states ever send an email"
+  #
+  # The old id is gone on purpose and must not be restored — it no longer names
+  # anything in the suite, and `coord acceptance run --issue 14` would report it
+  # as a missing test.
   14:
     - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › a design ready for sign-off sends the customer exactly one email"
     - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › a raised question sends the customer exactly one email"
+    - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › a preview ready for approval sends the customer exactly one email"
     - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › shipped work sends the customer exactly one final email"
-    - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › only the three customer-facing states ever send an email"
+    - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › only the four customer-facing states ever send an email"
+    - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › the sending vocabulary is closed and exhaustive over the whole status list"
     - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › the pipeline breathing never reaches the customer's inbox"
     - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › every email carries the pinned envelope, addressed to the signed-in customer"
     - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › the email's call to action brings the customer back to the submission"
@@ -200,4 +214,32 @@ issues:
 # `102 test(s), 0 real failure(s), 7 unexpected-green`. Applied by hand for the
 # third milestone running: `coord merge`'s automatic clearer cannot match quoted
 # ids (claude-coordinator#2296).
-expected_red: {}
+#
+# #14's five entries below were measured red 2026-08-18 (`npm run test:acceptance
+# -- 14-notifications`: 5 failed, 8 passed) against contract.md as amended by
+# note 2 (issue #107). Every one of the five fails for the same single reason —
+# reaching `quality-check` sends no `preview-ready` email today:
+#
+#   a preview ready …                → expected 1 email, received 0
+#   shipped work …                   → expected 1 (the preview), received 0
+#   the sending vocabulary …         → expected 2 by `quality-check`, received 1
+#   every email carries the envelope → expected 3, received 2
+#   no engineer-side identifier …    → expected 3, received 2
+#
+# The eight that stayed GREEN are NOT registered here, and two of them are green
+# on purpose rather than incidentally:
+#
+#   - "only the four customer-facing states ever send an email" is the RATCHET
+#     for the closed half of the invariant. `quality-check` was removed from its
+#     silent set by this amendment; the five statuses left must stay silent, and
+#     a fix that makes the portal chattier breaks here instead of shipping.
+#   - "the pipeline breathing never reaches the customer's inbox" is the same
+#     ratchet for the churn path — its cycle no longer bounces through
+#     `quality-check`, so it stays green and must.
+expected_red:
+  14:
+    - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › a preview ready for approval sends the customer exactly one email"
+    - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › shipped work sends the customer exactly one final email"
+    - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › the sending vocabulary is closed and exhaustive over the whole status list"
+    - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › every email carries the pinned envelope, addressed to the signed-in customer"
+    - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › no engineer-side identifier reaches the customer's inbox"
