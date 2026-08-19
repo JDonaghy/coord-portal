@@ -21,8 +21,9 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
  *  1. **The vocabulary is closed and its wording is pinned.** Nine slugs, nine
  *     exact strings, rendered on `status-pill` / `submission-detail` /
  *     `submission-row`. Anything else reaching the customer is a wall breach.
- *  2. **Only `Awaiting your sign-off` and `Needs your input` demand the
- *     customer; only `Shipped` is terminal.** The other states are read-only —
+ *  2. **Only `Awaiting your sign-off`, `Needs your input` and — since contract
+ *     note 2 — `Quality check` demand the customer; only `Shipped` is
+ *     terminal.** The other states are read-only status reports —
  *     "request-changes reviews, merge conflicts and CI churn stay hidden inside
  *     In progress / Quality check".
  *  3. **The portal renders and does not derive.** A status arrives as a
@@ -79,7 +80,12 @@ const VOCABULARY: Vocab[] = [
   },
   { slug: "planned", text: "Planned", actionable: false, terminal: false },
   { slug: "in-progress", text: "In progress", actionable: false, terminal: false },
-  { slug: "quality-check", text: "Quality check", actionable: false, terminal: false },
+  // Contract note 2 (issue #107, 2026-08-18): "`Quality check` is also promoted
+  // from not-customer-actionable to customer-actionable in the table above — the
+  // customer approves the preview or requests changes from the submission page,
+  // exactly the same shape as a design-round sign-off." The wording, the slug and
+  // the rollup chrome are untouched by that amendment; only this column moved.
+  { slug: "quality-check", text: "Quality check", actionable: true, terminal: false },
   { slug: "needs-input", text: "Needs your input", actionable: true, terminal: false },
   { slug: "on-hold", text: "On hold", actionable: false, terminal: false },
   { slug: "shipped", text: "Shipped", actionable: false, terminal: true },
@@ -400,22 +406,31 @@ test.describe("ms-1 issue 10 up-mapping read model", () => {
     }
   })
 
-  test("only the two customer-actionable states ask the customer for anything", async ({
+  test("only the three customer-actionable states ask the customer for anything", async ({
     page,
     request,
   }) => {
     await asCustomer(page, "actionable@example.test")
 
-    // Contract: "Only `Awaiting your sign-off` and `Needs your input` are
+    // Contract § "Customer status vocabulary", as amended by note 2: "Only
+    // `Awaiting your sign-off`, `Needs your input`, and `Quality check` are
     // customer-actionable; only `Shipped` is terminal." Every other state is a
     // read-only status report — nothing on it may ask the customer to decide,
     // approve, or answer.
     //
-    // TODO(test-author): the positive half — that the two actionable states DO
-    // render their affordances — needs a published design round (#13) or an
-    // open question (#11), neither of which this slice may assume exists, and
-    // both of which those slices already own. Only the negative half is
-    // asserted here.
+    // This clause is the RATCHET for the closed half of that column, and it is
+    // deliberately narrower than it was before note 2: `quality-check` left the
+    // silent set, so the five statuses that remain must stay silent. An
+    // implementation that hangs the new preview-approval affordance off the
+    // wrong states — or off every state — breaks here rather than shipping.
+    //
+    // TODO(test-author): the positive half for `Awaiting your sign-off` and
+    // `Needs your input` needs a published design round (#13) or an open
+    // question (#11), neither of which this slice may assume exists, and both of
+    // which those slices already own. `Quality check`'s positive half needs
+    // neither — note 2 pins the *status itself* as "exactly the moment the
+    // customer has something new to act on" — so it is asserted below, in its
+    // own two clauses.
     const NON_ACTIONABLE = SETTLED.filter((v) => !v.actionable)
 
     let revision = 300
@@ -806,5 +821,147 @@ test.describe("ms-1 issue 10 up-mapping read model", () => {
     // TODO(test-author): likewise unasserted — whether `onhold-since` is the
     // moment work paused or the moment the threshold was crossed. The contract
     // pins the format only.
+  })
+
+  // ── contract note 2 (issue #107, 2026-08-18) ───────────────────────────────
+  //
+  // The amendment moves one cell of issue #10's own pinned table: `quality-check`
+  // is now customer-actionable. That is a read-model fact, so it belongs to this
+  // slice — the same way #14's slice absorbed the send-vocabulary half of the
+  // same amendment. What is asserted here is only the vocabulary consequence:
+  // reaching the status makes the submission demand its customer. What the
+  // approval *does* afterwards is not asserted anywhere below — see the TODOs.
+
+  test("Quality check asks the customer to approve the preview or request changes", async ({
+    page,
+    request,
+  }) => {
+    await asCustomer(page, "preview-gate@example.test")
+
+    // Contract note 2, verbatim: "the pre-merge preview-approval gate … makes
+    // the moment a submission reaches `Quality check` exactly the moment the
+    // customer has something new to act on — the live preview build, not a mock
+    // … `Quality check` is also promoted from not-customer-actionable to
+    // customer-actionable in the table above — the customer approves the preview
+    // or requests changes from the submission page".
+    //
+    // So the *status* is the trigger. `status` is coord-owned, and a bridge push
+    // is the only black-box way to set it, exactly as everywhere else in this
+    // slice.
+    const seeded = await seedSubmission(page, 4)
+    expect(
+      (await setStatus(request, seeded.reference, "quality-check", 1000)).outcome,
+      "`quality-check` is in the pinned vocabulary and coord owns `status`",
+    ).toBe("applied")
+
+    // The promotion changes the affordance, not the word: everything the
+    // vocabulary table pins about how `quality-check` *reads* is unchanged.
+    const shown = await readDetailStatus(page, seeded.url)
+    expect(shown.pill, "the pushed slug still reaches the pill").toBe("quality-check")
+    expect(shown.root, "the detail root still carries the slug").toBe("quality-check")
+    expect(shown.pillText, "note 2 moved the actionable column, not the wording").toBe(
+      "Quality check",
+    )
+
+    // The demand itself. Note 2 pins its shape by reference — "exactly the same
+    // shape as a design-round sign-off" — and the contract's `data-testid` hooks
+    // for the sign-off screen (`05`) name that shape: `approve-button` and
+    // `request-changes-button`.
+    await expect(
+      page.getByTestId("approve-button"),
+      "at `quality-check` the customer can approve the preview",
+    ).toBeVisible()
+    await expect(
+      page.getByTestId("request-changes-button"),
+      "at `quality-check` the customer can request changes instead",
+    ).toBeVisible()
+
+    // "the live preview build, not a mock." `mock-bundle-link` is the contract's
+    // hook for a design round's mock bundle; a preview gate that reuses it is
+    // showing the customer the wrong artifact.
+    await expect(
+      page.getByTestId("mock-bundle-link"),
+      "a preview build is not a mock bundle",
+    ).toHaveCount(0)
+
+    // TODO(test-author): the contract pins no `data-testid` and no bridge field
+    // for the preview build itself — note 2 predates no mock, and `mocks/` has no
+    // preview screen (the inventory stops at `13-email-shipped.html`). So *what*
+    // the customer is shown to review, and how the daemon delivers the preview
+    // URL (an `artifacts` push? a dedicated field?), is deliberately unasserted
+    // here rather than invented. Only the demand pinned by the vocabulary table
+    // is asserted.
+    // TODO(test-author): what approving the preview *does* is likewise
+    // unasserted. `status` is coord-owned in the sole-writer table, so the portal
+    // cannot move the submission to `Shipped` itself, and the contract pins no
+    // outcome for the approve action at `quality-check`.
+  })
+
+  test("the Quality check demand has the same shape as a design-round sign-off", async ({
+    page,
+    request,
+  }) => {
+    await asCustomer(page, "preview-shape@example.test")
+
+    // Note 2: "the customer approves the preview or requests changes from the
+    // submission page, exactly the same shape as a design-round sign-off." The
+    // contract pins that shape's composer on the `06-request-changes.html` screen
+    // — `request-changes-form`, `changes-comment`, `cancel-changes`,
+    // `submit-changes` — and pins that the composer is "not a distinct URL", so
+    // it opens in place.
+    const seeded = await seedSubmission(page, 5)
+    expect(
+      (await setStatus(request, seeded.reference, "quality-check", 1100)).outcome,
+    ).toBe("applied")
+
+    const shown = await readDetailStatus(page, seeded.url)
+    expect(shown.pill, "the screen under test really is at `quality-check`").toBe(
+      "quality-check",
+    )
+
+    // Closed until asked for, exactly as on the sign-off screen: `05` renders the
+    // two buttons and no composer, `06` is the same screen with it expanded.
+    await expect(
+      page.getByTestId("request-changes-form"),
+      "the composer is closed until the customer asks for it",
+    ).toHaveCount(0)
+
+    const urlBefore = page.url()
+    // Asserted before the click so an absent affordance fails as itself, rather
+    // than as a 30-second click timeout that reads like a hang.
+    await expect(
+      page.getByTestId("request-changes-button"),
+      "the sign-off-shaped demand is on the screen to be clicked",
+    ).toBeVisible()
+    await page.getByTestId("request-changes-button").click()
+
+    await expect(
+      page.getByTestId("request-changes-form"),
+      "requesting changes opens the composer in place",
+    ).toBeVisible()
+    expect(page.url(), "the composer is not a distinct URL").toBe(urlBefore)
+    await expect(page.getByTestId("changes-comment")).toBeVisible()
+    await expect(page.getByTestId("submit-changes")).toBeVisible()
+    await expect(page.getByTestId("cancel-changes")).toBeVisible()
+
+    // Cancelling leaves the submission exactly where it was — the status is
+    // coord's, and declining to comment is not a customer decision.
+    await page.getByTestId("cancel-changes").click()
+    await expect(
+      page.getByTestId("request-changes-form"),
+      "cancelling closes the composer",
+    ).toHaveCount(0)
+
+    const after = await readDetailStatus(page, seeded.url)
+    expect(after.pill, "cancelling moved nothing").toBe("quality-check")
+    expect(after.pillText).toBe("Quality check")
+
+    // TODO(test-author): `next-round-note` is pinned on `06` because a design
+    // round's change request opens round N+1 (contract § "Design-round / sign-off
+    // loop"). Nothing in note 2 says a preview change request opens a round at
+    // all, so it is not asserted either way here.
+    // TODO(test-author): whether an empty preview change request is refused —
+    // the analogue of #13's "an empty change request does not close the round" —
+    // is not pinned by the contract for this screen, so it is left to the issue.
   })
 })

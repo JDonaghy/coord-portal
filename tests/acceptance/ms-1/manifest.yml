@@ -22,16 +22,36 @@ issues:
     - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › a submission is a durable record, not a live session"
     - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › a fresh submission shows the customer no design round"
     - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › no engineer-side identifier reaches the intake surface"
+  # #10's slice was EXTENDED 2026-08-18 against contract.md as amended by note 2
+  # (issue #107, commit d6e56a3), which moved one cell of issue #10's OWN pinned
+  # vocabulary table: `quality-check` is promoted from not-customer-actionable to
+  # customer-actionable. Two ids are new; one was RENAMED, because its title
+  # stated the size of the actionable set and the amendment moved it:
+  #
+  #   "only the two customer-actionable states ask the customer for anything"
+  #     → "only the three customer-actionable states ask the customer for anything"
+  #
+  # The old id is gone on purpose and must not be restored — it no longer names
+  # anything in the suite, and `coord acceptance run --issue 10` would report it
+  # as a missing test. The renamed clause is the RATCHET for the closed half of
+  # the column (the five statuses that must stay silent) and is green today, so
+  # it is deliberately absent from `expected_red`.
+  #
+  # Untouched by this extension: every on-hold clause. Per #74's note below, the
+  # sealed on-hold half of this slice is the regression net for that change and
+  # was deliberately written to hold under either resolution.
   10:
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › every customer status renders its pinned wording on the detail screen"
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › no status outside the fixed vocabulary ever reaches the customer"
-    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › only the two customer-actionable states ask the customer for anything"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › only the three customer-actionable states ask the customer for anything"
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › the four rollup states share one read-only template"
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › internal churn stays hidden inside the rollup states"
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › the dashboard renders each status with the same wording as its detail"
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › a submission shows exactly one status at a time"
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › the portal renders the status it is given and derives none of its own"
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › On hold surfaces with the pinned wording or not at all"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › Quality check asks the customer to approve the preview or request changes"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › the Quality check demand has the same shape as a design-round sign-off"
   11:
     - "[chromium] ms-1/11-question-channel.spec.ts › ms-1 issue 11 question channel › a raised question pauses the submission at Needs your input"
     - "[chromium] ms-1/11-question-channel.spec.ts › ms-1 issue 11 question channel › the customer is shown the question the team actually raised"
@@ -236,7 +256,26 @@ issues:
 #   - "the pipeline breathing never reaches the customer's inbox" is the same
 #     ratchet for the churn path — its cycle no longer bounces through
 #     `quality-check`, so it stays green and must.
+#
+# #10's two new entries below were measured red 2026-08-18 (`npm run
+# test:acceptance -- 10-up-mapping`: 2 failed, 9 passed) against contract.md as
+# amended by note 2 (issue #107). Both fail for the same single reason — a
+# submission at `quality-check` offers the customer no approve / request-changes
+# affordance today:
+#
+#   Quality check asks the customer …  → getByTestId('approve-button') not found
+#   the Quality check demand has …     → getByTestId('request-changes-button') not found
+#
+# The nine that stayed GREEN are NOT registered here. One of them is green on
+# purpose rather than incidentally: "only the three customer-actionable states
+# ask the customer for anything" is the RATCHET for the closed half of the
+# actionable column — `quality-check` left its silent set, and the five statuses
+# that remain must stay silent, so an implementation that hangs the preview gate
+# off the wrong states breaks there instead of shipping.
 expected_red:
+  10:
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › Quality check asks the customer to approve the preview or request changes"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › the Quality check demand has the same shape as a design-round sign-off"
   14:
     - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › a preview ready for approval sends the customer exactly one email"
     - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › shipped work sends the customer exactly one final email"
