@@ -62,8 +62,8 @@ export async function getClientByEmail(env: Env, email: string): Promise<Client 
   return row ? { id: row.id, email: row.email } : null
 }
 
-/** The same lookup when only the id is wanted. */
-export async function getClientIdByEmail(env: Env, email: string): Promise<string | null> {
+/** The same lookup when only the id is wanted — this module's own shorthand. */
+async function getClientIdByEmail(env: Env, email: string): Promise<string | null> {
   return (await getClientByEmail(env, email))?.id ?? null
 }
 
