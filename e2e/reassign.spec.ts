@@ -7,14 +7,14 @@ import { expect, test, type APIRequestContext, type Browser, type Page } from "@
  * `e2e/` tier, not the sealed acceptance suite under `tests/acceptance/`; per
  * CLAUDE.md this repo still ships its own coverage for behaviour-changing work.
  *
- * SCOPE. #130 depends on the `clients` table (#128, landed) but not on #129's
- * own client-match UI on the promotion form — that issue is still open. So
- * this file's only black-box way to get a client a *second* project is #130's
- * own "start a new project instead" reassignment option: the promoted lead's
- * submission moves into a freshly created project, which then makes the
- * project it came from a valid reassignment target too. See
- * `src/clients.ts` for how a promoted lead's submission gets its first
- * client-linked project without #129's promotion-time choice.
+ * SCOPE. Reassignment only means anything for a client that has more than one
+ * project, and the only way to get one black-box is the promotion form's own
+ * project choice — the client-match card #129 puts on `/leads/:id` before
+ * promotion, which this branch had to land for #130 to have anywhere to move
+ * a submission to. So this file also covers that card, the promotion-time
+ * attachment behind it, and the one screen it is visible from that neither
+ * issue owns: the customer's own `/submissions`, where a project holding a
+ * single request still renders as that request's own row.
  *
  * Every string below is invented — see CLAUDE.md rule 1.
  */
@@ -48,8 +48,8 @@ async function contextFor(browser: Browser, baseURL: string | undefined, email: 
   })
 }
 
-/** Sends one lead through the public form, then promotes it as the operator. */
-async function seedPromotedLead(
+/** Sends one lead through the public form and opens it as the operator. */
+async function seedLead(
   browser: Browser,
   baseURL: string | undefined,
   operator: Page,
@@ -69,7 +69,24 @@ async function seedPromotedLead(
   await operator.goto("/leads")
   const row = operator.getByTestId("lead-row").filter({ hasText: summary })
   await row.getByTestId("review-lead").click()
-  const path = new URL(operator.url()).pathname
+  return new URL(operator.url()).pathname
+}
+
+/**
+ * Seed a lead and promote it, optionally picking the promotion form's "start
+ * a new project instead" radio (#129's `client-project-option-new`) — which is
+ * only on the screen for an address that already names a client.
+ */
+async function seedPromotedLead(
+  browser: Browser,
+  baseURL: string | undefined,
+  operator: Page,
+  summary: string,
+  email: string,
+  choice?: "new",
+): Promise<string> {
+  const path = await seedLead(browser, baseURL, operator, summary, email)
+  if (choice === "new") await operator.getByTestId("client-project-option-new").check()
   await operator.getByTestId("promote-button").click()
   await expect(operator.getByTestId("lead-detail")).toHaveAttribute("data-status", "promoted")
   return path
@@ -122,63 +139,152 @@ test("a promoted lead with one project offers only 'start a new project'", async
   await operatorContext.close()
 })
 
+test("a second lead from the same address is offered that client's projects", async ({
+  browser,
+  baseURL,
+}) => {
+  const tag = nonce()
+  const email = `reassign-match-${tag}@example.test`
+  const first = `A synthetic first contact for the match check (${tag}).`
+  const second = `A synthetic second ask from the same address (${tag}).`
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+
+  // Nobody has been promoted under this address yet, so there is no client to
+  // match and the screen is exactly the one ms-2 shipped.
+  const firstPath = await seedLead(browser, baseURL, operator, first, email)
+  await expect(
+    operator.getByTestId("client-match-card"),
+    "a first contact matches no client — this screen gains nothing",
+  ).toHaveCount(0)
+  await operator.getByTestId("promote-button").click()
+  await expect(operator.getByTestId("lead-detail")).toHaveAttribute("data-status", "promoted")
+  expect(new URL(operator.url()).pathname).toBe(firstPath)
+
+  // That promotion minted the client, so the next lead from the same person is
+  // recognised — and offers the project the first one created.
+  await seedLead(browser, baseURL, operator, second, email)
+  await expect(operator.getByTestId("client-match-card")).toBeVisible()
+  await expect(operator.getByTestId("client-match-email")).toHaveText(email)
+  await expect(operator.getByTestId("client-match-project-count")).toHaveText("1")
+  await expect(operator.getByTestId("client-project-option")).toHaveCount(1)
+  await expect(
+    operator.getByTestId("client-project-option").locator('input[type="radio"]'),
+    "the newest project is pre-selected",
+  ).toBeChecked()
+  const offered = await operator
+    .getByTestId("client-project-option")
+    .first()
+    .getAttribute("data-project-id")
+  expect(offered, "each offered project names itself").toMatch(/^proj_/)
+
+  // Choosing "start a new project instead" gives this client a second project,
+  // which is what makes reassignment meaningful at all.
+  await operator.getByTestId("client-project-option-new").check()
+  await operator.getByTestId("promote-button").click()
+  await expect(operator.getByTestId("lead-detail")).toHaveAttribute("data-status", "promoted")
+
+  await openReassign(operator)
+  expect(
+    await offeredProjectIds(operator),
+    "the second submission sits in its own new project, leaving the first one to move to",
+  ).toEqual([offered])
+
+  await operatorContext.close()
+})
+
 test("creating a new project moves the submission, and moving it back works too", async ({
   browser,
   baseURL,
 }) => {
   const tag = nonce()
-  const summary = `A synthetic round-trip reassignment check (${tag}).`
   const email = `reassign-roundtrip-${tag}@example.test`
+  const first = `A synthetic round-trip first project (${tag}).`
+  const second = `A synthetic round-trip second project (${tag}).`
 
   const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
   const operator = await operatorContext.newPage()
-  const path = await seedPromotedLead(browser, baseURL, operator, summary, email)
 
-  // A freshly promoted lead has no project of its own at all yet (see
-  // `src/clients.ts`), so the first "start a new project instead" only ever
-  // mints ONE project — there is nothing yet to leave behind.
+  // Two promoted leads on one address, the second into a project of its own:
+  // a client with two projects, which is the only state reassignment has
+  // anywhere to go from.
+  await seedPromotedLead(browser, baseURL, operator, first, email)
+  const path = await seedPromotedLead(browser, baseURL, operator, second, email, "new")
+
   await openReassign(operator)
-  await expect(operator.getByTestId("reassign-project-option")).toHaveCount(0)
-  await operator.getByTestId("reassign-project-option-new").click()
+  const before = await offeredProjectIds(operator)
+  expect(before).toHaveLength(1)
+  const firstProjectId = before[0] as string
+
+  await operator.getByTestId("reassign-project-option").first().click()
   await operator.getByTestId("reassign-submit").click()
   await expect(operator.getByTestId("reassign-form")).toBeHidden()
   expect(new URL(operator.url()).pathname, "reassignment stays on the same screen").toBe(path)
 
-  // Splitting a SECOND time — reassignment is not consumed by having just
-  // been used (#130: "applies to any already-promoted submission, not just
-  // at promotion time") — finally gives the client two projects, and the
-  // first one now shows up as somewhere to move back to.
   await openReassign(operator)
-  await expect(operator.getByTestId("reassign-project-option")).toHaveCount(0)
+  const afterMove = await offeredProjectIds(operator)
+  expect(afterMove, "the project just left is now the one on offer").toHaveLength(1)
+  expect(afterMove).not.toContain(firstProjectId)
+
+  // Splitting again — reassignment is not consumed by having just been used
+  // (#130: "applies to any already-promoted submission, not just at promotion
+  // time") — leaves BOTH older projects to move back to.
   await operator.getByTestId("reassign-project-option-new").click()
   await operator.getByTestId("reassign-submit").click()
   await expect(operator.getByTestId("reassign-form")).toBeHidden()
 
   await openReassign(operator)
   const afterSplit = await offeredProjectIds(operator)
-  expect(afterSplit).toHaveLength(1)
-  const originalProjectId = afterSplit[0] as string
+  expect(afterSplit, "a brand-new third project leaves both older ones on offer").toHaveLength(2)
+  expect(afterSplit).toContain(firstProjectId)
 
-  // Move it back.
+  await operatorContext.close()
+})
+
+test("the customer sees a plain row until a project actually holds more than one request", async ({
+  browser,
+  baseURL,
+}) => {
+  const tag = nonce()
+  const email = `reassign-dashboard-${tag}@example.test`
+  const first = `A synthetic dashboard-grouping first ask (${tag}).`
+  const second = `A synthetic dashboard-grouping second ask (${tag}).`
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+  await seedPromotedLead(browser, baseURL, operator, first, email)
+  const path = await seedPromotedLead(browser, baseURL, operator, second, email, "new")
+
+  // Promotion put each submission in a project of its own. A project of one is
+  // not a grouping, so the customer still sees the ordinary ms-1 rows linking
+  // to their own submissions — the shape a promoted lead has always had.
+  const customerContext = await contextFor(browser, baseURL, email)
+  const customer = await customerContext.newPage()
+  await customer.goto("/submissions")
+  await expect(customer.getByTestId("submission-row")).toHaveCount(2)
+  await expect(customer.getByTestId("project-row")).toHaveCount(0)
+  for (const href of await customer.getByTestId("submission-row").evaluateAll((rows) =>
+    rows.map((row) => row.getAttribute("href") ?? ""),
+  )) {
+    expect(href, "an ungrouped row opens the submission itself").toMatch(/^\/submissions\//)
+  }
+
+  // Move the second submission in with the first, and the same screen collapses
+  // into issue #109's project row — two requests under one project.
+  await operator.goto(path)
+  await openReassign(operator)
   await operator.getByTestId("reassign-project-option").first().click()
   await operator.getByTestId("reassign-submit").click()
   await expect(operator.getByTestId("reassign-form")).toBeHidden()
 
-  await openReassign(operator)
-  const afterMoveBack = await offeredProjectIds(operator)
-  expect(afterMoveBack, "the project just left is now offered instead").toHaveLength(1)
-  expect(afterMoveBack).not.toContain(originalProjectId)
-
-  // The customer's own dashboard now groups the submission under whichever
-  // project it is in today (issue #109's `project-row`) — reassignment moved
-  // it into a real project, which is visible from their side too, not just
-  // the operator's.
-  await operatorContext.close()
-  const customerContext = await contextFor(browser, baseURL, email)
-  const customer = await customerContext.newPage()
   await customer.goto("/submissions")
   await expect(customer.getByTestId("project-row")).toHaveCount(1)
+  await expect(customer.getByTestId("project-row")).toContainText("2 requests")
+  await expect(customer.getByTestId("submission-row")).toHaveCount(0)
+
   await customerContext.close()
+  await operatorContext.close()
 })
 
 /** File a request through `POST /intake`, returning the new submission's id. */
