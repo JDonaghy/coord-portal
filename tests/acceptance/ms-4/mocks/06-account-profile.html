@@ -10,8 +10,10 @@
      (src/render.ts), with one new nav entry (nav-account) added the same
      additive way nav-outbox was for issue #14. Email is read-only: it is the
      Access identity, not a field this form can change (#131's own wording).
-     phone / ccEmails / address are the only writable columns migrations/0128
-     (this milestone's #128) adds to clients — dana@example.test already has
+     phone / ccEmails / address are the only writable columns the migration
+     implementing this milestone's #128 adds to clients (a future
+     migrations/00NN file — #128 pins the schema, not the migration's
+     eventual number) — dana@example.test already has
      a phone on file from an earlier visit to this page; ccEmails and address
      are still blank, shown with placeholder text, to demonstrate the
      "add" half of "add/edit" in the same screenshot as the "edit" half. -->
@@ -43,6 +45,10 @@
   }
   .field input:focus, .field textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   .field input[readonly] { background: var(--surface-2); color: var(--text-dim); }
+  .optional-tag {
+    font-size: var(--step--1); color: var(--text-faint); font-weight: 400;
+    border: 1px solid var(--line); border-radius: 999px; padding: 0 0.5em; margin-left: 0.5em;
+  }
 
   .actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.5rem; }
   button.primary {

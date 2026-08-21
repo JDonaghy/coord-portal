@@ -16,7 +16,24 @@
      current project — is excluded, matching the intake dashboard's own rule
      that a thing does not offer to move to where it already is) plus
      "start a new project instead", submitted as one POST, in place, without
-     leaving the screen (#130's own wording). -->
+     leaving the screen (#130's own wording).
+
+     Fix (Gate-A review, iteration 1): this file previously dropped
+     access-seat-manual-step, promoted-submission-reference, start-work-card
+     and the <dl class="card"> lead-facts block versus 02. That was wrong —
+     this is the SAME screen state as 02 (same lead, same
+     data-status="promoted", attached submission still "describing") with
+     ONLY the reassignment panel's open/closed state differing. Every ms-2
+     hook and every #129/#132 hook that 02 renders unconditionally on a
+     data-status="promoted" screen renders here too; opening the
+     reassignment disclosure does not hide unrelated page content. Contract
+     line ~107 pins those hooks as unconditional on every promoted rendering,
+     and mocks 02/03/04 all honor that already — 05 now matches. The one
+     real change from 02, per the real .composer-toggle precedent in
+     src/render.ts (".composer-toggle:checked ~ .round-card .round-actions
+     { display: none; }"), is that the now-redundant trigger label
+     (reassign-open-button) hides while its own panel is the open one —
+     the rest of the page is untouched, not dimmed or removed. -->
 <link rel="stylesheet" href="../../../../public/tokens.css">
 <style>
   header.topbar {
@@ -41,11 +58,29 @@
   .lead-status-pill[data-status="promoted"] { background: var(--pass-wash); color: var(--pass); }
 
   .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); margin: 0.35rem 0 1.5rem; }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1.25rem; margin-bottom: 1.25rem;
+  }
+  .card dt { font-weight: 600; font-size: var(--step--1); color: var(--text-dim); margin-top: 0.75rem; }
+  .card dt:first-child { margin-top: 0; }
+  .card dd { margin: 0.2rem 0 0; }
+
+  .access-seat-manual-step {
+    background: var(--attn-wash); color: var(--attn); border: 1px solid var(--attn);
+    border-radius: var(--r-md); padding: 0.9rem 1.1rem; font-size: var(--step-0);
+    font-weight: 600; margin-bottom: 1.25rem;
+  }
+  .promoted-ref {
+    font-family: var(--font-mono); font-size: var(--step--1); color: var(--text-dim);
+    margin: 0 0 0.75rem;
+  }
 
   .client-attachment {
     background: var(--accent-wash); border: 1px solid var(--accent); border-radius: var(--r-lg);
     padding: 1rem 1.25rem; margin-bottom: 1.25rem; color: var(--accent-dim); font-weight: 600;
   }
+
   .status-pill {
     display: inline-flex; align-items: center; gap: 0.4em;
     padding: 0.25em 0.75em; border-radius: 999px;
@@ -53,11 +88,22 @@
   }
   .status-pill[data-status="describing"] { background: var(--idle-wash); color: var(--idle); }
 
+  .start-work-card {
+    background: var(--surface); border: 1px dashed var(--line-strong); border-radius: var(--r-lg);
+    padding: 1.25rem; margin-bottom: 1.25rem;
+  }
+  .start-work-card h2 { font-size: var(--step-0); margin: 0 0 0.4rem; }
+  .start-work-note { color: var(--text-dim); font-size: var(--step--1); margin: 0 0 1rem; }
+  form.start-work { display: flex; justify-content: flex-end; }
+
   .reassign-toggle {
     position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
     overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
   }
-  label.reassign-open-button { display: none; } /* the form is already open in this mock */
+  /* Same precedent as src/render.ts's real .composer-toggle:checked rule
+     hiding its own now-redundant trigger (.round-actions) while its panel
+     is open — everything else on the page stays exactly as it is in 02. */
+  label.reassign-open-button { display: none; }
 
   form.reassign-form {
     background: var(--surface); border: 1px solid var(--accent); border-radius: var(--r-lg);
@@ -103,12 +149,29 @@
   <h1>Need the storefront refreshed again — new seasonal banners and updated pricing tables.</h1>
   <p class="meta" data-testid="lead-reference">LEAD-9F21C4 &middot; sent <span data-testid="lead-submitted-at">2026-08-19T09:14:02Z</span></p>
 
+  <p class="access-seat-manual-step" data-testid="access-seat-manual-step" role="alert">
+    This customer cannot sign in yet. Add dana@example.test to the Access policy by hand to
+    finish onboarding them.
+  </p>
+  <p class="promoted-ref" data-testid="promoted-submission-reference">Promoted to submission SUB-7C3D91</p>
+
   <p class="client-attachment" data-testid="client-attachment" data-match="existing">
     Attached to an existing client — dana@example.test already has 2 projects with us.
     This request joins <strong>Storefront refresh</strong>.
   </p>
 
   <span class="status-pill" data-testid="attached-submission-status" data-status="describing">Describing</span>
+
+  <section class="start-work-card" data-testid="start-work-card">
+    <h2>Start work now</h2>
+    <p class="start-work-note" data-testid="start-work-note">
+      Skips the design round and customer sign-off, and moves straight to Planned. Use this
+      only when you've already agreed the work with the customer out-of-band.
+    </p>
+    <form class="start-work" method="POST" action="/leads/lead_9f21c4d8a1b2/start-work" data-testid="start-work-form">
+      <button type="submit" class="primary" data-testid="start-work-button">Start work</button>
+    </form>
+  </section>
 
   <input class="reassign-toggle" type="checkbox" id="reassign-toggle" aria-label="Reassign project" checked>
   <label class="reassign-open-button" role="button" for="reassign-toggle" data-testid="reassign-open-button">Reassign project</label>
@@ -139,6 +202,15 @@
       <button type="submit" class="primary" data-testid="reassign-submit">Move to this project</button>
     </div>
   </form>
+
+  <dl class="card">
+    <dt>What they said</dt>
+    <dd data-testid="lead-summary-full">Need the storefront refreshed again — new seasonal banners and updated pricing tables, same site as before.</dd>
+    <dt>Contact email</dt>
+    <dd data-testid="lead-contact-email">dana@example.test</dd>
+    <dt>Name</dt>
+    <dd data-testid="lead-name">Dana Whitfield</dd>
+  </dl>
 </main>
 </body>
 </html>

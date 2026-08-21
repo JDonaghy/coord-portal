@@ -328,9 +328,9 @@ of its own — never real contact information.
    real contradiction between #129's prose and #128's (and 0012's) schema, not a rendering detail.
 3. **Case sensitivity of the client email match** (#129's "looks up `clients` by the lead's
    email") is not specified by #128 or #129. This contract assumes case-insensitive matching, by
-   analogy with `src/operators.ts`'s own allowlist comparison ("no identity provider in practice"
-   treats the local part as case-sensitive) — flagged as an inference, not a quote from either
-   issue.
+   analogy with `src/operators.ts`'s own allowlist comparison — that code's rationale is that no
+   identity provider treats the local part as case-sensitive *in practice*, i.e. matching should be
+   case-insensitive — flagged as an inference, not a quote from either issue.
 4. **No operator entry point exists, in this contract, for a submission that never went through
    `/leads`.** Every screen this contract adds hangs off `/leads/:id`. A submission a customer
    created via their own "Start a follow-up" action (issue #109), or one that predates this
