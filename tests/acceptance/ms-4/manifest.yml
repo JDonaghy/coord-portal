@@ -12,7 +12,7 @@
 # and an id that matches nothing is reported as a missing test, not as a pass.
 #
 # One block per issue. Later slices MERGE into this file; do not rewrite another
-# issue's block. Issues #129, #131 and #132 are still to be authored.
+# issue's block. Issues #129 and #132 are still to be authored.
 
 issues:
   128:
@@ -61,6 +61,26 @@ issues:
     - "[chromium] ms-4/130-reassign-project.spec.ts › ms-4 issue 130 reassign a submission to a different project › a stranger cannot reassign anything"
     - "[chromium] ms-4/130-reassign-project.spec.ts › ms-4 issue 130 reassign a submission to a different project › adding reassignment disturbs nothing ms-2 already pins on a promoted lead"
 
+  131:
+    # RED at authoring time — neither GET nor POST /account exists yet, so every
+    # test that drives the page fails on `account-form` (or `nav-account`) being
+    # absent, in a few seconds each, with a message naming the hook.
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › the profile page renders behind the caller's own Access identity"
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › a customer with nothing on file yet gets an empty, usable form"
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › the profile is reachable from every authenticated customer screen"
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › a client can put their own phone, cc emails and address on file"
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › editing a profile that already exists replaces what was there"
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › saving redirects back to the profile page rather than rendering a dead end"
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › the sign-in address cannot be edited from this form"
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › one client's profile is never another's"
+    # GREEN at authoring time, and deliberately so — a control and a ratchet.
+    # They guard the "new route forgot to resolve an identity" and "the new nav
+    # entry displaced an existing one" readings of #131, so they must keep
+    # passing rather than start passing. Per the observed-not-intended rule they
+    # are absent from `expected_red` below.
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › a caller with no Access identity is served no profile material"
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › adding the profile entry disturbs nothing on the existing customer topbar"
+
 # Tests OBSERVED failing against the unimplemented state, recorded per issue at
 # the moment the slice was authored.
 #
@@ -80,6 +100,25 @@ expected_red:
     - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › projects is indexed by client_id"
     - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › no foreign key constraint is introduced on either table"
     - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › no backfill — a project created outside lead promotion has a NULL client_id and keeps its email"
+
+  # #131 recorded from `npm run test:acceptance -- ms-4/131-account-profile` on
+  # 2026-08-21, against a checkout where none of #129/#130/#131/#132 had landed:
+  # 8 failed, 2 passed, 47s wall clock. Every failure was a missing-hook message
+  # in ~5s (`account-form`, or `nav-account` on the shared customer topbar), not
+  # a timeout and not a seeding error — this slice files no leads and no
+  # submissions, so it is not exposed to #32's unpinned rate limit the way #130's
+  # is. The eight below are exactly the eight watched to fail; the two that
+  # passed are the control and the ratchet, excluded because they never failed,
+  # not because they are out of scope.
+  131:
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › the profile page renders behind the caller's own Access identity"
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › a customer with nothing on file yet gets an empty, usable form"
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › the profile is reachable from every authenticated customer screen"
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › a client can put their own phone, cc emails and address on file"
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › editing a profile that already exists replaces what was there"
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › saving redirects back to the profile page rather than rendering a dead end"
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › the sign-in address cannot be edited from this form"
+    - "[chromium] ms-4/131-account-profile.spec.ts › ms-4 issue 131 client self-service profile › one client's profile is never another's"
 
   # #130 recorded from a full `npm run test:acceptance -- ms-4` run on
   # 2026-08-21, against a checkout where #128's migration (`0016_clients.sql`)
