@@ -20,12 +20,24 @@ export interface Project {
   id: string
   customerEmail: string | null
   createdAt: string
+  /**
+   * The `clients` row this project belongs to, or `null` — issue #128's
+   * `projects.client_id`, added long after this module's own `customerEmail`
+   * column and deliberately not replacing it (see `migrations/0016_clients.sql`:
+   * "it does not touch `submissions` — the link is `submissions → projects →
+   * clients`"). `null` for every project this repo had before #128, and for
+   * any project a customer's own "Start a follow-up" action creates today
+   * (`projectAssignmentForFollowUp` below never sets it) — only lead
+   * promotion (`src/clients.ts`) ever does.
+   */
+  clientId: string | null
 }
 
 interface ProjectRow {
   id: string
   customer_email: string | null
   created_at: string
+  client_id: string | null
 }
 
 function fromRow(row: ProjectRow): Project {
@@ -33,6 +45,7 @@ function fromRow(row: ProjectRow): Project {
     id: row.id,
     customerEmail: row.customer_email,
     createdAt: row.created_at,
+    clientId: row.client_id,
   }
 }
 
@@ -40,6 +53,47 @@ function fromRow(row: ProjectRow): Project {
 export async function getProject(env: Env, id: string): Promise<Project | null> {
   const row = await env.DB.prepare(`SELECT * FROM projects WHERE id = ?`).bind(id).first<ProjectRow>()
   return row ? fromRow(row) : null
+}
+
+/**
+ * Every project carrying a given `client_id`, newest first — issue #130's
+ * "which projects are even offered", quoting the ms-4 contract: "built from
+ * `SELECT * FROM projects WHERE client_id = ?` — **only** projects that
+ * already carry the matched `clients.id`". A project with a matching
+ * `customer_email` but `client_id IS NULL` (pre-#128, or created through
+ * `projectAssignmentForFollowUp`) is deliberately excluded — the contract
+ * calls that out by name as a case a test may construct and expect absent.
+ */
+export async function listProjectsForClient(env: Env, clientId: string): Promise<Project[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM projects WHERE client_id = ? ORDER BY created_at DESC, rowid DESC`,
+  )
+    .bind(clientId)
+    .all<ProjectRow>()
+  return (results ?? []).map(fromRow)
+}
+
+/**
+ * Mints one new project, client-linked from the moment it exists — the
+ * "create a new project instead" half of issue #130's reassignment panel,
+ * and (unlike `projectAssignmentForFollowUp`) not conditional on anything:
+ * the caller already knows a submission is about to move into it.
+ */
+export async function createClientProject(
+  env: Env,
+  clientId: string,
+  customerEmail: string | null,
+): Promise<Project> {
+  const id = generateProjectId()
+  const createdAt = new Date().toISOString()
+
+  await env.DB.prepare(
+    `INSERT INTO projects (id, customer_email, client_id, created_at) VALUES (?, ?, ?, ?)`,
+  )
+    .bind(id, customerEmail, clientId, createdAt)
+    .run()
+
+  return { id, customerEmail, clientId, createdAt }
 }
 
 /**

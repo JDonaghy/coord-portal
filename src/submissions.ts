@@ -427,6 +427,55 @@ export async function listSubmissionsForProject(
 }
 
 /**
+ * The most recently created submission under one project, or `null` for a
+ * project with none — issue #130's `projectTitle` (`routes/leads.ts`) uses
+ * this to derive a display name for a project the way `titleOf` already
+ * derives one for a submission (see the contract's "Project 1" section:
+ * "everything it shows is derived from the submissions under it").
+ *
+ * Unscoped by `customerEmail`, unlike `listSubmissionsForProject`: the caller
+ * here is an operator reading a client's own project list on `/leads/:id`,
+ * not a customer's own `/projects/:id` — there is no single owning address
+ * to check it against the way that route's ownership scoping requires.
+ */
+export async function getNewestSubmissionForProject(
+  env: Env,
+  projectId: string,
+): Promise<Submission | null> {
+  const row = await env.DB.prepare(
+    `SELECT * FROM submissions WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+  )
+    .bind(projectId)
+    .first<SubmissionRow>()
+  return row ? fromRow(row) : null
+}
+
+/**
+ * Moves a submission to a different project — issue #130, "reassign a
+ * submission to a different (or new) project". Unconditional: unlike
+ * `createSubmissionStatements`'s guarded writes (a submission is only ever
+ * *created* once), a promoted submission can be reassigned any number of
+ * times, "not just at promotion time" (#130's own wording), so there is no
+ * `WHERE project_id IS NULL` here — the whole point is overwriting a project
+ * it is already in.
+ *
+ * The caller (`routes/leads.ts`) is responsible for checking that
+ * `projectId` belongs to the same client as the submission's current
+ * project — this function trusts the id it is given, the same way every
+ * other write in this module trusts a caller that has already done its own
+ * scoping (see `NewSubmissionInput.followUpFrom`'s doc comment).
+ */
+export async function setSubmissionProject(
+  env: Env,
+  submissionId: string,
+  projectId: string,
+): Promise<void> {
+  await env.DB.prepare(`UPDATE submissions SET project_id = ? WHERE id = ?`)
+    .bind(projectId, submissionId)
+    .run()
+}
+
+/**
  * Lookup by the customer-visible `SUB-XXXXXX` reference — the identifier the
  * sync bridge addresses submissions by.
  */

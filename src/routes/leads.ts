@@ -1,3 +1,4 @@
+import { findOrCreateClientId, getClientIdByEmail } from "../clients"
 import { parseFormData } from "../formData"
 import {
   getLead,
@@ -10,7 +11,15 @@ import {
 } from "../leads"
 import { listMessages, postMessage } from "../messages"
 import { readOperator, type Operator } from "../operators"
+import { createClientProject, getProject, listProjectsForClient, type Project } from "../projects"
 import { escapeHtml, html, operatorTopbar, page } from "../render"
+import {
+  getNewestSubmissionForProject,
+  getSubmission,
+  setSubmissionProject,
+  titleOf,
+  type Submission,
+} from "../submissions"
 import type { Env } from "../types"
 import { isFormContentType, messageThreadSection, type ThreadContext } from "./submission"
 
@@ -19,12 +28,14 @@ import { isFormContentType, messageThreadSection, type ThreadContext } from "./s
  * stranger into a customer. This is the human gate the whole design leans on:
  * nothing crosses from the public surface into the pipeline without it."
  *
- * Four routes:
+ * Five routes:
  *
- *   GET  /leads              every lead, newest first
- *   GET  /leads/:id          one lead, pre- or post-promotion
- *   POST /leads/:id/promote  the gate itself; idempotent; 303 back to the lead
- *   POST /leads/:id/message  the operator's half of issue #110's chat thread
+ *   GET  /leads               every lead, newest first
+ *   GET  /leads/:id           one lead, pre- or post-promotion
+ *   POST /leads/:id/promote   the gate itself; idempotent; 303 back to the lead
+ *   POST /leads/:id/message   the operator's half of issue #110's chat thread
+ *   POST /leads/:id/reassign  issue #130 — move the promoted submission to a
+ *                             different (or new) project of the same client
  *
  * No decline, dismiss or archive route: issue #33 puts them out of scope, and
  * "a lead that was not promoted stays inert forever" is a property of doing
@@ -65,12 +76,22 @@ import { isFormContentType, messageThreadSection, type ThreadContext } from "./s
  * exact address the seat must be issued to is rendered verbatim, in both
  * warnings and in the lead's own detail — the operator confirms an address,
  * they do not skim a field.
+ *
+ * ── THE FIFTH ROUTE, AND WHY IT LIVES HERE TOO (issue #130) ─────────────────
+ * `/leads/:id` is, today, the only screen an operator reaches a specific
+ * submission from by more than a plain-text reference
+ * (`promotedReference` below never links out — see its own doc comment), so
+ * it is also where a richer, operator-only view of that submission's project
+ * has to live. Reassignment is scoped to "the same client's own projects"
+ * (#130's own wording) — see `src/clients.ts` for where a promoted
+ * submission's client-linked project comes from in the first place.
  */
 
 const LEADS_PATH = "/leads"
 const LEAD_PATH = /^\/leads\/([^/?#]+)$/
 const LEAD_PROMOTE_PATH = /^\/leads\/([^/?#]+)\/promote$/
 const LEAD_MESSAGE_PATH = /^\/leads\/([^/?#]+)\/message$/
+const LEAD_REASSIGN_PATH = /^\/leads\/([^/?#]+)\/reassign$/
 
 /** What `handlePages` needs to know about a `/leads…` URL, or `null`. */
 export function matchLeadsPath(
@@ -80,6 +101,7 @@ export function matchLeadsPath(
   | { kind: "detail"; id: string }
   | { kind: "promote"; id: string }
   | { kind: "message"; id: string }
+  | { kind: "reassign"; id: string }
   | null {
   if (pathname === LEADS_PATH) return { kind: "index" }
 
@@ -88,6 +110,9 @@ export function matchLeadsPath(
 
   const message = pathname.match(LEAD_MESSAGE_PATH)
   if (message?.[1]) return { kind: "message", id: message[1] }
+
+  const reassign = pathname.match(LEAD_REASSIGN_PATH)
+  if (reassign?.[1]) return { kind: "reassign", id: reassign[1] }
 
   const detail = pathname.match(LEAD_PATH)
   if (detail?.[1]) return { kind: "detail", id: detail[1] }
@@ -130,7 +155,10 @@ export async function leadDetail(request: Request, env: Env, id: string): Promis
   if (!lead) return leadsNotFound()
 
   const thread = await threadFor(env, lead)
-  return html(page(`${lead.reference} — coord-portal`, detail(operator, lead, thread)))
+  const reassignment = await reassignmentContext(env, lead)
+  return html(
+    page(`${lead.reference} — coord-portal`, detail(operator, lead, thread, reassignment)),
+  )
 }
 
 /**
@@ -141,6 +169,76 @@ export async function leadDetail(request: Request, env: Env, id: string): Promis
 async function threadFor(env: Env, lead: Lead): Promise<ThreadContext | null> {
   if (!lead.promotedSubmissionReference) return null
   return { messages: await listMessages(env, lead.promotedSubmissionReference) }
+}
+
+/**
+ * Everything issue #130's reassignment panel needs to render, or `null` when
+ * there is nothing to reassign: the lead was never promoted, its submission
+ * has vanished (it cannot — defensive only), or that submission is not
+ * (yet) attached to a client-linked project (`src/clients.ts` attaches one
+ * at promotion time; `null` here would mean that step never ran, which this
+ * contract does not otherwise expect but must not crash on).
+ *
+ * `siblings` — "every **other** project belonging to the same client,
+ * current project excluded" (ms-4 contract) — is empty for a client with
+ * only one project, which is still a valid state the panel renders (just the
+ * "start a new project instead" option).
+ */
+interface ReassignmentContext {
+  submission: Submission
+  /** The submission's current project, or `null` — most promoted leads',
+   * until an operator's first reassignment (see `src/clients.ts`). */
+  project: Project | null
+  /**
+   * The same client scope `client-project-list` would use if #129 had
+   * already matched one — from the current project's own `client_id` if it
+   * has one, otherwise looked up by the lead's email (read-only:
+   * `getClientIdByEmail` never creates a row). `null` when neither exists
+   * yet, which just means "nothing to offer but a new project" — the same
+   * rendering a genuinely single-project client gets.
+   */
+  clientId: string | null
+  currentTitle: string
+  siblings: Array<{ project: Project; title: string }>
+}
+
+async function reassignmentContext(env: Env, lead: Lead): Promise<ReassignmentContext | null> {
+  if (!lead.promotedSubmissionId) return null
+
+  const submission = await getSubmission(env, lead.promotedSubmissionId)
+  if (!submission) return null
+
+  const project = submission.projectId ? await getProject(env, submission.projectId) : null
+  const clientId = project?.clientId ?? (await getClientIdByEmail(env, lead.email))
+
+  const clientProjects = clientId ? await listProjectsForClient(env, clientId) : []
+  const siblings = await Promise.all(
+    clientProjects
+      .filter((candidate) => candidate.id !== project?.id)
+      .map(async (candidate) => ({ project: candidate, title: await projectTitle(env, candidate) })),
+  )
+
+  const currentTitle = project
+    ? await projectTitle(env, project)
+    : "Not yet in a project of its own"
+
+  return { submission, project, clientId, currentTitle, siblings }
+}
+
+/**
+ * A project's display name, per the contract's "Project 1" section: derived
+ * from its newest submission's own `titleOf` — same convention the dashboard
+ * and `/projects/:id` already use. A project offered here always has at
+ * least one submission (the one it was created to hold — see the "create a
+ * new project" branch of `postLeadReassign` below, which attaches a
+ * submission in the same breath it creates the project), so the
+ * empty-project placeholder that section describes is not reachable through
+ * this screen; the fallback below exists only as a defensive backstop, not a
+ * rendering this contract pins.
+ */
+async function projectTitle(env: Env, project: Project): Promise<string> {
+  const newest = await getNewestSubmissionForProject(env, project.id)
+  return newest ? titleOf(newest) : "Untitled project"
 }
 
 /**
@@ -163,6 +261,65 @@ export async function promoteLeadAction(
   if (!lead) return leadsNotFound()
 
   await promoteLead(env, lead)
+
+  return new Response(null, {
+    status: 303,
+    headers: { location: `/leads/${lead.id}` },
+  })
+}
+
+/**
+ * POST /leads/:id/reassign — issue #130, "moves it to a different project
+ * belonging to the same client — including 'create a new project' inline,
+ * without leaving the screen."
+ *
+ * Same guard shape as `postLeadMessage`: a lead that does not exist or is
+ * not promoted gets the one operator-surface 404 (`leadsNotFound`) — never a
+ * distinct error that would hint at which is true to a caller who is not an
+ * operator.
+ *
+ * `projectChoice` names either an existing sibling project (validated
+ * against `context.siblings`, so a request cannot name a project outside
+ * this client — the scoping #130 is explicit is not this route's to relax)
+ * or the literal `"new"`. Anything else is a no-op: still a 303 back to the
+ * lead, because a malformed or replayed choice should never look like an
+ * error to an operator who did nothing wrong, but nothing moves.
+ *
+ * `"new"` is also the one branch that can mint a `clients` row
+ * (`findOrCreateClientId`) — the first time this submission is ever moved
+ * anywhere, there may be no client row yet at all (see `src/clients.ts` for
+ * why one is never created just by viewing or promoting a lead). Every other
+ * branch only ever reads.
+ */
+export async function postLeadReassign(request: Request, env: Env, id: string): Promise<Response> {
+  const operator = await readOperator(request, env)
+  if (!operator) return leadsNotFound()
+
+  const lead = await getLead(env, id)
+  if (!lead) return leadsNotFound()
+
+  const context = await reassignmentContext(env, lead)
+  if (!context) return leadsNotFound()
+
+  const contentType = request.headers.get("content-type") ?? ""
+  if (!isFormContentType(contentType)) return leadsNotFound()
+
+  const form = await parseFormData(request)
+  if (!form) return leadsNotFound()
+
+  const rawChoice = form.get("projectChoice")
+  const choice = typeof rawChoice === "string" ? rawChoice.trim() : ""
+
+  if (choice === "new") {
+    const clientId = context.clientId ?? (await findOrCreateClientId(env, lead.email))
+    const project = await createClientProject(env, clientId, lead.email)
+    await setSubmissionProject(env, context.submission.id, project.id)
+  } else if (choice) {
+    const target = context.siblings.find((sibling) => sibling.project.id === choice)
+    if (target) {
+      await setSubmissionProject(env, context.submission.id, target.project.id)
+    }
+  }
 
   return new Response(null, {
     status: 303,
@@ -207,7 +364,11 @@ export async function postLeadMessage(request: Request, env: Env, id: string): P
       messages: await listMessages(env, lead.promotedSubmissionReference),
       error: "Write a message before sending.",
     }
-    return html(page(`${lead.reference} — coord-portal`, detail(operator, lead, thread)), { status: 400 })
+    const reassignment = await reassignmentContext(env, lead)
+    return html(
+      page(`${lead.reference} — coord-portal`, detail(operator, lead, thread, reassignment)),
+      { status: 400 },
+    )
   }
 
   await postMessage(env, lead.promotedSubmissionReference, "operator", operator.email, body)
@@ -261,7 +422,12 @@ function emptyInbox(): string {
   </p>`
 }
 
-function detail(operator: Operator, lead: Lead, thread: ThreadContext | null): string {
+function detail(
+  operator: Operator,
+  lead: Lead,
+  thread: ThreadContext | null,
+  reassignment: ReassignmentContext | null,
+): string {
   const status = leadStatus(lead)
   const promoted = status === "promoted"
 
@@ -285,6 +451,7 @@ function detail(operator: Operator, lead: Lead, thread: ThreadContext | null): s
   </dl>
 
   ${promoted ? "" : promoteForm(lead)}
+  ${promoted && reassignment ? reassignSection(lead, reassignment) : ""}
 
   ${thread ? messageThreadSection(`/leads/${encodeURIComponent(lead.id)}/message`, thread, "operator", operator.email) : ""}
 </main>`
@@ -338,6 +505,61 @@ function promoteForm(lead: Lead): string {
   return `<form class="promote" method="POST" action="/leads/${encodeURIComponent(lead.id)}/promote" data-testid="promote-lead-form">
     <button type="submit" class="primary" data-testid="promote-button">Promote to submission</button>
   </form>`
+}
+
+/**
+ * The reassignment panel (issue #130) — "present on every
+ * `data-status="promoted"` rendering of `/leads/:id`, closed by default."
+ *
+ * No JavaScript: `reassign-toggle` is the real, focusable checkbox
+ * (`.reassign-toggle` in `src/render.ts` — the same visually-hidden
+ * technique `.composer-toggle` uses, its own classes so this panel never
+ * depends on the design-round composer's markup existing on the same page).
+ * `reassign-open-button` and `reassign-cancel` are both `<label for=
+ * "reassign-toggle">`s — clicking either toggles the one checkbox they
+ * share, which is what makes "cancel" close the panel without a second
+ * script or a second control.
+ *
+ * Never consumed by use, and never gated on anything but promotion — it
+ * renders identically whether this is the first time this screen has been
+ * opened or the fifth reassignment of the same submission (#130: "applies
+ * to any already-promoted submission, not just at promotion time").
+ */
+function reassignSection(lead: Lead, reassignment: ReassignmentContext): string {
+  const action = `/leads/${encodeURIComponent(lead.id)}/reassign`
+  const currentProjectLine = reassignment.project
+    ? `Currently in <strong>${escapeHtml(reassignment.currentTitle)}</strong>`
+    : escapeHtml(reassignment.currentTitle)
+
+  return `<input class="reassign-toggle" type="checkbox" id="reassign-toggle" data-testid="reassign-toggle" aria-label="Reassign project">
+  <div class="reassign-panel">
+    <label class="secondary reassign-open-button" role="button" for="reassign-toggle" data-testid="reassign-open-button">Reassign project</label>
+
+    <form class="reassign-form" method="POST" action="${action}" data-testid="reassign-form" aria-label="Reassign project">
+      <p class="reassign-current-project" data-testid="reassign-current-project">${currentProjectLine}</p>
+
+      <fieldset class="reassign-project-list" data-testid="reassign-project-list">
+        <legend class="visually-hidden">Move to</legend>
+        ${reassignment.siblings.map((sibling, index) => reassignOption(sibling, index === 0)).join("\n        ")}
+        <label class="reassign-project-option-new" data-testid="reassign-project-option-new">
+          <input type="radio" name="projectChoice" value="new"${reassignment.siblings.length === 0 ? " checked" : ""}>
+          Start a new project instead
+        </label>
+      </fieldset>
+
+      <div class="actions">
+        <label class="ghost" role="button" for="reassign-toggle" data-testid="reassign-cancel">Cancel</label>
+        <button type="submit" class="primary" data-testid="reassign-submit">Move to this project</button>
+      </div>
+    </form>
+  </div>`
+}
+
+function reassignOption(sibling: { project: Project; title: string }, selected: boolean): string {
+  return `<label class="reassign-project-option" data-testid="reassign-project-option" data-project-id="${escapeHtml(sibling.project.id)}">
+          <input type="radio" name="projectChoice" value="${escapeHtml(sibling.project.id)}"${selected ? " checked" : ""}>
+          ${escapeHtml(sibling.title)}
+        </label>`
 }
 
 /** Only rendered when the stranger actually gave a name — it is optional on `/start`. */
