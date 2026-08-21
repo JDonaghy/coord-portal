@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LEAD-9F21C4 — coord-portal</title>
+<!-- MOCK — Gate-A screen state: lead detail BEFORE promotion, issue #129's
+     "match found" branch. Route: GET /leads/:id, data-status="new". Same base
+     screen as tests/acceptance/ms-2/mocks/05-lead-detail.html (issue #33's
+     seat reminder is unchanged and still load-bearing here) with one new
+     section: client-match-card, appearing between the lead's own facts and
+     the seat reminder — the operator sees the match *before* being asked to
+     commit to anything. dana@example.test is a synthetic returning customer
+     with two prior projects; the radio list lets the operator pick which one
+     this new ask joins, or start a fresh one, all inside the same
+     promote-lead-form (one POST, no extra round trip). -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; gap: 1.25rem;
+    max-width: 40rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; gap: 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+
+  main { max-width: 40rem; }
+  .back-link { font-size: var(--step--1); display: inline-block; margin-bottom: 1rem; }
+
+  .lead-status-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.25em 0.75em; border-radius: 999px;
+    font-size: var(--step--1); font-weight: 600;
+  }
+  .lead-status-pill[data-status="new"]      { background: var(--idle-wash); color: var(--idle); }
+  .lead-status-pill[data-status="promoted"] { background: var(--pass-wash); color: var(--pass); }
+
+  .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); margin: 0.35rem 0 1.5rem; }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1.25rem; margin-bottom: 1.25rem;
+  }
+  .card dt { font-weight: 600; font-size: var(--step--1); color: var(--text-dim); margin-top: 0.75rem; }
+  .card dt:first-child { margin-top: 0; }
+  .card dd { margin: 0.2rem 0 0; }
+
+  /* ── New for #129: the existing-client match, shown before the operator
+     commits to anything. A distinct card so it reads as "this is what we
+     found", not folded into the lead's own facts above it. ── */
+  .client-match-card {
+    background: var(--accent-wash); border: 1px solid var(--accent); border-radius: var(--r-lg);
+    padding: 1.25rem; margin-bottom: 1.25rem;
+  }
+  .client-match-card h2 {
+    font-size: var(--step-0); margin: 0 0 0.35rem; color: var(--accent-dim);
+  }
+  .client-match-card .hint { color: var(--text-dim); font-size: var(--step--1); margin: 0 0 1rem; }
+  fieldset.client-project-list {
+    border: none; margin: 0; padding: 0; display: grid; gap: 0.6rem;
+  }
+  fieldset.client-project-list legend {
+    font-weight: 600; font-size: var(--step--1); color: var(--text-dim); padding: 0; margin-bottom: 0.4rem;
+  }
+  .client-project-option {
+    display: flex; align-items: baseline; gap: 0.6rem;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+    padding: 0.65rem 0.85rem; cursor: pointer;
+  }
+  .client-project-option .option-title { font-weight: 600; }
+  .client-project-option .option-meta { color: var(--text-faint); font-size: var(--step--1); margin-left: 0.5em; }
+
+  .access-seat-reminder {
+    background: var(--attn-wash); color: var(--attn); border: 1px solid var(--attn);
+    border-radius: var(--r-md); padding: 0.85rem 1rem; font-size: var(--step--1);
+    margin-bottom: 1.25rem;
+  }
+
+  form.promote { display: flex; justify-content: flex-end; }
+  button.primary {
+    background: var(--accent); color: white; border: none; border-radius: var(--r-md);
+    padding: 0.65rem 1.25rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/leads" aria-current="page" data-testid="nav-leads">Leads</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ops@example.test</span>
+</header>
+<main data-testid="lead-detail" data-status="new">
+  <a class="back-link" href="/leads" data-testid="back-to-leads">&larr; Leads</a>
+
+  <span class="lead-status-pill" data-testid="lead-status-pill" data-status="new">New</span>
+  <h1>Need the storefront refreshed again — new seasonal banners and updated pricing tables.</h1>
+  <p class="meta" data-testid="lead-reference">LEAD-9F21C4 &middot; sent <span data-testid="lead-submitted-at">2026-08-19T09:14:02Z</span></p>
+
+  <dl class="card">
+    <dt>What they said</dt>
+    <dd data-testid="lead-summary-full">Need the storefront refreshed again — new seasonal banners and updated pricing tables, same site as before.</dd>
+    <dt>Contact email</dt>
+    <dd data-testid="lead-contact-email">dana@example.test</dd>
+    <dt>Name</dt>
+    <dd data-testid="lead-name">Dana Whitfield</dd>
+  </dl>
+
+  <section class="client-match-card" data-testid="client-match-card" data-match="existing">
+    <h2>This looks like an existing client</h2>
+    <p class="hint">
+      <span data-testid="client-match-email">dana@example.test</span> already has
+      <span data-testid="client-match-project-count">2</span> projects with us. Pick which one this joins,
+      or start a new one.
+    </p>
+
+    <fieldset class="client-project-list" data-testid="client-project-list">
+      <legend>Attach this request to</legend>
+
+      <label class="client-project-option" data-testid="client-project-option" data-project-id="proj_a1b2c3d4e5f6">
+        <input type="radio" name="projectChoice" value="existing:proj_a1b2c3d4e5f6" checked>
+        <span>
+          <span class="option-title">Storefront refresh</span>
+          <span class="option-meta">2 requests &middot; proj_a1b2c3d4e5f6</span>
+        </span>
+      </label>
+
+      <label class="client-project-option" data-testid="client-project-option" data-project-id="proj_112233445566">
+        <input type="radio" name="projectChoice" value="existing:proj_112233445566">
+        <span>
+          <span class="option-title">Onboarding emails cleanup</span>
+          <span class="option-meta">1 request &middot; proj_112233445566</span>
+        </span>
+      </label>
+
+      <label class="client-project-option" data-testid="client-project-option-new">
+        <input type="radio" name="projectChoice" value="new">
+        <span class="option-title">Start a new project instead</span>
+      </label>
+    </fieldset>
+  </section>
+
+  <p class="access-seat-reminder" data-testid="access-seat-reminder">
+    Promoting creates a submission — it does not grant sign-in. You'll still need to add
+    dana@example.test to the Access policy by hand before she can log in and see it, if that
+    was not already done for an earlier promotion.
+  </p>
+
+  <form class="promote" method="POST" action="/leads/lead_9f21c4d8a1b2/promote" data-testid="promote-lead-form">
+    <button type="submit" class="primary" data-testid="promote-button">Promote to submission</button>
+  </form>
+</main>
+</body>
+</html>
