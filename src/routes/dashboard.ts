@@ -73,6 +73,23 @@ type DashboardRow =
  * sharing a `projectId` collapses into one row, keyed to the newest member —
  * the input's own ordering already puts that member first, so this is a
  * single pass, not a re-sort.
+ *
+ * ── A PROJECT OF ONE IS NOT A GROUPING (issue #129) ────────────────────────
+ * A project holding a single submission renders as that submission's own
+ * row, not a `project-row`. Until ms-4 that distinction could not arise:
+ * #109's follow-up mints a project and puts *two* submissions in it in the
+ * same transaction (`projectAssignmentForFollowUp`), so every project a
+ * customer could see already had at least two members.
+ *
+ * Lead promotion (#129) breaks that assumption — it attaches its brand-new
+ * submission to a brand-new project — and a `project-row` for it would be a
+ * regression on two counts. It reads wrong ("1 request" is a group of one,
+ * and #109's row exists to explain *why* a customer's several requests
+ * collapsed into one line), and it changes a screen ms-4 does not own:
+ * `tests/acceptance/ms-2/33-lead-triage-promotion.spec.ts` pins that a
+ * just-promoted lead's customer sees an ordinary `submission-row` linking to
+ * `/submissions/:id`. Both point the same way, so the row a customer sees
+ * follows what is actually under the project, not whether one exists.
  */
 function groupByProject(
   submissions: Submission[],
@@ -104,7 +121,13 @@ function groupByProject(
     rows.push(group)
   }
 
-  return rows
+  // Collapsing happens after the pass, not during it: whether a project has
+  // company is only known once every submission has been seen.
+  return rows.map((row) =>
+    row.kind === "project" && row.submissions.length === 1 && row.submissions[0]
+      ? { kind: "submission", submission: row.submissions[0], display: row.display }
+      : row,
+  )
 }
 
 function dashboard(email: string | null, rows: DashboardRow[]): string {

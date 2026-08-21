@@ -97,6 +97,70 @@ export async function createClientProject(
 }
 
 /**
+ * Mints a client-linked project **and** moves a submission into it in one
+ * transaction, but only while that submission is not in a project already —
+ * issue #129's promotion-time "start a new project", and the auto-created
+ * first project of a client nobody has seen before (contract mock 03).
+ *
+ * The guard is what makes promotion's own idempotency hold end to end.
+ * `promoteLead` converges four promotes of one lead on a single submission
+ * (`src/leads.ts`); without the `project_id IS NULL` clause below, each of
+ * those retries would still mint a *project*, and a client that had been
+ * promoted twice would show phantom reassignment targets holding nothing.
+ * Both statements carry the identical guard and run in one `DB.batch()`, so
+ * either the project is created and the submission lands in it, or neither
+ * happens — the same shape, and the same reasoning, as
+ * `projectAssignmentForFollowUp` below.
+ *
+ * Returns the project when this call is the one that created it, and `null`
+ * when the submission was already in one (a replayed promote) — the caller
+ * needs no more than that, and reading the row back would be a third query
+ * for a fact no screen shows before the redirect.
+ */
+export async function attachNewClientProject(
+  env: Env,
+  submissionId: string,
+  clientId: string,
+  customerEmail: string | null,
+): Promise<Project | null> {
+  const id = generateProjectId()
+  const createdAt = new Date().toISOString()
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO projects (id, customer_email, client_id, created_at)
+       SELECT ?, ?, ?, ?
+        WHERE EXISTS (SELECT 1 FROM submissions WHERE id = ? AND project_id IS NULL)`,
+    ).bind(id, customerEmail, clientId, createdAt, submissionId),
+    env.DB.prepare(`UPDATE submissions SET project_id = ? WHERE id = ? AND project_id IS NULL`).bind(
+      id,
+      submissionId,
+    ),
+  ])
+
+  const project = await getProject(env, id)
+  return project
+}
+
+/**
+ * Moves a submission into a project it is not in yet, but only while it has
+ * no project at all — the promotion-form counterpart of the unguarded
+ * `setSubmissionProject` (`src/submissions.ts`), which #130's reassignment
+ * uses precisely because a *promoted* submission may move any number of
+ * times. A replayed `POST /leads/:id/promote` must not move a submission an
+ * operator has since reassigned, so this one refuses to overwrite.
+ */
+export async function attachSubmissionToProjectIfUnassigned(
+  env: Env,
+  submissionId: string,
+  projectId: string,
+): Promise<void> {
+  await env.DB.prepare(`UPDATE submissions SET project_id = ? WHERE id = ? AND project_id IS NULL`)
+    .bind(projectId, submissionId)
+    .run()
+}
+
+/**
  * The statements that attach a brand-new submission to the same project as
  * `followUpFromId` — minting that project on its first use. Returned rather
  * than executed, exactly like `createSubmissionStatements` in

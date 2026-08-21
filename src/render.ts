@@ -425,6 +425,24 @@ const APP_STYLES = `
     font-weight: 600; margin-bottom: 1rem;
   }
 
+  /* ── The client-match card on an unpromoted lead (issue #129) ─────────────
+     src/routes/leads.ts's clientMatchCard, mock 01. The radios inside it post
+     with promote-lead-form via their form= attribute, so this is a plain
+     section, not a nested form. */
+  .client-match-card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1.5rem; margin-top: 1.5rem;
+  }
+  .client-match-card h2 { margin: 0 0 0.35rem; font-size: var(--step-1); }
+  .client-match-card .hint { color: var(--text-dim); font-size: var(--step--1); margin: 0 0 1rem; }
+  fieldset.client-project-list { border: 0; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+  fieldset.client-project-list legend { color: var(--text-dim); font-size: var(--step--1); padding: 0 0 0.5rem; }
+  .client-project-option, .client-project-option-new {
+    display: block; border: 1px solid var(--line-strong); border-radius: var(--r-md);
+    padding: 0.6rem 0.85rem; cursor: pointer;
+  }
+  .client-project-option .option-title, .client-project-option-new .option-title { font-weight: 600; }
+
   /* ── Reassign to a different project (issue #130) ─────────────────────────
      src/routes/leads.ts's reassignSection, on every promoted lead. Same
      no-JavaScript checkbox-and-label disclosure as .composer-toggle above
