@@ -18,6 +18,12 @@ import type { Env } from "../src/types"
  * to prove this module calls (or does NOT call) it at the right times — never
  * to assert what Cloudflare's API itself returns.
  *
+ * Note which env each `verifySubmission` case below builds: `env()` is the
+ * dev fallback pair, which answers locally and must never touch the network,
+ * and `env({ TURNSTILE_SECRET })` is a configured deploy, which is the only
+ * shape that calls `siteverify` at all. Mixing those up is what made the
+ * sealed suite depend on Cloudflare's live API in the first place.
+ *
  * Every string below is invented — see CLAUDE.md rule 1.
  */
 
@@ -104,17 +110,40 @@ describe("verifySubmission", () => {
   })
 
   it("accepts the literal dummy token the test widget mints, as a special case", async () => {
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }))
     await expect(verifySubmission(request(), env(), DUMMY_TOKEN)).resolves.toBe(true)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("answers the dev fallback pair locally, without ever calling siteverify", async () => {
+    // The documented always-pass secret returns `success: true` for any
+    // non-empty response (measured 2026-08-10, see src/turnstile.ts), so this
+    // round trip's answer is a constant — and spending it anyway made every
+    // lead-creating test in the sealed ms-2 slice a live dependency on
+    // Cloudflare's public API, which fails closed on a blip or a rate limit
+    // against a shared CI egress address and reds the whole milestone.
+    for (const token of [DUMMY_TOKEN, PLAUSIBLE_TOKEN]) {
+      await expect(verifySubmission(request(), env(), token)).resolves.toBe(true)
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("still fails closed on the dev pair for a token that cannot be real", async () => {
+    // Answering locally must not widen what the gate accepts: the shape check
+    // is still the whole reason "a token the Worker cannot verify" is
+    // rejectable at all against an always-pass secret.
+    await expect(verifySubmission(request(), env(), "not-a-turnstile-token")).resolves.toBe(false)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it("calls siteverify for anything that looks like a real token, and trusts its answer", async () => {
+    const configured = env({ TURNSTILE_SECRET: "real-secret-value" })
+
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }))
-    await expect(verifySubmission(request(), env(), PLAUSIBLE_TOKEN)).resolves.toBe(true)
+    await expect(verifySubmission(request(), configured, PLAUSIBLE_TOKEN)).resolves.toBe(true)
 
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ success: false }), { status: 200 }))
-    await expect(verifySubmission(request(), env(), PLAUSIBLE_TOKEN)).resolves.toBe(false)
+    await expect(verifySubmission(request(), configured, PLAUSIBLE_TOKEN)).resolves.toBe(false)
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it("uses the configured secret when set, even behind the edge", async () => {
@@ -130,19 +159,23 @@ describe("verifySubmission", () => {
 
   it("fails closed on a non-OK response from siteverify", async () => {
     fetchMock.mockResolvedValue(new Response("nope", { status: 503 }))
-    await expect(verifySubmission(request(), env(), PLAUSIBLE_TOKEN)).resolves.toBe(false)
+    await expect(
+      verifySubmission(request(), env({ TURNSTILE_SECRET: "real-secret-value" }), PLAUSIBLE_TOKEN),
+    ).resolves.toBe(false)
   })
 
   it("fails closed when siteverify is unreachable", async () => {
     fetchMock.mockRejectedValue(new Error("network down"))
-    await expect(verifySubmission(request(), env(), PLAUSIBLE_TOKEN)).resolves.toBe(false)
+    await expect(
+      verifySubmission(request(), env({ TURNSTILE_SECRET: "real-secret-value" }), PLAUSIBLE_TOKEN),
+    ).resolves.toBe(false)
   })
 
   it("forwards the caller's CF-Connecting-IP as remoteip when present", async () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }))
     await verifySubmission(
-      request({ "CF-Connecting-IP": "203.0.113.9" }),
-      env(),
+      request({ "CF-Connecting-IP": "203.0.113.9", ...EDGE }),
+      env({ TURNSTILE_SECRET: "real-secret-value" }),
       PLAUSIBLE_TOKEN,
     )
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
