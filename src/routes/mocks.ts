@@ -1,24 +1,42 @@
+import { parseFormData } from "../formData"
 import { resolveSiteIdentity } from "../identity"
 import { html, page } from "../render"
+import { json } from "../router"
 import { listRounds } from "../rounds"
 import { isOwnedBy } from "./submission"
-import { getSubmission } from "../submissions"
+import { getSubmission, getSubmissionByReference } from "../submissions"
 import type { Env } from "../types"
 
 /**
  * `GET /submissions/:id/rounds/:n/mock[/...]` — the round's mock bundle,
- * served read-only out of R2.
+ * served read-only out of R2 — and `POST /api/bridge/mocks/:reference/:round`,
+ * the upload half that fills that bucket.
  *
  * Issue #13: "Mocks reuse the pattern already in the repo (`docs/mocks/web/`):
  * self-contained static HTML against a shared token stylesheet, stored in R2,
  * served read-only. No build step, no framework, no live data — the cheapest
  * thing that answers 'is this what you meant?'."
  *
- * ── WHAT THIS ROUTE IS NOT ─────────────────────────────────────────────────
- * There is no upload half. The bucket is populated coord-side; the pinned wire
- * contract for `/api/bridge/*` names exactly three routes and is jointly owned
- * with `JDonaghy/claude-coordinator#1982`, so adding a fourth to take bundle
- * uploads is not a call this side gets to make alone. Everything here is `GET`.
+ * ── THE UPLOAD HALF (#120) ──────────────────────────────────────────────────
+ * This used to be GET-only, with a comment here explaining that adding an
+ * upload route was "not a call this side gets to make alone" — the pinned wire
+ * contract for `/api/bridge/*` named exactly three routes, jointly owned with
+ * `JDonaghy/claude-coordinator#1982`. #120 is that call, made explicitly by the
+ * epic: `uploadMockBundle` below is the fourth route. It still changes nothing
+ * about CLAUDE.md rule 2 — the daemon is still the one opening the connection,
+ * on its own tick, to hand this side bytes it already decided to send; nothing
+ * here hands the daemon an address, a subscription or a callback to register.
+ * See `src/router.ts` for how it is wired in and gated exactly like the other
+ * three.
+ *
+ * Deliberately does **not** touch `design_rounds.mock_bundle` — that column is
+ * coord-owned (`src/bridge/ownership.ts`) and is written only by
+ * `roundStatementsForPush`, from an ordinary `POST /api/bridge/push` carrying
+ * `design_round.mock_bundle` (or `artifacts`). This route's whole job is to put
+ * bytes in R2 and hand back the key it used; recording that key against a round
+ * is the caller's next, separate push, exactly as issue #120 describes it. That
+ * keeps the single-writer rule intact instead of growing a second path into the
+ * same column.
  *
  * ── WHY IT IS BEHIND THE SAME OWNERSHIP GATE AS THE SUBMISSION ─────────────
  * A mock bundle is customer material (CLAUDE.md rule 1 — which is also why none
@@ -79,6 +97,152 @@ export async function mockBundle(
   headers.set("cache-control", "private, no-store")
 
   return new Response(object.body, { headers })
+}
+
+/* ─────────────────────────── the upload half (#120) ────────────────────────── */
+
+const UPLOAD_PATH = /^\/api\/bridge\/mocks\/([^/?#]+)\/(\d+)$/
+
+/**
+ * Matches `POST /api/bridge/mocks/:reference/:round`. Named `reference`, not
+ * `id`: this route is reached by the daemon, over the bridge, and the bridge
+ * addresses submissions by the `SUB-XXXXXX` reference everywhere else
+ * (`src/bridge/updates.ts`), never by the customer-facing `id` the GET route
+ * above uses. A caller that presents an `id` here simply finds no submission
+ * and gets `unknown_submission` — the same shape a stale or mistyped reference
+ * gets.
+ */
+export function matchMockUploadPath(
+  pathname: string,
+): { reference: string; round: number } | null {
+  const match = pathname.match(UPLOAD_PATH)
+  if (!match) return null
+  const [, reference, round] = match
+  if (!reference || !round) return null
+  return { reference, round: Number(round) }
+}
+
+/** The most files one bundle upload may carry — mirrors `MAX_PUSH_UPDATES`'s shape. */
+export const MAX_BUNDLE_FILES = 60
+
+/** The largest single file a bundle may carry — a static mock page, not a video. */
+export const MAX_FILE_BYTES = 2 * 1024 * 1024
+
+/** The largest a whole bundle may total, across every file in it. */
+export const MAX_BUNDLE_BYTES = 20 * 1024 * 1024
+
+/**
+ * `POST /api/bridge/mocks/:reference/:round` — writes a mock bundle into R2
+ * under the exact key convention `resolveBundleKey` above already reads from,
+ * and hands back the prefix it used.
+ *
+ * Body is `multipart/form-data`; each part's field name is the file's path
+ * *relative to the round's bundle prefix* (`index.html`, `tokens.css`,
+ * `contract.md`, `assets/logo.png`, ...) and its value is the file itself.
+ * There is no envelope beyond that — no metadata field, no manifest — because
+ * the daemon already knows the one thing that matters (which submission, which
+ * round) and put it in the URL, and everything else is exactly the bytes that
+ * end up served back out through `mockBundle` above.
+ *
+ * Authorised by the same gate as the other three bridge routes
+ * (`src/bridge/auth.ts`, applied in `src/router.ts` before this ever runs) —
+ * not `resolveSiteIdentity`/`isOwnedBy` like the GET route just above. Those
+ * two gates answer different questions: GET asks "is the caller the customer
+ * this bundle belongs to", POST asks "is the caller the daemon", and a signed-
+ * in customer is never the daemon.
+ *
+ * Three checks earn their own status code before anything is written:
+ *
+ *   `unknown_submission` (404)  the reference names no submission at all — the
+ *                               same shape a push against one gets.
+ *   `round_decided`      (409)  the round already has a verdict. Rounds are
+ *                               "never deleted, hidden or rewritten once they
+ *                               have a verdict" (`src/rounds.ts`) — that
+ *                               invariant is about the bytes a customer signed
+ *                               off on, not just the `design_rounds` row
+ *                               pointing at them, so it is enforced here too,
+ *                               against `listRounds`, before a single object
+ *                               is written.
+ *   `missing_index_html` (400)  the bundle has no `index.html`. This route
+ *                               always hands back a *prefix*, never a file
+ *                               (`rounds/<reference>/<round>`, the second shape
+ *                               `resolveBundleKey` documents), and a prefix
+ *                               with no `index.html` behind it 404s on every
+ *                               request `mockBundle` ever serves for it — an
+ *                               unusable upload is worth refusing loudly now
+ *                               rather than discovering it is empty later.
+ *
+ * A file's own relative path is rejected (`invalid_path`) on the same rule
+ * `resolveBundleKey` enforces on the way out: no `..` segment climbs out of
+ * the round's own subtree, and no leading `/` reinterprets the path as
+ * absolute.
+ */
+export async function uploadMockBundle(
+  request: Request,
+  env: Env,
+  reference: string,
+  round: number,
+): Promise<Response> {
+  if (!Number.isInteger(round) || round < 1) {
+    return json({ error: "invalid_round" }, { status: 400 })
+  }
+
+  const submission = await getSubmissionByReference(env, reference)
+  if (!submission) {
+    return json({ error: "unknown_submission" }, { status: 404 })
+  }
+
+  const existing = (await listRounds(env, reference)).find((r) => r.round === round)
+  if (existing && existing.verdict !== "pending") {
+    return json({ error: "round_decided" }, { status: 409 })
+  }
+
+  const form = await parseFormData(request)
+  if (!form) {
+    return json({ error: "invalid_request" }, { status: 400 })
+  }
+
+  const files: Array<{ path: string; file: File }> = []
+  for (const [name, value] of form.entries()) {
+    if (!(value instanceof File)) {
+      return json({ error: "invalid_entry", field: name }, { status: 400 })
+    }
+    const path = name.trim().replace(/^\/+/, "")
+    if (!path || hasTraversal(path)) {
+      return json({ error: "invalid_path", field: name }, { status: 400 })
+    }
+    files.push({ path, file: value })
+  }
+
+  if (files.length === 0) {
+    return json({ error: "empty_bundle" }, { status: 400 })
+  }
+  if (files.length > MAX_BUNDLE_FILES) {
+    return json({ error: "too_many_files", limit: MAX_BUNDLE_FILES }, { status: 400 })
+  }
+  if (!files.some((entry) => entry.path === "index.html")) {
+    return json({ error: "missing_index_html" }, { status: 400 })
+  }
+
+  let totalBytes = 0
+  for (const { file } of files) {
+    if (file.size > MAX_FILE_BYTES) {
+      return json({ error: "file_too_large", limit: MAX_FILE_BYTES }, { status: 400 })
+    }
+    totalBytes += file.size
+  }
+  if (totalBytes > MAX_BUNDLE_BYTES) {
+    return json({ error: "bundle_too_large", limit: MAX_BUNDLE_BYTES }, { status: 400 })
+  }
+
+  const prefix = `rounds/${reference}/${round}`
+  for (const { path, file } of files) {
+    await env.ARTIFACTS.put(`${prefix}/${path}`, await file.arrayBuffer(), {
+      httpMetadata: { contentType: contentTypeFor(path) },
+    })
+  }
+
+  return json({ key: prefix, files: files.map((entry) => entry.path).sort() })
 }
 
 /**

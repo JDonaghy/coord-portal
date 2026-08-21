@@ -2,6 +2,7 @@ import { bridgeUnauthorized, isBridgeAuthorized } from "./bridge/auth"
 import type { Env } from "./types"
 import { bridgeHeartbeat, bridgePull, bridgePush } from "./routes/bridge"
 import { health } from "./routes/health"
+import { matchMockUploadPath, uploadMockBundle } from "./routes/mocks"
 import { whoami } from "./routes/whoami"
 
 export type Handler = (
@@ -13,11 +14,16 @@ export type Handler = (
 const ROUTES: Record<string, Partial<Record<string, Handler>>> = {
   "/api/health": { GET: health },
   "/api/whoami": { GET: whoami },
-  // The sync bridge (#15). Three routes, and there is deliberately no fourth:
-  // nothing here lets the daemon register an address for this side to call.
+  // The sync bridge (#15). Every one of these is opened by the daemon, on its
+  // own tick — that asymmetry, not the count, is CLAUDE.md rule 2's actual
+  // invariant: no route here ever lets the daemon register an address, a
+  // subscription or a callback for this side to call *it* on.
   "/api/bridge/pull": { GET: bridgePull },
   "/api/bridge/push": { POST: bridgePush },
   "/api/bridge/heartbeat": { POST: bridgeHeartbeat },
+  // The mock bundle upload (#120) is matched below, not listed here: its path
+  // carries a submission reference and round number, which this flat map has
+  // no way to express.
 }
 
 const BRIDGE_PREFIX = "/api/bridge"
@@ -50,7 +56,15 @@ export async function handleApi(
     return bridgeUnauthorized()
   }
 
-  const methods = ROUTES[pathname]
+  // The one route whose path carries parameters. Bound into the same
+  // `Partial<Record<string, Handler>>` shape the flat map returns, so
+  // everything below — 405s, the allow header, the error boundary — is one
+  // path instead of two.
+  const upload = matchMockUploadPath(pathname)
+  const methods: Partial<Record<string, Handler>> | undefined = upload
+    ? { POST: (req, e) => uploadMockBundle(req, e, upload.reference, upload.round) }
+    : ROUTES[pathname]
+
   if (!methods) {
     return json({ error: "not_found", path: pathname }, { status: 404 })
   }

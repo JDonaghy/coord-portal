@@ -16,6 +16,7 @@ import {
   ownerOf,
 } from "../src/bridge/ownership"
 import worker from "../src/index"
+import { matchMockUploadPath } from "../src/routes/mocks"
 import type { Env } from "../src/types"
 import { fakeEnv } from "./fixtures"
 
@@ -369,6 +370,7 @@ describe("the bridge routes behind the gate", () => {
     ["GET", "/api/bridge/pull"],
     ["POST", "/api/bridge/push"],
     ["POST", "/api/bridge/heartbeat"],
+    ["POST", "/api/bridge/mocks/SUB-000001/1"],
   ]
 
   it("401s every route with no credential, and says nothing about why", async () => {
@@ -437,6 +439,56 @@ describe("the bridge routes behind the gate", () => {
       envWithToken(),
     )
     expect(res.status).toBe(200)
+  })
+
+  it("405s the mock upload route reached with the wrong method, once authorised (#120)", async () => {
+    // The upload route is matched dynamically (`matchMockUploadPath`), not
+    // through the flat `ROUTES` map the other three routes use — this proves
+    // the 405/allow-header machinery in `src/router.ts` still applies to it.
+    const res = await worker.fetch(
+      new Request("https://intake.heurontech.com/api/bridge/mocks/SUB-000001/1", {
+        method: "GET",
+        headers: TOKEN,
+      }),
+      envWithToken(),
+    )
+    expect(res.status).toBe(405)
+    expect(res.headers.get("allow")).toBe("POST")
+  })
+
+  it("404s a mock upload path with a non-numeric round rather than matching it", async () => {
+    const res = await worker.fetch(
+      new Request("https://intake.heurontech.com/api/bridge/mocks/SUB-000001/first", {
+        method: "POST",
+        headers: TOKEN,
+      }),
+      envWithToken(),
+    )
+    expect(res.status).toBe(404)
+  })
+})
+
+describe("the mock upload path matcher (#120)", () => {
+  it("extracts the submission reference and round as an integer", () => {
+    expect(matchMockUploadPath("/api/bridge/mocks/SUB-ABC123/2")).toEqual({
+      reference: "SUB-ABC123",
+      round: 2,
+    })
+  })
+
+  it("refuses anything the round segment cannot parse as digits", () => {
+    for (const pathname of [
+      "/api/bridge/mocks/SUB-000001",
+      "/api/bridge/mocks/SUB-000001/",
+      "/api/bridge/mocks/SUB-000001/one",
+      "/api/bridge/mocks/SUB-000001/1.5",
+      "/api/bridge/mocks/SUB-000001/-1",
+      "/api/bridge/mocks/SUB-000001/1/extra",
+      "/api/bridge/mocks//1",
+      "/api/bridge/pull",
+    ]) {
+      expect(matchMockUploadPath(pathname), pathname).toBeNull()
+    }
   })
 })
 
