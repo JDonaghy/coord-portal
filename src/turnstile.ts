@@ -21,7 +21,11 @@ import type { Env } from "./types"
  *     setup (contract.md, "Bot gate + rate limit": the acceptance run "must
  *     configure both the sitekey ... and the ... secret to the matching
  *     member of one pair" — this makes that true without a `.dev.vars` file
- *     to keep in step by hand).
+ *     to keep in step by hand). On that pair `verifySubmission` answers
+ *     locally instead of calling `siteverify`, because the always-pass
+ *     secret's answer is a documented constant — see the long comment at
+ *     that branch for why spending the round trip anyway made the sealed
+ *     acceptance suite depend on Cloudflare's public API.
  *
  * `DEV_SITEKEY`/`DEV_SECRET` are Cloudflare's own published test values
  * (developers.cloudflare.com/turnstile/troubleshooting/testing/), not a
@@ -95,9 +99,22 @@ export function publicSitekey(request: Request, env: Env): string {
   return isBehindCloudflareEdge(request) ? "" : DEV_SITEKEY
 }
 
-function siteverifySecret(request: Request, env: Env): string | undefined {
-  if (env.TURNSTILE_SECRET) return env.TURNSTILE_SECRET
-  return isBehindCloudflareEdge(request) ? undefined : DEV_SECRET
+/**
+ * Which secret this request's `siteverify` call would be signed with, and
+ * whether that secret is the dev fallback pair rather than one a deploy
+ * actually configured. `null` is the fail-closed case: behind the edge with
+ * nothing configured.
+ */
+interface SiteverifyConfig {
+  secret: string
+  /** `true` only for the `DEV_SECRET` fallback above — never for a configured secret. */
+  isDevPair: boolean
+}
+
+function siteverifyConfig(request: Request, env: Env): SiteverifyConfig | null {
+  if (env.TURNSTILE_SECRET) return { secret: env.TURNSTILE_SECRET, isDevPair: false }
+  if (isBehindCloudflareEdge(request)) return null
+  return { secret: DEV_SECRET, isDevPair: true }
 }
 
 /**
@@ -120,11 +137,39 @@ export async function verifySubmission(
   if (!trimmed) return false
   if (!looksLikeATurnstileToken(trimmed)) return false
 
-  const secret = siteverifySecret(request, env)
-  if (!secret) return false
+  const config = siteverifyConfig(request, env)
+  if (!config) return false
+
+  // ── WHY THE DEV PAIR NEVER SPENDS A NETWORK CALL ──────────────────────────
+  // The block above `looksLikeATurnstileToken` records what was measured
+  // against Cloudflare's real endpoint: the documented always-pass secret
+  // answers `success: true` for *any* non-empty `response`. So on the dev
+  // fallback pair the round trip's answer is already known — it is `true` for
+  // everything that got past the shape check, by construction, and the call
+  // adds no verification whatsoever.
+  //
+  // Making it anyway is not free. `wrangler dev` has no secret store, so every
+  // local `POST /start` — the e2e smoke net, and every lead-creating test in
+  // the sealed `ms-2` slice — became a live dependency on Cloudflare's public
+  // API. `verifySubmission` fails closed on an unreachable or non-OK
+  // `siteverify` (correct in production, where the alternative is accepting
+  // unverified traffic), which means one blip or one rate-limit against a
+  // shared CI egress address turns into "the bot gate refused every
+  // submission" and takes the whole ms-2 leg red — with the failure surfacing
+  // as a refused lead, nothing about the network. Worse, `workerd` retries the
+  // lookup and then raises an uncaught `internal error` inside the request,
+  // which is the messageless `✘ [ERROR]` server death issue #81 filed.
+  //
+  // A sealed oracle has to be hermetic to mean anything (see
+  // `playwright.acceptance.config.ts`'s DETERMINISM note — the D1 wipe makes
+  // the database deterministic, and this makes the one remaining outbound
+  // dependency deterministic too). Nothing about production changes: a
+  // configured `TURNSTILE_SECRET` always makes the real call, on the edge or
+  // off it, and an unset secret behind the edge still fails closed above.
+  if (config.isDevPair) return true
 
   try {
-    const body = new URLSearchParams({ secret, response: trimmed })
+    const body = new URLSearchParams({ secret: config.secret, response: trimmed })
     const clientIp = request.headers.get("cf-connecting-ip")
     if (clientIp) body.set("remoteip", clientIp)
 
