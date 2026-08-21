@@ -1,7 +1,8 @@
-import { execFileSync } from "node:child_process"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+
+import { runWrangler } from "./wrangler-cli"
 
 /**
  * Seeds objects into the local R2 bucket that `wrangler dev` (`serve:test`,
@@ -22,8 +23,11 @@ import { join } from "node:path"
  * without either side naming it. Measured directly: a `put` while `wrangler
  * dev` is already running and serving traffic lands and is immediately
  * readable through a running route — see the commit that added this file.
+ *
+ * Miniflare keeps R2 in the same SQLite state directory as D1, so this shares
+ * `wrangler dev`'s write lock exactly as `outbox-fixtures.ts` does — hence the
+ * shared `wrangler-cli.ts` runner and its busy-lock retry.
  */
-const WRANGLER_BIN = join(process.cwd(), "node_modules", ".bin", "wrangler")
 const BUCKET = "coord-portal-artifacts"
 
 export function seedR2Object(key: string, body: string, contentType: string): void {
@@ -31,11 +35,17 @@ export function seedR2Object(key: string, body: string, contentType: string): vo
   try {
     const file = join(dir, "object")
     writeFileSync(file, body)
-    execFileSync(
-      WRANGLER_BIN,
-      ["r2", "object", "put", `${BUCKET}/${key}`, "--local", "--file", file, "--content-type", contentType],
-      { cwd: process.cwd(), stdio: "pipe" },
-    )
+    runWrangler([
+      "r2",
+      "object",
+      "put",
+      `${BUCKET}/${key}`,
+      "--local",
+      "--file",
+      file,
+      "--content-type",
+      contentType,
+    ])
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

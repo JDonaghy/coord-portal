@@ -1,5 +1,4 @@
-import { execFileSync } from "node:child_process"
-import { join } from "node:path"
+import { runWrangler } from "./wrangler-cli"
 
 /**
  * Issue #49's own "Out of scope": "Actually calling a provider (#B/#C). This
@@ -18,16 +17,15 @@ import { join } from "node:path"
  * `wrangler dev` (`serve:test`) itself uses, against the same `--local`
  * persisted state both processes already agree on without either side naming
  * it — see r2-fixtures.ts's own note on that, verified the same way here.
+ *
+ * Sharing that state with a live `wrangler dev` means sharing its SQLite write
+ * lock; `wrangler-cli.ts` owns the retry that makes a contended lock a wait
+ * rather than a failed test.
  */
-const WRANGLER_BIN = join(process.cwd(), "node_modules", ".bin", "wrangler")
 const DATABASE = "coord-portal"
 
 function execute(command: string): string {
-  return execFileSync(
-    WRANGLER_BIN,
-    ["d1", "execute", DATABASE, "--local", "--json", "--command", command],
-    { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] },
-  ).toString()
+  return runWrangler(["d1", "execute", DATABASE, "--local", "--json", "--command", command])
 }
 
 /** Inline a value into a `--command` string. Synthetic test data only — see CLAUDE.md rule 1. */
