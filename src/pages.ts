@@ -8,6 +8,7 @@ import {
   leadsNotFound,
   matchLeadsPath,
   postLeadMessage,
+  postLeadReassign,
   promoteLeadAction,
 } from "./routes/leads"
 import { matchMockBundlePath, mockBundle } from "./routes/mocks"
@@ -116,6 +117,12 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
     // on `/submissions/:id`.
     if (leadsMatch.kind === "message" && request.method === "POST") {
       return postLeadMessage(request, env, leadsMatch.id)
+    }
+    // Issue #130 — move the promoted submission to a different (or new)
+    // project of the same client. See `routes/leads.ts`'s module comment,
+    // "THE FIFTH ROUTE", for why this lives here too.
+    if (leadsMatch.kind === "reassign" && request.method === "POST") {
+      return postLeadReassign(request, env, leadsMatch.id)
     }
     // Any other method on a `/leads…` path gets the same 404 a non-operator
     // gets — see `src/operators.ts`. A 405 would confirm the path exists.

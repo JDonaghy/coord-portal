@@ -53,6 +53,16 @@ export function generateProjectId(): string {
 }
 
 /**
+ * `client_` + 12 lowercase hex chars — same shape as `generateProjectId`, for
+ * the same reason: portal-internal, never accepted from a caller. A client
+ * has no customer-facing reference of its own (issue #128) — nothing renders
+ * this id back to the person it identifies, only `email` does that.
+ */
+export function generateClientId(): string {
+  return `client_${randomHex(12)}`
+}
+
+/**
  * `evt_` + 24 lowercase hex chars — the opaque id on a sync-bridge event.
  *
  * Deliberately NOT derived from the event's revision. The revision is the

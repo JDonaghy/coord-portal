@@ -425,6 +425,36 @@ const APP_STYLES = `
     font-weight: 600; margin-bottom: 1rem;
   }
 
+  /* ── Reassign to a different project (issue #130) ─────────────────────────
+     src/routes/leads.ts's reassignSection, on every promoted lead. Same
+     no-JavaScript checkbox-and-label disclosure as .composer-toggle above
+     (see that block's comment for the full rationale), but its own class
+     names rather than sharing .composer-toggle / form.composer: this panel
+     has to render correctly on a screen that never has a design-round
+     composer on it at all, so it must not depend on any of that block's
+     markup being present. */
+  .reassign-toggle {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  .reassign-panel { margin-top: 1.5rem; }
+  form.reassign-form { display: none; }
+  .reassign-toggle:checked ~ .reassign-panel form.reassign-form { display: block; }
+  .reassign-toggle:focus-visible ~ .reassign-panel .reassign-open-button {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  form.reassign-form {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1.5rem; margin-top: 1rem;
+  }
+  .reassign-current-project { color: var(--text-dim); font-size: var(--step--1); margin: 0 0 1rem; }
+  fieldset.reassign-project-list { border: 0; padding: 0; margin: 0 0 1rem; display: grid; gap: 0.5rem; }
+  .reassign-project-option, .reassign-project-option-new {
+    display: block; border: 1px solid var(--line-strong); border-radius: var(--r-md);
+    padding: 0.6rem 0.85rem; cursor: pointer;
+  }
+  .reassign-form .actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem; }
+
   /* ── The combined project view (issue #109) ───────────────────────────────
      routes/project.ts. No dedicated mock — this screen postdates the Gate-A
      contract's own mocks — so it reuses .card, .round-entry-head and
