@@ -15,14 +15,16 @@ export function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;")
 }
 
-export type NavCurrent = "dashboard" | "new" | "outbox" | "none"
+export type NavCurrent = "dashboard" | "new" | "outbox" | "account" | "none"
 
 /**
  * The header every authenticated screen carries, per the contract's global
  * hook list: `brand-home`, `nav-dashboard`, `nav-new`, `identity-email`.
- * `nav-outbox` (issue #14) is additive — the contract's list is not stated as
- * exhaustive, and without it a customer has no in-product link to the emails
- * that were sent about their own requests.
+ * `nav-outbox` (issue #14) and `nav-account` (issue #131, `/account`) are
+ * both additive — the contract's list is not stated as exhaustive, and
+ * without `nav-account` a customer has no in-product link to their own
+ * profile (ms-4 Gate-A contract: "one new nav entry ... additive the same way
+ * issue #14 added `nav-outbox`").
  *
  * `email` is deliberately not asserted as verified here or anywhere else —
  * see `src/identity.ts`. It is display copy, not an authorization decision.
@@ -31,6 +33,7 @@ export function topbar(email: string | null, current: NavCurrent): string {
   const dashboardCurrent = current === "dashboard" ? ' aria-current="page"' : ""
   const newCurrent = current === "new" ? ' aria-current="page"' : ""
   const outboxCurrent = current === "outbox" ? ' aria-current="page"' : ""
+  const accountCurrent = current === "account" ? ' aria-current="page"' : ""
   const identity = email ? escapeHtml(email) : "unknown"
 
   return `<header class="topbar">
@@ -39,6 +42,7 @@ export function topbar(email: string | null, current: NavCurrent): string {
     <a href="/submissions" data-testid="nav-dashboard"${dashboardCurrent}>My requests</a>
     <a href="/intake" data-testid="nav-new"${newCurrent}>New request</a>
     <a href="/outbox" data-testid="nav-outbox"${outboxCurrent}>Sent emails</a>
+    <a href="/account" data-testid="nav-account"${accountCurrent}>My profile</a>
   </nav>
   <span class="identity" data-testid="identity-email">signed in as ${identity}</span>
 </header>`
@@ -144,16 +148,21 @@ const APP_STYLES = `
   }
   main { max-width: 44rem; margin: 0 auto; padding: 0 1rem 3rem; }
 
-  form.intake, form.lead { display: grid; gap: 1.25rem; }
+  form.intake, form.lead, form.account { display: grid; gap: 1.25rem; }
   .field { display: grid; gap: 0.4rem; }
   .field label { font-weight: 600; font-size: var(--step--1); color: var(--text); }
   .field .hint { color: var(--text-faint); font-size: var(--step--1); font-weight: 400; }
-  .field textarea, .field input[type="text"] {
+  .field textarea, .field input[type="text"], .field input[type="email"], .field input[type="tel"] {
     font: inherit; padding: 0.65rem 0.75rem; border-radius: var(--r-md);
     border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
     resize: vertical;
   }
   .field textarea:focus, .field input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* account-email (issue #131) — the one read-only field this portal
+     renders: it is the caller's own Access identity, not something this form
+     can change (see src/routes/account.ts). Visually distinct so "you can't
+     edit this" reads at a glance, not just from the disabled cursor. */
+  .field input[readonly] { background: var(--surface-2); color: var(--text-dim); }
   .optional-tag {
     font-size: var(--step--1); color: var(--text-faint); font-weight: 400;
     border: 1px solid var(--line); border-radius: 999px; padding: 0 0.5em; margin-left: 0.5em;

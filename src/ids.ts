@@ -54,9 +54,11 @@ export function generateProjectId(): string {
 
 /**
  * `client_` + 12 lowercase hex chars — same shape as `generateProjectId`, for
- * the same reason: portal-internal, never accepted from a caller. A client
- * has no customer-facing reference of its own (issue #128) — nothing renders
- * this id back to the person it identifies, only `email` does that.
+ * the same reason: portal-internal (the `clients.id` primary key, #128),
+ * never accepted from a caller. A client has no customer-facing reference of
+ * its own — nothing renders this id back to the person it identifies, only
+ * `email` does that, and a client is looked up by email rather than by id
+ * from both `/account` and `/leads/:id` (see `src/clients.ts`).
  */
 export function generateClientId(): string {
   return `client_${randomHex(12)}`

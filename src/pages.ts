@@ -1,3 +1,4 @@
+import { accountProfile, submitAccountProfile } from "./routes/account"
 import { submissionsDashboard } from "./routes/dashboard"
 import { deliveries } from "./routes/deliveries"
 import { frontDoor } from "./routes/home"
@@ -65,6 +66,16 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
 
   if (pathname === "/submissions" && request.method === "GET") {
     return submissionsDashboard(request, env)
+  }
+
+  // The client's own self-service profile (issue #131) — phone, cc emails,
+  // address on their own `clients` row (#128). Behind the same customer
+  // Access application every other route in this block sits behind; see
+  // `routes/account.ts`.
+  if (pathname === "/account") {
+    if (request.method === "GET") return accountProfile(request, env)
+    if (request.method === "POST") return submitAccountProfile(request, env)
+    return null
   }
 
   // The combined view for a customer relationship spanning more than one
