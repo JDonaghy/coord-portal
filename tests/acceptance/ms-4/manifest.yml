@@ -1,0 +1,54 @@
+# ms-4 — sealed acceptance manifest: test id -> issue slice.
+#
+# Ids are the `web-playwright` driver's node ids, exactly as
+# `coord.acceptance_drivers.parse_playwright_json_report` builds them:
+#
+#   [{project}] {file relative to testDir} › {describe path} › {test title}
+#
+# `testDir` is `./tests/acceptance` (see `playwright.acceptance.config.ts`), so
+# the file component is `ms-4/<file>.spec.ts`. Ids must match
+# character-for-character, including the `›` separators and the em-dashes inside
+# a couple of the titles — `coord acceptance run --issue N` filters by exact id,
+# and an id that matches nothing is reported as a missing test, not as a pass.
+#
+# One block per issue. Later slices MERGE into this file; do not rewrite another
+# issue's block. Issues #129, #130, #131 and #132 are still to be authored.
+
+issues:
+  128:
+    # RED at authoring time — the migration does not exist yet.
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › the migration lands, and the running Worker reports the newer schema"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › a clients table exists at schema head"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › clients carries exactly the columns issue 128 pins, with the nullability it pins"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › no two clients can share an email address"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › clients is indexed by email"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › projects carries a nullable client_id, and keeps everything 0012 gave it"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › projects is indexed by client_id"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › no foreign key constraint is introduced on either table"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › no backfill — a project created outside lead promotion has a NULL client_id and keeps its email"
+    # GREEN at authoring time, and deliberately so — a ratchet and a control.
+    # They guard the destructive and the collateral-damage readings of #128
+    # respectively, so they must keep passing rather than start passing. Per the
+    # observed-not-intended rule they are absent from `expected_red` below.
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › no backfill — a submission keeps the bare customer_email it was filed with"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › the migration disturbs nothing that already reads projects and submissions"
+
+# Tests OBSERVED failing against the unimplemented state, recorded per issue at
+# the moment the slice was authored.
+#
+# #128 recorded from a full `npm run test:acceptance -- ms-4` run on
+# 2026-08-21 against schema head 0015 (`0015_preview_reviews.sql`): 9 failed,
+# 2 passed. The nine below are exactly the nine that were watched to fail — the
+# two that passed are the ratchet and the control noted above and are excluded
+# because they never failed, not because they are out of scope.
+expected_red:
+  128:
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › the migration lands, and the running Worker reports the newer schema"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › a clients table exists at schema head"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › clients carries exactly the columns issue 128 pins, with the nullability it pins"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › no two clients can share an email address"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › clients is indexed by email"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › projects carries a nullable client_id, and keeps everything 0012 gave it"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › projects is indexed by client_id"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › no foreign key constraint is introduced on either table"
+    - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › no backfill — a project created outside lead promotion has a NULL client_id and keeps its email"
