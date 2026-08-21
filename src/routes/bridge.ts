@@ -9,14 +9,17 @@ import type { Env } from "../types"
  * The sync bridge — the portal-side API the coordinator's daemon polls.
  *
  * ── THE SHAPE OF THIS SURFACE IS THE SECURITY ARGUMENT ─────────────────────
- * Three routes: the daemon pulls what happened here, pushes what happened
- * there, and says it is alive. Every connection is opened by the daemon. This
- * side has no idea where the fleet is, holds no address for it, and must never
- * learn one — no webhook, no callback URL, no "push endpoint" to register, not
- * even behind a shared secret. If latency feels bad the daemon polls faster.
- * That asymmetry is the entire reason this portal can sit on the public
- * internet in front of a private tailnet, and it is exactly the kind of thing a
- * well-meaning "just add a notify hook" PR destroys quietly.
+ * The three routes below, plus one more that lives in `src/routes/mocks.ts`
+ * (`POST /api/bridge/mocks/:reference/:round`, #120 — a mock bundle upload,
+ * gated in `src/router.ts` exactly like these three): the daemon pulls what
+ * happened here, pushes what happened there, says it is alive, and hands over
+ * the bytes for a design round's mock. Every connection is opened by the
+ * daemon. This side has no idea where the fleet is, holds no address for it,
+ * and must never learn one — no webhook, no callback URL, no "push endpoint"
+ * to register, not even behind a shared secret. If latency feels bad the
+ * daemon polls faster. That asymmetry is the entire reason this portal can sit
+ * on the public internet in front of a private tailnet, and it is exactly the
+ * kind of thing a well-meaning "just add a notify hook" PR destroys quietly.
  *
  * Auth (the service token) is applied by the router for the whole `/api/bridge`
  * prefix, before routing, so an unknown path under it cannot be probed without

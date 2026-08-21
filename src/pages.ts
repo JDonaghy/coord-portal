@@ -128,8 +128,10 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
     if (id) return submissionRounds(request, env, id)
   }
 
-  // The round's mock bundle, out of R2 (issue #13). GET only — there is no
-  // upload half on this side; see `routes/mocks.ts`.
+  // The round's mock bundle, out of R2 (issue #13). GET only on this
+  // customer-facing path — the upload half (#120) is a bridge route,
+  // `POST /api/bridge/mocks/:reference/:round`, wired in `src/router.ts`; see
+  // `routes/mocks.ts`.
   const bundleMatch = matchMockBundlePath(pathname)
   if (bundleMatch && request.method === "GET") {
     return mockBundle(request, env, bundleMatch.id, bundleMatch.round, bundleMatch.rest)
