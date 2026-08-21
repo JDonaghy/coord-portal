@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LEAD-9F21C4 — coord-portal</title>
+<!-- MOCK — Gate-A screen state: same lead and route as
+     02-lead-promoted-existing-client.html (GET /leads/:id, data-status="promoted"),
+     with issue #130's reassignment disclosure expanded — reassign-toggle
+     checked. Not a distinct URL: the composer-toggle checkbox technique
+     src/render.ts already documents for the design-round request-changes
+     form (awaitingSignoffDetail's doc comment) is reused verbatim here —
+     real, focusable checkbox; two <label role="button"> controls; no
+     JavaScript. reassign-form lists every OTHER project belonging to the
+     same client (proj_a1b2c3d4e5f6, "Storefront refresh" — the submission's
+     current project — is excluded, matching the intake dashboard's own rule
+     that a thing does not offer to move to where it already is) plus
+     "start a new project instead", submitted as one POST, in place, without
+     leaving the screen (#130's own wording). -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; gap: 1.25rem;
+    max-width: 40rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; gap: 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+
+  main { max-width: 40rem; }
+  .back-link { font-size: var(--step--1); display: inline-block; margin-bottom: 1rem; }
+
+  .lead-status-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.25em 0.75em; border-radius: 999px;
+    font-size: var(--step--1); font-weight: 600;
+  }
+  .lead-status-pill[data-status="promoted"] { background: var(--pass-wash); color: var(--pass); }
+
+  .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); margin: 0.35rem 0 1.5rem; }
+
+  .client-attachment {
+    background: var(--accent-wash); border: 1px solid var(--accent); border-radius: var(--r-lg);
+    padding: 1rem 1.25rem; margin-bottom: 1.25rem; color: var(--accent-dim); font-weight: 600;
+  }
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.25em 0.75em; border-radius: 999px;
+    font-size: var(--step--1); font-weight: 600; margin-bottom: 1.25rem;
+  }
+  .status-pill[data-status="describing"] { background: var(--idle-wash); color: var(--idle); }
+
+  .reassign-toggle {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  label.reassign-open-button { display: none; } /* the form is already open in this mock */
+
+  form.reassign-form {
+    background: var(--surface); border: 1px solid var(--accent); border-radius: var(--r-lg);
+    padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+  }
+  form.reassign-form h2 { margin-top: 0; font-size: var(--step-1); }
+  .reassign-current { color: var(--text-dim); font-size: var(--step--1); margin: 0 0 1rem; }
+  fieldset.reassign-project-list { border: none; margin: 0 0 1rem; padding: 0; display: grid; gap: 0.6rem; }
+  fieldset.reassign-project-list legend {
+    font-weight: 600; font-size: var(--step--1); color: var(--text-dim); padding: 0; margin-bottom: 0.4rem;
+  }
+  .reassign-project-option {
+    display: flex; align-items: baseline; gap: 0.6rem;
+    background: var(--ground); border: 1px solid var(--line); border-radius: var(--r-md);
+    padding: 0.65rem 0.85rem; cursor: pointer;
+  }
+  .reassign-project-option .option-title { font-weight: 600; }
+  .reassign-project-option .option-meta { color: var(--text-faint); font-size: var(--step--1); margin-left: 0.5em; }
+  form.reassign-form .actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.5rem; }
+  label.ghost {
+    display: inline-block; border-radius: var(--r-md); padding: 0.65rem 1.25rem;
+    font-weight: 600; font-size: inherit; cursor: pointer; user-select: none;
+    background: transparent; color: var(--text-dim); border: 1px solid var(--line-strong);
+  }
+  button.primary {
+    background: var(--accent); color: white; border: none; border-radius: var(--r-md);
+    padding: 0.65rem 1.25rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/leads" aria-current="page" data-testid="nav-leads">Leads</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ops@example.test</span>
+</header>
+<main data-testid="lead-detail" data-status="promoted">
+  <a class="back-link" href="/leads" data-testid="back-to-leads">&larr; Leads</a>
+
+  <span class="lead-status-pill" data-testid="lead-status-pill" data-status="promoted">Promoted</span>
+  <h1>Need the storefront refreshed again — new seasonal banners and updated pricing tables.</h1>
+  <p class="meta" data-testid="lead-reference">LEAD-9F21C4 &middot; sent <span data-testid="lead-submitted-at">2026-08-19T09:14:02Z</span></p>
+
+  <p class="client-attachment" data-testid="client-attachment" data-match="existing">
+    Attached to an existing client — dana@example.test already has 2 projects with us.
+    This request joins <strong>Storefront refresh</strong>.
+  </p>
+
+  <span class="status-pill" data-testid="attached-submission-status" data-status="describing">Describing</span>
+
+  <input class="reassign-toggle" type="checkbox" id="reassign-toggle" aria-label="Reassign project" checked>
+  <label class="reassign-open-button" role="button" for="reassign-toggle" data-testid="reassign-open-button">Reassign project</label>
+
+  <form class="reassign-form" method="POST" action="/leads/lead_9f21c4d8a1b2/reassign" data-testid="reassign-form">
+    <h2>Move to a different project</h2>
+    <p class="reassign-current" data-testid="reassign-current-project">Currently: <strong>Storefront refresh</strong></p>
+
+    <fieldset class="reassign-project-list" data-testid="reassign-project-list">
+      <legend>Move to</legend>
+
+      <label class="reassign-project-option" data-testid="reassign-project-option" data-project-id="proj_112233445566">
+        <input type="radio" name="projectChoice" value="existing:proj_112233445566" checked>
+        <span>
+          <span class="option-title">Onboarding emails cleanup</span>
+          <span class="option-meta">1 request &middot; proj_112233445566</span>
+        </span>
+      </label>
+
+      <label class="reassign-project-option" data-testid="reassign-project-option-new">
+        <input type="radio" name="projectChoice" value="new">
+        <span class="option-title">Start a new project instead</span>
+      </label>
+    </fieldset>
+
+    <div class="actions">
+      <label class="ghost" role="button" for="reassign-toggle" data-testid="reassign-cancel">Cancel</label>
+      <button type="submit" class="primary" data-testid="reassign-submit">Move to this project</button>
+    </div>
+  </form>
+</main>
+</body>
+</html>

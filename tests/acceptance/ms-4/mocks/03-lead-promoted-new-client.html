@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LEAD-B12A88 — coord-portal</title>
+<!-- MOCK — Gate-A screen state: lead detail AFTER promotion, issue #129's
+     "no match" branch — a brand-new client and a first project ("Project 1")
+     auto-created in the same transaction as the promotion. Same route and
+     template as 02-lead-promoted-existing-client.html; only client-attachment
+     (data-match="new" here, not "existing") and the absence of a second
+     project in reassign-form's contents differ. No 01-style "before
+     promotion" mock for the no-match case: nothing on the pre-promotion
+     screen changes when there is no match (client-match-card, mock 01,
+     simply does not render) — see contract.md for that state in prose. -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; gap: 1.25rem;
+    max-width: 40rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; gap: 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+
+  main { max-width: 40rem; }
+  .back-link { font-size: var(--step--1); display: inline-block; margin-bottom: 1rem; }
+
+  .lead-status-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.25em 0.75em; border-radius: 999px;
+    font-size: var(--step--1); font-weight: 600;
+  }
+  .lead-status-pill[data-status="promoted"] { background: var(--pass-wash); color: var(--pass); }
+
+  .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); margin: 0.35rem 0 1.5rem; }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1.25rem; margin-bottom: 1.25rem;
+  }
+  .card dt { font-weight: 600; font-size: var(--step--1); color: var(--text-dim); margin-top: 0.75rem; }
+  .card dt:first-child { margin-top: 0; }
+  .card dd { margin: 0.2rem 0 0; }
+
+  .access-seat-manual-step {
+    background: var(--attn-wash); color: var(--attn); border: 1px solid var(--attn);
+    border-radius: var(--r-md); padding: 0.9rem 1.1rem; font-size: var(--step-0);
+    font-weight: 600; margin-bottom: 1.25rem;
+  }
+  .promoted-ref {
+    font-family: var(--font-mono); font-size: var(--step--1); color: var(--text-dim);
+    margin: 0 0 0.75rem;
+  }
+
+  .client-attachment {
+    background: var(--accent-wash); border: 1px solid var(--accent); border-radius: var(--r-lg);
+    padding: 1rem 1.25rem; margin-bottom: 1.25rem; color: var(--accent-dim); font-weight: 600;
+  }
+
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.25em 0.75em; border-radius: 999px;
+    font-size: var(--step--1); font-weight: 600; margin-bottom: 1.25rem;
+  }
+  .status-pill[data-status="describing"] { background: var(--idle-wash); color: var(--idle); }
+
+  .start-work-card {
+    background: var(--surface); border: 1px dashed var(--line-strong); border-radius: var(--r-lg);
+    padding: 1.25rem; margin-bottom: 1.25rem;
+  }
+  .start-work-card h2 { font-size: var(--step-0); margin: 0 0 0.4rem; }
+  .start-work-note { color: var(--text-dim); font-size: var(--step--1); margin: 0 0 1rem; }
+  form.start-work { display: flex; justify-content: flex-end; }
+  button.primary {
+    background: var(--accent); color: white; border: none; border-radius: var(--r-md);
+    padding: 0.65rem 1.25rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+
+  .reassign-toggle {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  label.reassign-open-button {
+    display: inline-block; border-radius: var(--r-md); padding: 0.55rem 1rem;
+    font-weight: 600; font-size: var(--step--1); cursor: pointer; user-select: none;
+    background: var(--surface); color: var(--text); border: 1px solid var(--line-strong);
+    margin-bottom: 1.5rem;
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/leads" aria-current="page" data-testid="nav-leads">Leads</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ops@example.test</span>
+</header>
+<main data-testid="lead-detail" data-status="promoted">
+  <a class="back-link" href="/leads" data-testid="back-to-leads">&larr; Leads</a>
+
+  <span class="lead-status-pill" data-testid="lead-status-pill" data-status="promoted">Promoted</span>
+  <h1>Looking for a quick logo tweak before a trade show next month.</h1>
+  <p class="meta" data-testid="lead-reference">LEAD-B12A88 &middot; sent <span data-testid="lead-submitted-at">2026-08-20T16:47:29Z</span></p>
+
+  <p class="access-seat-manual-step" data-testid="access-seat-manual-step" role="alert">
+    This customer cannot sign in yet. Add raf@example.test to the Access policy by hand to
+    finish onboarding them.
+  </p>
+  <p class="promoted-ref" data-testid="promoted-submission-reference">Promoted to submission SUB-114F02</p>
+
+  <p class="client-attachment" data-testid="client-attachment" data-match="new">
+    No existing client matched raf@example.test — created a new client and started
+    <strong>Project 1</strong> for them.
+  </p>
+
+  <span class="status-pill" data-testid="attached-submission-status" data-status="describing">Describing</span>
+
+  <section class="start-work-card" data-testid="start-work-card">
+    <h2>Start work now</h2>
+    <p class="start-work-note" data-testid="start-work-note">
+      Skips the design round and customer sign-off, and moves straight to Planned. Use this
+      only when you've already agreed the work with the customer out-of-band.
+    </p>
+    <form class="start-work" method="POST" action="/leads/lead_b12a889c3d4e/start-work" data-testid="start-work-form">
+      <button type="submit" class="primary" data-testid="start-work-button">Start work</button>
+    </form>
+  </section>
+
+  <!-- Reassign is still offered here, per #130 — but raf@example.test has only
+       Project 1 so far, so opening it would show just "start a new project",
+       no sibling to switch to. See contract.md's note on this. -->
+  <input class="reassign-toggle" type="checkbox" id="reassign-toggle" aria-label="Reassign project">
+  <label class="reassign-open-button" role="button" for="reassign-toggle" data-testid="reassign-open-button">Reassign project</label>
+
+  <dl class="card">
+    <dt>What they said</dt>
+    <dd data-testid="lead-summary-full">Looking for a quick logo tweak before a trade show next month.</dd>
+    <dt>Contact email</dt>
+    <dd data-testid="lead-contact-email">raf@example.test</dd>
+  </dl>
+</main>
+</body>
+</html>

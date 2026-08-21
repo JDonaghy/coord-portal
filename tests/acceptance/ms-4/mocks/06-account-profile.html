@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My profile — coord-portal</title>
+<!-- MOCK — Gate-A screen state: issue #131's self-service client profile.
+     Route: GET /account, behind the existing customer Access application —
+     same topbar() component every other authenticated customer screen uses
+     (src/render.ts), with one new nav entry (nav-account) added the same
+     additive way nav-outbox was for issue #14. Email is read-only: it is the
+     Access identity, not a field this form can change (#131's own wording).
+     phone / ccEmails / address are the only writable columns migrations/0128
+     (this milestone's #128) adds to clients — dana@example.test already has
+     a phone on file from an earlier visit to this page; ccEmails and address
+     are still blank, shown with placeholder text, to demonstrate the
+     "add" half of "add/edit" in the same screenshot as the "edit" half. -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1.25rem;
+    max-width: 40rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .identity {
+    color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono);
+  }
+
+  main { max-width: 40rem; }
+
+  form.account { display: grid; gap: 1.25rem; }
+  .field { display: grid; gap: 0.4rem; }
+  .field label { font-weight: 600; font-size: var(--step--1); color: var(--text); }
+  .field .hint { color: var(--text-faint); font-size: var(--step--1); font-weight: 400; }
+  .field input[type="email"], .field input[type="tel"], .field input[type="text"], .field textarea {
+    font: inherit; padding: 0.65rem 0.75rem; border-radius: var(--r-md);
+    border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
+    resize: vertical;
+  }
+  .field input:focus, .field textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .field input[readonly] { background: var(--surface-2); color: var(--text-dim); }
+
+  .actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.5rem; }
+  button.primary {
+    background: var(--accent); color: white; border: none; border-radius: var(--r-md);
+    padding: 0.65rem 1.25rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.primary:hover { background: var(--accent-dim); }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/submissions" data-testid="nav-dashboard">My requests</a>
+    <a href="/intake" data-testid="nav-new">New request</a>
+    <a href="/outbox" data-testid="nav-outbox">Sent emails</a>
+    <a href="/account" aria-current="page" data-testid="nav-account">My profile</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as dana@example.test</span>
+</header>
+<main>
+  <div class="page-head">
+    <h1>My profile</h1>
+  </div>
+  <p class="lede">
+    These details help us reach you and keep your projects organized. Nothing here is required —
+    add whatever's useful.
+  </p>
+
+  <form class="account" method="POST" action="/account" data-testid="account-form">
+    <div class="field">
+      <label for="email">Email</label>
+      <input type="email" id="email" value="dana@example.test" readonly data-testid="account-email">
+      <span class="hint">This is your sign-in address and can't be changed here.</span>
+    </div>
+
+    <div class="field">
+      <label for="phone">Phone <span class="optional-tag">Optional</span></label>
+      <input type="tel" id="phone" name="phone" value="+1 555-0142" data-testid="account-phone-field">
+    </div>
+
+    <div class="field">
+      <label for="ccEmails">CC emails <span class="optional-tag">Optional</span></label>
+      <input type="text" id="ccEmails" name="ccEmails" value="" placeholder="billing@example.test, ops@example.test"
+        data-testid="account-cc-emails-field">
+      <span class="hint">Comma-separated. These addresses are copied on project emails.</span>
+    </div>
+
+    <div class="field">
+      <label for="address">Address <span class="optional-tag">Optional</span></label>
+      <textarea id="address" name="address" rows="3" placeholder="Mailing or billing address"
+        data-testid="account-address-field"></textarea>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="primary" data-testid="account-save-button">Save</button>
+    </div>
+  </form>
+</main>
+</body>
+</html>
