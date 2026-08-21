@@ -59,18 +59,26 @@ describe("the shared page shell", () => {
 })
 
 describe("topbar", () => {
-  it("carries the four navigation hooks, outbox included", () => {
+  it("carries the five navigation hooks, outbox and account included", () => {
     const rendered = topbar("someone@example.test", "dashboard")
-    for (const hook of ["brand-home", "nav-dashboard", "nav-new", "nav-outbox", "identity-email"]) {
+    for (const hook of [
+      "brand-home",
+      "nav-dashboard",
+      "nav-new",
+      "nav-outbox",
+      "nav-account",
+      "identity-email",
+    ]) {
       expect(rendered).toContain(`data-testid="${hook}"`)
     }
   })
 
-  it("marks exactly the current screen, including the outbox", () => {
+  it("marks exactly the current screen, including the outbox and account", () => {
     for (const [current, testid] of [
       ["dashboard", "nav-dashboard"],
       ["new", "nav-new"],
       ["outbox", "nav-outbox"],
+      ["account", "nav-account"],
     ] as const) {
       const rendered = topbar("someone@example.test", current)
       expect(rendered).toContain(`data-testid="${testid}" aria-current="page"`)
