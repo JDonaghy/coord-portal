@@ -1,4 +1,4 @@
-import { appendEventStatement } from "./bridge/events"
+import { appendEventStatement, type PayloadSubquery } from "./bridge/events"
 import { getClientRecordByEmail } from "./clients"
 import { generateSubmissionId, generateSubmissionReference } from "./ids"
 import { projectAssignmentForFollowUp } from "./projects"
@@ -238,13 +238,29 @@ export interface CreateSubmissionOptions {
   /**
    * The `clients` row this submission's customer already belongs to, or
    * `null` for one nobody has matched to a client yet — issue #146's
-   * `submission.created` client identity. Like `projectId` above, this is
-   * only ever a value the caller already knows synchronously: `createSubmission`
-   * below resolves it with a plain lookup before building the batch, and
-   * `promoteLead` (`src/leads.ts`) already has it in hand from its own
-   * match-or-mint decision.
+   * `submission.created` client identity. Only for a caller that can trust
+   * the id it already has in hand: `createSubmission` below resolves it with
+   * a plain lookup of a row that already existed *before* this transaction
+   * started, and `promoteLead`'s matched-client branch (`src/leads.ts`) reads
+   * an existing row the same way — neither is minting the row itself, so
+   * there is no race to resolve. Mutually exclusive with
+   * `clientEmailToResolve` below; a caller sets whichever one it actually has.
    */
   client?: { id: string; email: string } | null
+  /**
+   * Set instead of `client` by a caller whose own client-identity write is
+   * itself racy and guarded — `promoteLead`'s no-match branch, whose
+   * `clientCreationStatement` insert (`src/clients.ts`) can lose to a
+   * concurrent promotion of a *different* lead sharing the same email (see
+   * that statement's own doc comment: "two different leads sharing an email,
+   * promoted at once"). A JS-generated candidate id is not safe to ship in
+   * the event here the way `client` above is, so this instead resolves the
+   * event's `client_id`/`client_email` via a live subquery on this email,
+   * inside the same batch — the same trick `projectCreationForEmailResolvedClient`
+   * (`src/projects.ts`) already uses to resolve `client_id` for the project
+   * row it inserts alongside. See `PayloadSubquery` in `src/bridge/events.ts`.
+   */
+  clientEmailToResolve?: string
 }
 
 /**
@@ -318,6 +334,26 @@ export function createSubmissionStatements(
   // that needs it before then (`promoteLead` does not) can already trust it.
   const knownProjectId = followUpFrom ? null : (options.projectId ?? null)
 
+  // `options.clientEmailToResolve` set means the caller's own client row may
+  // not exist under the candidate id it has in hand yet — resolve the
+  // event's client fields live, from whatever `clients` row actually exists
+  // for this email once the batch commits, instead of trusting a guess. See
+  // `CreateSubmissionOptions.clientEmailToResolve`'s own doc comment.
+  const clientSubqueries: PayloadSubquery[] = options.clientEmailToResolve
+    ? [
+        {
+          path: "$.client_id",
+          expr: "SELECT id FROM clients WHERE lower(email) = lower(?)",
+          bindings: [options.clientEmailToResolve],
+        },
+        {
+          path: "$.client_email",
+          expr: "SELECT email FROM clients WHERE lower(email) = lower(?)",
+          bindings: [options.clientEmailToResolve],
+        },
+      ]
+    : []
+
   const appendEvent = appendEventStatement(
     env,
     {
@@ -339,7 +375,14 @@ export function createSubmissionStatements(
        * separate display-name column (`migrations/0016_clients.sql`). It is
        * `null`, not invented, when nobody has matched this customer to a
        * `clients` row yet (`options.client` is only ever set when a caller
-       * already did that lookup — see its own doc comment).
+       * already did that lookup — see its own doc comment). On the paths that
+       * populate it today (lead promotion's no-match branch, reassignment),
+       * it is frequently the same address as `customerEmail` above — it is
+       * not the same *fact*: this one names the account, the absent one would
+       * have named who filed this particular ask. It happening to be the
+       * same string for a brand-new client is a coincidence of there being
+       * only one address on file yet, not the bridge quietly leaking the
+       * thing the paragraph above says it does not carry.
        */
       payload: {
         reference,
@@ -353,6 +396,7 @@ export function createSubmissionStatements(
         client_email: options.client?.email ?? null,
         project_id: knownProjectId,
       },
+      payloadSubqueries: clientSubqueries.length > 0 ? clientSubqueries : undefined,
     },
     guard,
   )
@@ -431,6 +475,20 @@ export async function createSubmission(
   // truth now that it exists, in a `submission.project_assigned` event of its
   // own — necessarily a *separate* write from the fact it announces, since
   // the fact only became knowable once the first write had already landed.
+  //
+  // ── WHY THE SECOND BATCH IS AN ACCEPTED GAP, NOT AN OVERSIGHT ──────────────
+  // This breaks, deliberately, the "one fact, one event, one transaction"
+  // rule `appendEventStatement`'s own doc comment states — the true
+  // `project_id` cannot be known before the first batch commits, so there is
+  // no transaction that could carry both. If this second `DB.batch()` throws
+  // (a transient D1 error, a worker eviction, a request abort) after the
+  // first already committed, the real `project_id` is durably stored and
+  // nothing ever announces it, and nothing here revisits it later — reviewed
+  // and accepted for this issue rather than fixed, because closing it needs a
+  // periodic reconciliation sweep (comparing `submissions.project_id` against
+  // what the bridge stream has actually announced), which is out of scope
+  // here and belongs with whoever owns the epic. This paragraph is that
+  // explicit decision, not a silent gap.
   if (created.projectId) {
     const clientFields = { client_id: client?.id ?? null, client_email: client?.email ?? null }
     const corrections = [
@@ -447,14 +505,33 @@ export async function createSubmission(
     // it to another project, `src/projects.ts` never unsets it), so
     // `origin.projectId === null` (read before this request's own batch ran)
     // is true on exactly the one follow-up that first mints or attaches one.
+    //
+    // That pre-batch read is only a hint, not a lock: two follow-ups filed
+    // against the same origin at nearly the same time can both read
+    // `origin.projectId === null` and both reach this branch. The guard below
+    // is what actually keeps the promise "exactly one correction" makes —
+    // `NOT EXISTS` against `bridge_events` itself, checked at insert time, so
+    // whichever of the two `DB.batch()` calls commits first wins and the
+    // second's own insert matches zero rows, the same shape every other
+    // guarded write in this codebase already uses for its own race.
     if (origin && origin.projectId === null) {
       corrections.push(
-        appendEventStatement(env, {
-          type: "submission.project_assigned",
-          submissionReference: origin.reference,
-          occurredAt: new Date().toISOString(),
-          payload: { reference: origin.reference, project_id: created.projectId, ...clientFields },
-        }),
+        appendEventStatement(
+          env,
+          {
+            type: "submission.project_assigned",
+            submissionReference: origin.reference,
+            occurredAt: new Date().toISOString(),
+            payload: { reference: origin.reference, project_id: created.projectId, ...clientFields },
+          },
+          {
+            clause: `WHERE NOT EXISTS (
+              SELECT 1 FROM bridge_events
+               WHERE submission_id = ? AND type = 'submission.project_assigned'
+            )`,
+            bindings: [origin.reference],
+          },
+        ),
       )
     }
     await env.DB.batch(corrections)

@@ -71,6 +71,40 @@ export interface NewBridgeEvent {
   submissionReference: string
   occurredAt: string
   payload: Record<string, unknown>
+  /**
+   * Fields of `payload` whose real value is not known synchronously in JS
+   * and must instead be read live, inside this statement's own transaction —
+   * issue #146 fix-round. `promoteLead`'s no-match branch (`src/leads.ts`)
+   * mints a candidate `clientId` in JS for its own guarded
+   * `clientCreationStatement` insert, but that insert can lose a race to a
+   * concurrent promotion of a *different* lead sharing the same email (see
+   * that statement's doc comment in `src/clients.ts`) — trusting the
+   * candidate id in the event would then ship a client identity that either
+   * does not exist or belongs to someone else, permanently, since there is
+   * no later correction event for client identity the way
+   * `submission.project_assigned` corrects `project_id`. A `payloadSubquery`
+   * resolves the true value the same way `projectCreationForEmailResolvedClient`
+   * (`src/projects.ts`) already resolves `client_id` for the project row it
+   * inserts in the same batch, so the event always names whichever row the
+   * transaction actually left behind.
+   */
+  payloadSubqueries?: PayloadSubquery[]
+}
+
+export interface PayloadSubquery {
+  /**
+   * A `$.field` JSON path within `payload` to overwrite — always a literal
+   * this module's own callers write in their own source, never derived from
+   * request input, so splicing it into the SQL text below is safe.
+   */
+  path: string
+  /** A scalar SQL expression (typically `SELECT … FROM …`) producing the
+   * replacement value, evaluated live in the same transaction as the rest of
+   * the batch this statement is part of. Wrapped in parens by this module,
+   * so the caller passes the bare `SELECT …` text. */
+  expr: string
+  /** Bindings for `expr`'s own `?` placeholders, in left-to-right order. */
+  bindings: unknown[]
 }
 
 interface BridgeEventRow {
@@ -104,9 +138,18 @@ export function appendEventStatement(
   event: NewBridgeEvent,
   guard?: { clause: string; bindings: unknown[] },
 ): D1PreparedStatement {
+  const subqueries = event.payloadSubqueries ?? []
+  // With no subqueries this is exactly the plain bound JSON blob it always
+  // was. With one or more, `json_set` splices each resolved value into that
+  // same blob before it is ever written — one `INSERT … SELECT`, so the
+  // resolution happens inside the same transaction as the rest of the batch,
+  // not a second round trip after the fact.
+  const payloadExpr =
+    subqueries.length === 0 ? "?" : `json_set(?, ${subqueries.map((s) => `'${s.path}', (${s.expr})`).join(", ")})`
+
   return env.DB.prepare(
     `INSERT INTO bridge_events (id, type, submission_id, occurred_at, payload)
-     SELECT ?, ?, ?, ?, ?
+     SELECT ?, ?, ?, ?, ${payloadExpr}
      ${guard ? guard.clause : ""}`,
   ).bind(
     generateEventId(),
@@ -114,6 +157,7 @@ export function appendEventStatement(
     event.submissionReference,
     event.occurredAt,
     JSON.stringify(event.payload),
+    ...subqueries.flatMap((s) => s.bindings),
     ...(guard ? guard.bindings : []),
   )
 }

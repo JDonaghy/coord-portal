@@ -527,10 +527,17 @@ export async function postLeadReassign(request: Request, env: Env, id: string): 
   if (choice === "new") {
     const clientId = context.clientId ?? (await findOrCreateClientId(env, lead.email))
     // `context.client` already carries this client's stored email verbatim
-    // when `clientId` matched an existing row; `findOrCreateClientId` above
-    // wrote `lead.email` verbatim on the no-match branch, so it is the right
-    // fallback for exactly the case `context.client` has nothing to offer.
-    const clientEmail = context.client?.email ?? lead.email
+    // when `clientId` matched an existing row read *before* this request ran.
+    // When it did not — `findOrCreateClientId` just minted or resolved one —
+    // its own guarded insert can still lose to a concurrent reassignment or
+    // promotion racing on the same email (same class of race
+    // `clientCreationStatement`'s doc comment names in `src/clients.ts`), and
+    // `findOrCreateClientId` only ever hands back the winning `id`, not the
+    // email that actually landed. `lead.email` is this request's own guess,
+    // not necessarily what is stored — so re-read the row `clientId` now
+    // names rather than trust the guess; `lead.email` remains only as a
+    // last-resort fallback for a row that has since vanished.
+    const clientEmail = context.client?.email ?? (await getClientById(env, clientId))?.email ?? lead.email
     const project = await createClientProject(env, clientId, lead.email)
     await setSubmissionProject(env, context.submission, project.id, { id: clientId, email: clientEmail })
   } else if (choice) {

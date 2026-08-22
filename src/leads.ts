@@ -259,17 +259,23 @@ export async function promoteLead(
   const matchedClient = await getClientRecordByEmail(env, lead.email)
   const preparatory: D1PreparedStatement[] = []
   let projectId: string
-  // Known synchronously either way — the matched branch already read it back,
-  // the no-match branch mints it in this same batch — so issue #146's
-  // `submission.created` client identity costs nothing extra to resolve here,
-  // unlike the follow-up case (`createSubmission` in `src/submissions.ts`)
-  // where the equivalent project id genuinely is not knowable yet.
-  let clientId: string
-  let clientEmail: string
+  // The matched branch already read an *existing* client row back — no race
+  // to resolve, so `client` (the trusted, synchronously-known shape,
+  // `CreateSubmissionOptions` in `src/submissions.ts`) is safe. The no-match
+  // branch is different: it mints the client row in this same batch via
+  // `clientCreationStatement`, and that insert's own `NOT EXISTS` guard can
+  // lose to a concurrent promotion of a *different* lead sharing this email
+  // (see that statement's doc comment in `src/clients.ts`) — so the candidate
+  // id generated below is not safe to trust for the event either, only for
+  // this branch's own guarded INSERT. It instead sets `clientEmailToResolve`,
+  // which makes `createSubmissionStatements` read the real winner back via a
+  // live subquery in the same transaction — the same trick
+  // `projectCreationForEmailResolvedClient` (`src/projects.ts`) already uses
+  // for the project row's own `client_id`.
+  let submissionClientOptions: { client: { id: string; email: string } | null } | { clientEmailToResolve: string }
 
   if (matchedClient) {
-    clientId = matchedClient.id
-    clientEmail = matchedClient.email
+    submissionClientOptions = { client: { id: matchedClient.id, email: matchedClient.email } }
     const projects = await listProjectsForClient(env, matchedClient.id)
     const chosen =
       projectChoice && projectChoice !== "new"
@@ -290,10 +296,13 @@ export async function promoteLead(
       )
     }
   } else {
-    clientId = generateClientId()
-    clientEmail = lead.email
+    // A candidate id, minted here only for this branch's own guarded INSERT
+    // below — never trusted for the event (see the comment above
+    // `submissionClientOptions`'s declaration for why).
+    const candidateClientId = generateClientId()
     projectId = generateProjectId()
-    preparatory.push(clientCreationStatement(env, clientId, lead.email, promotedAt, leadId))
+    submissionClientOptions = { clientEmailToResolve: lead.email }
+    preparatory.push(clientCreationStatement(env, candidateClientId, lead.email, promotedAt, leadId))
     preparatory.push(projectCreationForEmailResolvedClient(env, projectId, lead.email, promotedAt, leadId))
   }
 
@@ -315,7 +324,7 @@ export async function promoteLead(
       reference: generateSubmissionReference(),
       guard,
       projectId,
-      client: { id: clientId, email: clientEmail },
+      ...submissionClientOptions,
     },
   )
 

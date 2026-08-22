@@ -339,7 +339,7 @@ test("promotion tells the bridge about a submission, and never about the lead", 
 
   // Promotion looks like ordinary intake from the daemon's side: exactly one
   // `submission.created`, keyed by the submission's reference, and nothing in
-  // it that so much as hints a lead was involved.
+  // it that so much as hints a lead — as opposed to a client — was involved.
   const mine = (await pullAll(bridgeContext.request)).filter(
     (event) => event.submission_id === promotedRef,
   )
@@ -348,8 +348,16 @@ test("promotion tells the bridge about a submission, and never about the lead", 
   const wire = JSON.stringify(mine)
   expect(wire).not.toContain("lead")
   expect(wire).not.toContain("LEAD-")
-  // The customer's email is #14's business, not the fleet's — same as intake.
-  expect(wire).not.toContain(contact)
+  // Issue #146 deliberately widened the wire past this test's original
+  // "the customer's email never crosses" — `client_id`/`client_email` name
+  // *the client account*, not "who filed this submission", and this is the
+  // one path (a brand-new email, no existing `clients` row) where the two
+  // happen to be the same string, because a fresh client has exactly one
+  // address on file. `customerEmail` itself — the field that answers "who
+  // filed this" — still never appears; `client_email` is a different fact
+  // that is allowed to coincide with it. See `src/submissions.ts`'s
+  // `submission.created` payload comment for the full reasoning.
+  expect(mine[0]?.payload["client_email"]).toBe(contact)
   // ...and what the stranger actually wrote does cross, as the outcome, which
   // is what makes this indistinguishable from a customer filling in /intake.
   expect(mine[0]?.payload["outcome"]).toBe(summary)
