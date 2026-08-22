@@ -23,6 +23,7 @@ export type NavCurrent =
   | "leads"
   | "deliveries"
   | "requests"
+  | "clients"
   | "none"
 
 /**
@@ -84,6 +85,7 @@ export function topbar(email: string | null, current: NavCurrent, isOperator: bo
   const leadsCurrent = current === "leads" ? ' aria-current="page"' : ""
   const deliveriesCurrent = current === "deliveries" ? ' aria-current="page"' : ""
   const requestsCurrent = current === "requests" ? ' aria-current="page"' : ""
+  const clientsCurrent = current === "clients" ? ' aria-current="page"' : ""
   const identity = email ? escapeHtml(email) : "unknown"
 
   // Appended after the customer links, inside the same `<nav>`, rather than a
@@ -94,7 +96,8 @@ export function topbar(email: string | null, current: NavCurrent, isOperator: bo
     ? `
     <a href="/leads" data-testid="nav-leads"${leadsCurrent}>Leads</a>
     <a href="/deliveries" data-testid="nav-deliveries"${deliveriesCurrent}>Deliveries</a>
-    <a href="/requests" data-testid="nav-requests"${requestsCurrent}>Requests</a>`
+    <a href="/requests" data-testid="nav-requests"${requestsCurrent}>Requests</a>
+    <a href="/clients" data-testid="nav-clients"${clientsCurrent}>Clients</a>`
     : ""
 
   return `<header class="topbar">
@@ -125,10 +128,10 @@ export function publicHeader(): string {
 </header>`
 }
 
-export type OperatorNavCurrent = "leads" | "deliveries" | "requests"
+export type OperatorNavCurrent = "leads" | "deliveries" | "requests" | "clients"
 
 /**
- * The header `/leads*`, `/deliveries` and `/requests` carry — kept
+ * The header `/leads*`, `/deliveries`, `/requests` and `/clients*` carry — kept
  * deliberately separate from `topbar()` above. Issue #103 asked for the first
  * two to merge into `topbar()` as well, but ms-2 issue #33's and ms-3 issue
  * #55's sealed acceptance specs each pin, via their own `expectOperatorTopbar`
@@ -136,11 +139,11 @@ export type OperatorNavCurrent = "leads" | "deliveries" | "requests"
  * hooks (`nav-dashboard`, `nav-new`, `nav-outbox`) — see the long comment on
  * `topbar()` above for the full account of that conflict and why it is
  * flagged for the epic owner rather than resolved by editing either the
- * sealed tests or this function to ignore them. `/requests` (issue #104) has
- * no sealed oracle of its own yet, but it is the same shape of screen —
- * operator-only, diagnostic, never a route a customer's Access identity can
- * open — so it joins this unmerged header rather than risk the same
- * conflict `/leads`/`/deliveries` already hit.
+ * sealed tests or this function to ignore them. `/requests` (issue #104) and
+ * `/clients*` (issue #144) have no sealed oracle of their own yet, but they
+ * are the same shape of screen — operator-only, diagnostic, never a route a
+ * customer's Access identity can open — so they join this unmerged header
+ * rather than risk the same conflict `/leads`/`/deliveries` already hit.
  *
  * `identity-email` reuses the customer topbar's hook name and copy on
  * purpose — "who does this page say is signed in" is the same question on
@@ -148,8 +151,8 @@ export type OperatorNavCurrent = "leads" | "deliveries" | "requests"
  *
  * `current` picks which nav entry carries `aria-current="page"` — issue #55's
  * Gate-A contract amendment: this used to hardcode it on `nav-leads` (the
- * only operator screen there was), and now that there are three, the current
- * one has to be computed the same way `topbar()`'s `nav-dashboard` /
+ * only operator screen there was), and now that there are several, the
+ * current one has to be computed the same way `topbar()`'s `nav-dashboard` /
  * `nav-new` / `nav-outbox` already are.
  *
  * `signout-link` (issue #103) — same link, same href, as `topbar()`'s: an
@@ -161,6 +164,7 @@ export function operatorTopbar(email: string, current: OperatorNavCurrent): stri
   const leadsCurrent = current === "leads" ? ' aria-current="page"' : ""
   const deliveriesCurrent = current === "deliveries" ? ' aria-current="page"' : ""
   const requestsCurrent = current === "requests" ? ' aria-current="page"' : ""
+  const clientsCurrent = current === "clients" ? ' aria-current="page"' : ""
 
   return `<header class="topbar">
   <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
@@ -168,6 +172,7 @@ export function operatorTopbar(email: string, current: OperatorNavCurrent): stri
     <a href="/leads" data-testid="nav-leads"${leadsCurrent}>Leads</a>
     <a href="/deliveries" data-testid="nav-deliveries"${deliveriesCurrent}>Deliveries</a>
     <a href="/requests" data-testid="nav-requests"${requestsCurrent}>Requests</a>
+    <a href="/clients" data-testid="nav-clients"${clientsCurrent}>Clients</a>
   </nav>
   <span class="identity" data-testid="identity-email">signed in as ${escapeHtml(email)}</span>
   <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>

@@ -610,6 +610,30 @@ export async function listSubmissionsForProject(
 }
 
 /**
+ * Every submission under one project, newest first — unscoped, for the
+ * operator's own client/project screen (`routes/clients.ts`, issue #144).
+ *
+ * Deliberately not `listSubmissionsForProject` above: that function's
+ * `customerEmail` scoping is the ownership check `/projects/:id` needs for
+ * its customer caller, and this route has no single owning address to check
+ * it against — the caller is an operator reading a client's *own* project
+ * list, the same posture `getNewestSubmissionForProject` below already takes
+ * for `routes/leads.ts`'s reassignment panel. See that function's doc
+ * comment for the fuller rationale.
+ */
+export async function listSubmissionsForProjectUnscoped(
+  env: Env,
+  projectId: string,
+): Promise<Submission[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM submissions WHERE project_id = ? ORDER BY created_at DESC, rowid DESC`,
+  )
+    .bind(projectId)
+    .all<SubmissionRow>()
+  return (results ?? []).map(fromRow)
+}
+
+/**
  * The most recently created submission under one project, or `null` for a
  * project with none — issue #130's `projectTitle` (`routes/leads.ts`) uses
  * this to derive a display name for a project the way `titleOf` already
