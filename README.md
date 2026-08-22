@@ -40,6 +40,7 @@ this feeds, not the intake surface.
 | `src/routes/leads.ts` | `/leads`, `/leads/:id`, `POST /leads/:id/promote` — the operator's triage inbox and the one gate a stranger's request crosses to become a submission. Operator-only; see below. |
 | `src/routes/outbox.ts` | `GET /outbox` — a customer's read-back of the emails the portal decided to send them (#14). Scoped to their own sends, same as the dashboard. |
 | `src/routes/deliveries.ts` | `GET /deliveries` — the operator's counterpart to `/outbox`: every outbox row, every customer, including the raw delivery error `/outbox` redacts (#55). Operator-only, same gate as `/leads`; see below. |
+| `src/routes/requests.ts` | `GET /requests` — the operator's counterpart to `/submissions`: every submission, every customer, with its current design round and verdict (#104). Operator-only, same gate as `/leads`; see below. |
 | `src/routes/home.ts` | `GET /` — the customer front door (#84): a signed-in customer with submissions goes straight to `/submissions`, one with none is named and pointed at `/intake`, a caller with no identity gets plain-language copy pointing at `/start`. Replaced the day-one static placeholder. |
 | `migrations/` | `0001` the harness, `0002` submissions (#9), `0003` the bridge's event stream, coord mirror and daemon last-seen, `0004` question answers (#11), `0005` public leads (#31), `0006` design rounds and sign-off (#13), `0007` what a promoted lead records (#33), `0008` per-IP start attempts for the rate limit (#32), `0009` the customer outbox (#14) |
 | `public/` | the token layer (`tokens.css`) shared by every server-rendered screen — no static HTML of its own since #84 |
@@ -213,21 +214,24 @@ than opening it. See `src/identity.ts`.
 that turns one into a customer. `/deliveries` (#55) is the same kind of screen for a different job:
 every outbox row across every customer, the operator's counterpart to the customer-scoped `/outbox`,
 including the raw provider error a stuck send left behind — the one field `/outbox` never shows.
-Both sit behind the same site-wide Allow policy as everything else — there is no fifth Access
-application — and the Worker additionally checks the Access identity against one allowlist shared by
-both routes:
+`/requests` (#104) rounds the set out: every submission across every customer, the operator's
+counterpart to the customer-scoped `/submissions`, including the current design round and its
+verdict — the gap that opened the moment a promoted lead's own submission became invisible to the
+operator who promoted it. All three sit behind the same site-wide Allow policy as everything else —
+there is no fifth Access application — and the Worker additionally checks the Access identity
+against one allowlist shared by all three routes:
 
 ```bash
 wrangler secret put OPERATOR_EMAILS   # comma- or whitespace-separated addresses
 ```
 
-**Unset means nobody**, in production: `/leads` and `/deliveries` are both a 404 for every caller,
-including whoever deployed it. That is the same fail-closed position the bridge's service token
-takes, and for the same reason — a deploy that forgets the setting should have no operator surface
-at all rather than one that answers to whatever address the Allow policy happens to admit. A caller
-who is not on the list gets exactly the response a missing lead gets: a 404, never a 403, so nobody
-who guesses the URL learns either surface exists. `wrangler dev` and every test tier honour a single
-synthetic development operator instead — see `src/operators.ts`.
+**Unset means nobody**, in production: `/leads`, `/deliveries` and `/requests` are all a 404 for
+every caller, including whoever deployed it. That is the same fail-closed position the bridge's
+service token takes, and for the same reason — a deploy that forgets the setting should have no
+operator surface at all rather than one that answers to whatever address the Allow policy happens to
+admit. A caller who is not on the list gets exactly the response a missing lead gets: a 404, never a
+403, so nobody who guesses the URL learns any of the three surfaces exist. `wrangler dev` and every
+test tier honour a single synthetic development operator instead — see `src/operators.ts`.
 
 **Promotion does not issue the Access seat.** Nothing in this application can add an address to an
 Access policy, and nothing should: the thing that grants access to customer data must not be

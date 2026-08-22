@@ -16,6 +16,7 @@ import {
 import { matchMockBundlePath, mockBundle } from "./routes/mocks"
 import { outbox } from "./routes/outbox"
 import { projectDetail } from "./routes/project"
+import { requestsInbox } from "./routes/requests"
 import { startForm, submitStart } from "./routes/start"
 import { submissionDetail, submissionRounds, submitSubmissionAction } from "./routes/submission"
 import type { Env } from "./types"
@@ -105,6 +106,17 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
   // `routes/deliveries.ts`.
   if (pathname === "/deliveries") {
     if (request.method === "GET") return deliveries(request, env)
+    return leadsNotFound()
+  }
+
+  // The operator's every-submission view (#104) — the counterpart to the
+  // customer-scoped `/submissions` above, the same way `/deliveries` (#55) is
+  // to `/outbox`. Owned here for every method, same reasoning as `/deliveries`
+  // just above: falling through to `ASSETS.fetch` on an unsupported method
+  // would hand an unauthenticated caller a response this contract says is
+  // operator-only. See `routes/requests.ts`.
+  if (pathname === "/requests") {
+    if (request.method === "GET") return requestsInbox(request, env)
     return leadsNotFound()
   }
 
