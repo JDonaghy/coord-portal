@@ -294,6 +294,71 @@ test("start work is refused to anyone who is not the operator, and changes nothi
   await checkContext.close()
 })
 
+/** See `SERVICE_TOKEN` above — off the edge, any well-formed pair authorises `/api/bridge/push` too. */
+async function pushStatus(
+  request: APIRequestContext,
+  reference: string,
+  status: string,
+  revision: number,
+) {
+  const res = await request.post("/api/bridge/push", {
+    data: { updates: [{ submission_id: reference, revision, fields: { status } }] },
+    headers: SERVICE_TOKEN,
+  })
+  expect(res.status()).toBe(200)
+  const body = (await res.json()) as { results: Array<{ outcome: string }> }
+  expect(body.results[0]?.outcome).toBe("applied")
+}
+
+test("the override is withdrawn once the coordinator moves the submission past describing", async ({
+  browser,
+  baseURL,
+  request,
+}) => {
+  const tag = nonce()
+  const summary = `A synthetic pre-agreed tidy-up (${tag}) — start-work past-describing check.`
+  const email = `start-work-past-describing-${tag}@example.test`
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+  const path = await seedPromotedLead(browser, baseURL, operator, summary, email)
+
+  const reference = ((await operator.getByTestId("promoted-submission-reference").innerText()).match(
+    /SUB-[A-Z0-9]{6}/,
+  ) ?? [])[0]
+  expect(reference, "the promoted lead should record the submission it produced").toBeTruthy()
+
+  // The coordinator independently opens a design round — the submission is no
+  // longer `describing` before the operator ever clicks "Start work".
+  await pushStatus(request, reference as string, "in-design", 1)
+
+  await operator.goto(path)
+  await expect(operator.getByTestId("attached-submission-status")).toHaveAttribute(
+    "data-status",
+    "in-design",
+  )
+  await expect(
+    operator.getByTestId("start-work-card"),
+    "the card must not offer an override the coordinator has already moved past",
+  ).toHaveCount(0)
+
+  const attempt = await operatorContext.request.post(`${path}/start-work`, {
+    form: {},
+    maxRedirects: 0,
+    failOnStatusCode: false,
+  })
+  expect(attempt.status(), "the route itself refuses, not just the missing card").toBe(404)
+
+  await operator.goto(path)
+  await expect(operator.getByTestId("attached-submission-status")).toHaveAttribute(
+    "data-status",
+    "in-design",
+  )
+  await expect(operator.getByTestId("start-work-card")).toHaveCount(0)
+
+  await operatorContext.close()
+})
+
 test("starting work is visible on the sync bridge", async ({ browser, baseURL, request }) => {
   const tag = nonce()
   const summary = `A synthetic pre-agreed tidy-up (${tag}) — start-work bridge check.`
