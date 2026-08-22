@@ -154,3 +154,63 @@ export function projectAssignmentForFollowUp(
     projectIdBindings: [followUpFromId],
   }
 }
+
+/**
+ * The two project-creation statements issue #129's `promoteLead`
+ * (`src/leads.ts`) needs — returned rather than executed, exactly like
+ * `projectAssignmentForFollowUp` above, so each lands in the same
+ * `DB.batch()` as the client and submission rows it belongs with.
+ *
+ * Both are guarded on the same condition `promoteLead` already guards its
+ * own submission insert on — `leads.id = ? AND leads.promoted_at IS NULL` —
+ * so a double-submitted promote of the *same* lead mints no second project:
+ * on the losing side of that race every statement in the batch, including
+ * this one, matches zero rows. Neither takes `src/submissions.ts`'s
+ * `CreateGuard` shape; there is exactly one caller and exactly one condition,
+ * so a `leadId` parameter says the same thing with less indirection.
+ */
+
+/**
+ * For the "operator picked an existing client, but this ask starts a new
+ * project" branch — `clientId` is already known (read before the batch was
+ * built), so it is bound directly.
+ */
+export function projectCreationForKnownClient(
+  env: Env,
+  id: string,
+  customerEmail: string | null,
+  clientId: string,
+  createdAt: string,
+  leadId: string,
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `INSERT INTO projects (id, customer_email, client_id, created_at)
+     SELECT ?, ?, ?, ?
+      WHERE EXISTS (SELECT 1 FROM leads WHERE id = ? AND promoted_at IS NULL)`,
+  ).bind(id, customerEmail, clientId, createdAt, leadId)
+}
+
+/**
+ * For the "no match" branch, where the client row this project belongs to is
+ * being minted in the very same batch (`clientCreationStatement`,
+ * `src/clients.ts`). `client_id` is resolved by a subquery on the email,
+ * read back live within the transaction, rather than a candidate id trusted
+ * to have won — on the rare race of two *different* leads sharing an email
+ * promoted at once, the losing side's own client insert fires nothing (its
+ * `NOT EXISTS` fails), and this subquery still finds the client row that
+ * actually exists, so the project it creates lands on the real one instead
+ * of an orphaned id nothing else points to.
+ */
+export function projectCreationForEmailResolvedClient(
+  env: Env,
+  id: string,
+  customerEmail: string,
+  createdAt: string,
+  leadId: string,
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `INSERT INTO projects (id, customer_email, client_id, created_at)
+     SELECT ?, ?, (SELECT id FROM clients WHERE lower(email) = lower(?)), ?
+      WHERE EXISTS (SELECT 1 FROM leads WHERE id = ? AND promoted_at IS NULL)`,
+  ).bind(id, customerEmail, customerEmail, createdAt, leadId)
+}

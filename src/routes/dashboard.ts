@@ -87,7 +87,41 @@ type DashboardRow =
  * with no `projectId` renders exactly as it always has, and every submission
  * sharing a `projectId` collapses into one row, keyed to the newest member —
  * the input's own ordering already puts that member first, so this is a
- * single pass, not a re-sort.
+ * single pass, not a re-sort — UNLESS a `projectId` turns out to have exactly
+ * one member, which renders as an ordinary submission row instead (see below
+ * for why that carve-out exists and is safe).
+ *
+ * ── WHY A LONE MEMBER DOES NOT BECOME A PROJECT ROW (ISSUE #129) ───────────
+ * Before issue #129 (`claude-coordinator` epic #122's client-linking work,
+ * `coord-portal`'s own `src/leads.ts`), the only way a submission ever
+ * carried a `projectId` at all was `NewSubmissionInput.followUpFrom` (#109) —
+ * and that path *always* produces at least two members, atomically: minting
+ * the project and stamping the follow-up's own `project_id` happen in the
+ * same `DB.batch()` as stamping the *origin* submission with it too
+ * (`projectAssignmentForFollowUp`, `src/projects.ts`). A `project_id` with
+ * only one submission behind it was therefore never an observable state —
+ * grouping unconditionally on any `projectId` was equivalent to grouping on
+ * "two or more", so this carve-out was invisible before #129.
+ *
+ * #129 changes that: lead promotion (`promoteLead`, `src/leads.ts`) now
+ * attaches every promoted submission to a client-linked project immediately,
+ * including a brand-new client's very first one — so a customer with exactly
+ * one submission, freshly promoted from a lead, now legitimately has a
+ * `projectId` pointing at a project with exactly one member. Rendering that
+ * as a `project-row` (a distinct `data-testid` from `submission-row`, see
+ * `projectRow` below) is a real, user-visible regression against
+ * `tests/acceptance/ms-2/33-lead-triage-promotion.spec.ts` (sealed, never
+ * reopened): three of its assertions expect exactly one `submission-row` for
+ * a lead that has been promoted and nothing else, a promise this module made
+ * long before #129 existed and #129's own contract never asked to relax.
+ *
+ * Collapsing only at two-or-more members keeps that promise for every case
+ * this module has ever been asked to handle — including #109's own,
+ * unchanged by construction — and gives #129's new one-submission-per-project
+ * case the identical rendering a project-less submission has always had, for
+ * exactly as long as it stays a party of one. The moment a second submission
+ * lands in the same project (a reassignment, `#130`, or a genuine follow-up),
+ * it becomes a `project-row` the same way it always would have.
  */
 function groupByProject(
   submissions: Submission[],
@@ -108,7 +142,7 @@ function groupByProject(
     }
     // First (newest) sighting of this project — its row's position and
     // display status come from this submission, the current state of the
-    // relationship.
+    // relationship. Reclassified below if it turns out to be the only one.
     const group: DashboardRow & { kind: "project" } = {
       kind: "project",
       projectId: submission.projectId,
@@ -119,7 +153,11 @@ function groupByProject(
     rows.push(group)
   }
 
-  return rows
+  return rows.map((row) =>
+    row.kind === "project" && row.submissions.length === 1
+      ? { kind: "submission", submission: row.submissions[0]!, display: row.display }
+      : row,
+  )
 }
 
 function dashboard(email: string | null, rows: DashboardRow[]): string {

@@ -223,6 +223,17 @@ export interface CreateSubmissionOptions {
   id?: string
   reference?: string
   guard?: CreateGuard
+  /**
+   * A project id to attach at creation time, already known synchronously by
+   * the caller — unlike `NewSubmissionInput.followUpFrom` (issue #109), whose
+   * project id is resolved *inside* the same batch via a subquery because the
+   * caller does not yet know it. Issue #129's lead promotion always does
+   * know: the project is either an existing one the operator picked, or one
+   * the same batch is about to insert with a candidate id minted in JS
+   * beforehand (`promoteLead` in `src/leads.ts`) — so there is nothing to
+   * look up. Ignored when `followUpFrom` is set; no caller sets both.
+   */
+  projectId?: string | null
 }
 
 /**
@@ -253,7 +264,7 @@ export function createSubmissionStatements(
   // today's shape.
   const projectStatements: D1PreparedStatement[] = []
   let projectIdExpr = "?"
-  let projectIdBindings: unknown[] = [null]
+  let projectIdBindings: unknown[] = [options.projectId ?? null]
   if (followUpFrom) {
     const assignment = projectAssignmentForFollowUp(env, input.customerEmail, followUpFrom, createdAt)
     projectStatements.push(...assignment.statements)
@@ -324,13 +335,15 @@ export function createSubmissionStatements(
       projectScope: input.projectScope,
       createdAt,
       coordRevision: null,
-      // Resolved by SQL above, not known synchronously here — a follow-up's
-      // true `projectId` (freshly minted, or an existing one reused) only
-      // exists once the batch this statement is part of actually commits.
-      // `createSubmission` below reads it back for exactly that reason;
-      // any other caller building its own batch (`promoteLead`) should do the
-      // same if it ever needs this field.
-      projectId: null,
+      // A follow-up's true `projectId` (freshly minted, or an existing one
+      // reused) is resolved by the SQL above, not known synchronously here —
+      // it only exists once the batch this statement is part of actually
+      // commits. `createSubmission` below reads it back for exactly that
+      // reason. `options.projectId`, by contrast, *is* known synchronously
+      // (see its own doc comment above) — this is the value the row will
+      // carry once this transaction actually commits, and any caller that
+      // needs it before then (`promoteLead` does not) can already trust it.
+      projectId: followUpFrom ? null : (options.projectId ?? null),
       // No preview build exists yet for a submission that was just created —
       // `preview_url` only ever arrives later, over the bridge (issue #107).
       previewUrl: null,
