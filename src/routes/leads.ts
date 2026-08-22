@@ -11,14 +11,20 @@ import {
 } from "../leads"
 import { listMessages, postMessage } from "../messages"
 import { readOperator, type Operator } from "../operators"
+import { derivedQualityCheckStatus, getCurrentPreviewReview } from "../previewReviews"
 import { createClientProject, getProject, listProjectsForClient, type Project } from "../projects"
 import { escapeHtml, html, operatorTopbar, page } from "../render"
+import { derivedStatus, getCurrentRound } from "../rounds"
+import { derivedStartWorkStatus, getStartWork, recordStartWork } from "../startWork"
 import {
+  customerFacingStatus,
   getNewestSubmissionForProject,
   getSubmission,
   setSubmissionProject,
+  statusText,
   titleOf,
   type Submission,
+  type SubmissionStatus,
 } from "../submissions"
 import type { Env } from "../types"
 import { isFormContentType, messageThreadSection, type ThreadContext } from "./submission"
@@ -92,6 +98,7 @@ const LEAD_PATH = /^\/leads\/([^/?#]+)$/
 const LEAD_PROMOTE_PATH = /^\/leads\/([^/?#]+)\/promote$/
 const LEAD_MESSAGE_PATH = /^\/leads\/([^/?#]+)\/message$/
 const LEAD_REASSIGN_PATH = /^\/leads\/([^/?#]+)\/reassign$/
+const LEAD_START_WORK_PATH = /^\/leads\/([^/?#]+)\/start-work$/
 
 /** What `handlePages` needs to know about a `/leads…` URL, or `null`. */
 export function matchLeadsPath(
@@ -102,6 +109,7 @@ export function matchLeadsPath(
   | { kind: "promote"; id: string }
   | { kind: "message"; id: string }
   | { kind: "reassign"; id: string }
+  | { kind: "start-work"; id: string }
   | null {
   if (pathname === LEADS_PATH) return { kind: "index" }
 
@@ -113,6 +121,9 @@ export function matchLeadsPath(
 
   const reassign = pathname.match(LEAD_REASSIGN_PATH)
   if (reassign?.[1]) return { kind: "reassign", id: reassign[1] }
+
+  const startWork = pathname.match(LEAD_START_WORK_PATH)
+  if (startWork?.[1]) return { kind: "start-work", id: startWork[1] }
 
   const detail = pathname.match(LEAD_PATH)
   if (detail?.[1]) return { kind: "detail", id: detail[1] }
@@ -156,9 +167,62 @@ export async function leadDetail(request: Request, env: Env, id: string): Promis
 
   const thread = await threadFor(env, lead)
   const reassignment = await reassignmentContext(env, lead)
+  const attached = await attachedSubmissionContext(env, lead)
   return html(
-    page(`${lead.reference} — coord-portal`, detail(operator, lead, thread, reassignment)),
+    page(`${lead.reference} — coord-portal`, detail(operator, lead, thread, reassignment, attached)),
   )
+}
+
+/**
+ * Everything `attached-submission-status` and issue #132's "Start work" card
+ * need: the promoted lead's own submission and its customer-facing status,
+ * or `null` for a lead with no attached submission yet (never promoted, or —
+ * defensively only — a promotion whose submission has vanished).
+ *
+ * `display` composes every derivation this codebase already has for "what a
+ * customer actually sees" — `derivedStatus` (#13's design-round sign-off),
+ * `derivedQualityCheckStatus` (#107's preview gate) and
+ * `derivedStartWorkStatus` (#132's own override) — the same way
+ * `src/routes/submission.ts`'s `detailFor` dispatches on whichever one
+ * applies to the submission's actual stored status. Only one of the three
+ * can ever apply to a given stored status, so there is no ordering question
+ * between them; `derivedStartWorkStatus` is #132's own, so it is spelled out
+ * here rather than folded into a shared helper the other two do not need.
+ */
+interface AttachedSubmissionContext {
+  submission: Submission
+  display: SubmissionStatus
+  /** Whether issue #132's override has already been used on this submission. */
+  startWorkUsed: boolean
+}
+
+async function attachedSubmissionContext(
+  env: Env,
+  lead: Lead,
+): Promise<AttachedSubmissionContext | null> {
+  if (!lead.promotedSubmissionId) return null
+  const submission = await getSubmission(env, lead.promotedSubmissionId)
+  if (!submission) return null
+
+  let display: SubmissionStatus = submission.status
+  let startWorkUsed = false
+
+  if (submission.status === "describing") {
+    const startWork = await getStartWork(env, submission.reference)
+    startWorkUsed = startWork !== null
+    display = derivedStartWorkStatus(submission.status, startWork)
+  } else if (submission.status === "awaiting-signoff") {
+    const round = await getCurrentRound(env, submission.reference)
+    display = derivedStatus(
+      submission.status,
+      round ? { round: round.round, verdict: round.verdict } : null,
+    )
+  } else if (submission.status === "quality-check" && submission.previewUrl) {
+    const review = await getCurrentPreviewReview(env, submission.reference, submission.previewUrl)
+    display = derivedQualityCheckStatus(submission.status, review ? { verdict: review.verdict } : null)
+  }
+
+  return { submission, display: customerFacingStatus(display), startWorkUsed }
 }
 
 /**
@@ -328,6 +392,43 @@ export async function postLeadReassign(request: Request, env: Env, id: string): 
 }
 
 /**
+ * POST /leads/:id/start-work — issue #132's operator override: skip the
+ * sign-off loop entirely and land the attached submission on the
+ * customer-visible equivalent of Planned. See `src/startWork.ts`'s module
+ * comment for the full design — why nothing here writes `submissions.status`,
+ * and which bridge event this publishes and why.
+ *
+ * Idempotent the same way `promoteLeadAction` is: the card disappears once
+ * used (`detail`, below), but that is a courtesy, not the guarantee.
+ * `recordStartWork`'s own guard is what makes a double-click, a retry, or two
+ * genuinely concurrent POSTs converge on exactly one recorded decision and
+ * one `signoff.approved` event, not the missing button.
+ *
+ * A lead that has not been promoted, or one whose attached submission has
+ * vanished (defensive only — promotion always attaches one), gets the same
+ * 404 every other refusal on this operator surface gets: there is nothing
+ * here yet for the override to act on, and this route never hints at which
+ * is true to a caller who is not an operator.
+ */
+export async function postLeadStartWork(request: Request, env: Env, id: string): Promise<Response> {
+  const operator = await readOperator(request, env)
+  if (!operator) return leadsNotFound()
+
+  const lead = await getLead(env, id)
+  if (!lead) return leadsNotFound()
+
+  const attached = await attachedSubmissionContext(env, lead)
+  if (!attached) return leadsNotFound()
+
+  await recordStartWork(env, attached.submission.reference)
+
+  return new Response(null, {
+    status: 303,
+    headers: { location: `/leads/${lead.id}` },
+  })
+}
+
+/**
  * POST /leads/:id/message — the operator's half of issue #110's chat thread.
  * See this file's module comment for why it lives here rather than on
  * `/submissions/:id`.
@@ -365,8 +466,9 @@ export async function postLeadMessage(request: Request, env: Env, id: string): P
       error: "Write a message before sending.",
     }
     const reassignment = await reassignmentContext(env, lead)
+    const attached = await attachedSubmissionContext(env, lead)
     return html(
-      page(`${lead.reference} — coord-portal`, detail(operator, lead, thread, reassignment)),
+      page(`${lead.reference} — coord-portal`, detail(operator, lead, thread, reassignment, attached)),
       { status: 400 },
     )
   }
@@ -427,6 +529,7 @@ function detail(
   lead: Lead,
   thread: ThreadContext | null,
   reassignment: ReassignmentContext | null,
+  attached: AttachedSubmissionContext | null,
 ): string {
   const status = leadStatus(lead)
   const promoted = status === "promoted"
@@ -441,6 +544,7 @@ function detail(
 
   ${promoted ? manualStep(lead) : seatReminder(lead)}
   ${promoted ? promotedReference(lead) : ""}
+  ${attached ? attachedSubmissionStatus(attached) : ""}
 
   <dl class="card">
     <dt>What they said</dt>
@@ -451,10 +555,43 @@ function detail(
   </dl>
 
   ${promoted ? "" : promoteForm(lead)}
+  ${attached && !attached.startWorkUsed ? startWorkSection(lead) : ""}
   ${promoted && reassignment ? reassignSection(lead, reassignment) : ""}
 
   ${thread ? messageThreadSection(`/leads/${encodeURIComponent(lead.id)}/message`, thread, "operator", operator.email) : ""}
 </main>`
+}
+
+/**
+ * `attached-submission-status` — issue #129's own addition to this screen
+ * ("the rendered response after promotion... " never rendered the
+ * submission's own status before), reused by #130 and #132 without change.
+ * `.status-pill`-shaped, same class every other status pill on this site
+ * uses (`src/render.ts`'s `.status-pill` rules), a distinct `data-testid` so
+ * it is never confused with the lead's own `lead-status-pill`.
+ */
+function attachedSubmissionStatus(attached: AttachedSubmissionContext): string {
+  return `<p class="status-pill" data-testid="attached-submission-status" data-status="${escapeHtml(attached.display)}">${escapeHtml(statusText(attached.display))}</p>`
+}
+
+/**
+ * Issue #132 — "operator 'start work' override: skip sign-off, go straight to
+ * planned." Rendered only while the attached submission's status has not yet
+ * been moved forward by this action (`!attached.startWorkUsed`) — gone
+ * entirely afterwards, the same one-way-in-the-UI convention `promoteForm`
+ * above already establishes. See `postLeadStartWork` for why the missing
+ * card is a courtesy, not the safety guarantee.
+ */
+function startWorkSection(lead: Lead): string {
+  return `<div class="card start-work-card" data-testid="start-work-card">
+    <p class="start-work-note" data-testid="start-work-note">
+      Already agreed this one with the client out of band? Skip the sign-off loop and move
+      straight to Planned — only for pre-agreed work, not a shortcut around a real design round.
+    </p>
+    <form method="POST" action="/leads/${encodeURIComponent(lead.id)}/start-work" data-testid="start-work-form">
+      <button type="submit" class="primary" data-testid="start-work-button">Start work</button>
+    </form>
+  </div>`
 }
 
 /**

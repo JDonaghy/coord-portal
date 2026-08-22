@@ -19,6 +19,15 @@ import type { Env } from "../types"
  * shape as the sign-off pair, one event per decision, for a different
  * decision. The vocabulary is closed here anyway because it is the half of
  * the contract #15 owns, and #1982 is building against it today.
+ *
+ * One deliberate exception: `signoff.approved` is also emitted by the
+ * operator's "start work" override (#132, `src/startWork.ts`) when an
+ * operator skips the sign-off loop for pre-agreed work. That payload is
+ * still customer-facing-fact-shaped (it announces the same "moved toward
+ * planned" outcome a real sign-off does) but is not, strictly, a fact a
+ * *customer* authored — see `src/startWork.ts`'s doc comment for the full
+ * reasoning and the `source: "operator_start_work"` marker that keeps the two
+ * distinguishable in the payload without a new event kind.
  */
 export const BRIDGE_EVENT_TYPES = [
   "submission.created",

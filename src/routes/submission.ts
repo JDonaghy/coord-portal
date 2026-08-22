@@ -17,6 +17,7 @@ import {
   VERDICT_TEXT,
   type DesignRound,
 } from "../rounds"
+import { derivedStartWorkStatus, getStartWork } from "../startWork"
 import {
   customerFacingStatus,
   getSubmission,
@@ -446,6 +447,13 @@ function notFoundResponse(): Response {
  * `receipt` (the `describing` template), which does not: that screen's own
  * copy already tells the customer "No one is chatting with you right now,"
  * and a chat box under that sentence would contradict it.
+ *
+ * A `describing` submission is checked against `src/startWork.ts` first —
+ * issue #132's operator override. A submission the operator has started work
+ * on is still stored at `describing` (only the coordinator's own push moves
+ * that column) but reads as `Planned` here, by the same derivation
+ * `derivedStatus` already uses for an approved design round: `planned` is a
+ * rollup status, so it gets that shared template, not the receipt.
  */
 async function detailFor(
   env: Env,
@@ -453,7 +461,14 @@ async function detailFor(
   submission: Submission,
   thread: ThreadContext,
 ): Promise<string> {
-  if (submission.status === "describing") return receipt(email, submission)
+  if (submission.status === "describing") {
+    const startWork = await getStartWork(env, submission.reference)
+    const started = derivedStartWorkStatus(submission.status, startWork)
+    if (started !== submission.status) {
+      return rollupDetail(env, email, submission, started, thread)
+    }
+    return receipt(email, submission)
+  }
   const display = customerFacingStatus(submission.status)
   if (display === "quality-check" && submission.previewUrl) {
     return qualityCheckDetail(env, email, submission, thread)
