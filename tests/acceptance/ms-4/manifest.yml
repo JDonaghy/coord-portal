@@ -12,7 +12,7 @@
 # and an id that matches nothing is reported as a missing test, not as a pass.
 #
 # One block per issue. Later slices MERGE into this file; do not rewrite another
-# issue's block. Issue #132 is still to be authored.
+# issue's block. Every issue in ms-4 is now authored.
 
 issues:
   128:
@@ -32,6 +32,14 @@ issues:
     # observed-not-intended rule they are absent from `expected_red` below.
     - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › no backfill — a submission keeps the bare customer_email it was filed with"
     - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › the migration disturbs nothing that already reads projects and submissions"
+  132:
+    - "[chromium] ms-4/132-start-work-override.spec.ts › ms-4 issue 132 operator start work override › a promoted lead offers the start-work override while its submission is still describing"
+    - "[chromium] ms-4/132-start-work-override.spec.ts › ms-4 issue 132 operator start work override › an unpromoted lead offers no start-work override and nothing to start work on"
+    - "[chromium] ms-4/132-start-work-override.spec.ts › ms-4 issue 132 operator start work override › start work moves the attached submission to Planned and retires the card"
+    - "[chromium] ms-4/132-start-work-override.spec.ts › ms-4 issue 132 operator start work override › the customer's own submission reads Planned without a design round or a sign-off"
+    - "[chromium] ms-4/132-start-work-override.spec.ts › ms-4 issue 132 operator start work override › a repeated start work is safe and converges on the same planned submission"
+    - "[chromium] ms-4/132-start-work-override.spec.ts › ms-4 issue 132 operator start work override › start work is refused to anyone who is not the operator"
+    - "[chromium] ms-4/132-start-work-override.spec.ts › ms-4 issue 132 operator start work override › starting work is visible across the bridge"
 
   129:
     # RED at authoring time — promotion knows nothing about `clients` yet, so
@@ -116,6 +124,14 @@ issues:
 # ever used shows no match card") passed and is excluded because it never
 # failed — it is the control described in its own block above, not an
 # out-of-scope test.
+# #132, run 2026-08-21 (`npm run test:acceptance -- ms-4/132`): 6 failed,
+# 1 passed. The six below are exactly the ids that failed. The seventh id in
+# #132's block above — "an unpromoted lead offers no start-work override and
+# nothing to start work on" — is deliberately ABSENT here: it passed, because a
+# `start-work-card` that does not exist yet is trivially absent from an
+# unpromoted lead. It is the slice's control clause and must keep passing once
+# the override ships; a run where it starts failing means the override leaked
+# onto a lead with no submission to start.
 expected_red:
   129:
     - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › promoting an unrecognised email says a new client was created"
@@ -181,3 +197,10 @@ expected_red:
     - "[chromium] ms-4/130-reassign-project.spec.ts › ms-4 issue 130 reassign a submission to a different project › only this client's own client-linked projects are on offer"
     - "[chromium] ms-4/130-reassign-project.spec.ts › ms-4 issue 130 reassign a submission to a different project › moving to another project takes the submission out of the one it was in"
     - "[chromium] ms-4/130-reassign-project.spec.ts › ms-4 issue 130 reassign a submission to a different project › creating a new project inline moves the submission into it, and reassignment stays available"
+  132:
+    - "[chromium] ms-4/132-start-work-override.spec.ts › ms-4 issue 132 operator start work override › a promoted lead offers the start-work override while its submission is still describing"
+    - "[chromium] ms-4/132-start-work-override.spec.ts › ms-4 issue 132 operator start work override › start work moves the attached submission to Planned and retires the card"
+    - "[chromium] ms-4/132-start-work-override.spec.ts › ms-4 issue 132 operator start work override › the customer's own submission reads Planned without a design round or a sign-off"
+    - "[chromium] ms-4/132-start-work-override.spec.ts › ms-4 issue 132 operator start work override › a repeated start work is safe and converges on the same planned submission"
+    - "[chromium] ms-4/132-start-work-override.spec.ts › ms-4 issue 132 operator start work override › start work is refused to anyone who is not the operator"
+    - "[chromium] ms-4/132-start-work-override.spec.ts › ms-4 issue 132 operator start work override › starting work is visible across the bridge"
