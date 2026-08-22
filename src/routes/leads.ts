@@ -1,4 +1,10 @@
-import { findOrCreateClientId, getClientRecordByEmail, getClientById, getClientIdByEmail, type ClientRecord } from "../clients"
+import {
+  findOrCreateClientId,
+  getClientRecordByEmail,
+  getClientById,
+  getClientIdByEmail,
+  type ClientRecord,
+} from "../clients"
 import { parseFormData } from "../formData"
 import {
   getLead,
@@ -351,6 +357,26 @@ async function clientMatchContext(env: Env, lead: Lead): Promise<ClientMatchCont
  * `projects.created_at`, for the "existing client, but this ask started a new
  * project" branch, so the copy can say "started" rather than the misleading
  * "joins" for a project that had nothing in it a moment before.
+ *
+ * Known, accepted mis-classification: a lead promoted *before* #129 shipped
+ * (so it never got a project of its own) that is later reassigned via #130's
+ * "start a new project" (`findOrCreateClientId` + `createClientProject`,
+ * which mints a client+project well after `promoted_at` was stamped) can
+ * never satisfy `client.createdAt === lead.promotedAt` or
+ * `project.createdAt === lead.promotedAt` — so it always renders as
+ * `data-match="existing"` / "joins", never "new" / "started", regardless of
+ * which branch actually ran. Cosmetic only (the fact that it landed on some
+ * client and project is still correct), and it only affects promotions that
+ * predate this deploy — every promotion from here on stamps both timestamps
+ * together, so the equality check is accurate for all of them.
+ *
+ * This panel deliberately carries no status of its own. `attached-submission-
+ * status` is a single element owned by `attachedSubmissionStatus`, whose
+ * `AttachedSubmissionContext.display` derives across describing (#132's
+ * start-work override), awaiting-signoff (#113's rounds) and quality-check
+ * (#107's preview gate) — a superset of the awaiting-signoff-only derivation
+ * this function used to do, and the only one that renders #132's sealed
+ * `describing` -> `planned` flip.
  */
 interface AttachmentInfo {
   matchType: "existing" | "new"
@@ -802,11 +828,21 @@ function clientAttachmentSection(attachment: AttachmentInfo): string {
   </p>`
   }
 
-  const projectWord = attachment.projectCount === 1 ? "project" : "projects"
-  const verb = attachment.freshProject ? "started" : "joins"
-  return `<p class="client-attachment" data-testid="client-attachment" data-match="existing">
-    Attached to an existing client — ${escapeHtml(attachment.clientEmail)} already has ${attachment.projectCount} ${projectWord}
-    with us. This request ${verb} <strong>${escapeHtml(attachment.projectTitle)}</strong>.
+  // `attachment.projectCount` already counts the project this very promotion
+  // may have just started (see `AttachmentInfo`'s doc comment) — so "already
+  // has N" would double-count it when `freshProject` is true. The count named
+  // here is always the number this client had *before* this request, which is
+  // what "already" means in either sentence.
+  const priorCount = attachment.freshProject ? attachment.projectCount - 1 : attachment.projectCount
+  const projectWord = priorCount === 1 ? "project" : "projects"
+  return attachment.freshProject
+    ? `<p class="client-attachment" data-testid="client-attachment" data-match="existing">
+    Attached to an existing client — ${escapeHtml(attachment.clientEmail)} already had ${priorCount} ${projectWord}
+    with us. This request started a new one, <strong>${escapeHtml(attachment.projectTitle)}</strong>.
+  </p>`
+    : `<p class="client-attachment" data-testid="client-attachment" data-match="existing">
+    Attached to an existing client — ${escapeHtml(attachment.clientEmail)} already has ${priorCount} ${projectWord}
+    with us. This request joins <strong>${escapeHtml(attachment.projectTitle)}</strong>.
   </p>`
 }
 
