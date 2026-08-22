@@ -236,29 +236,37 @@ export interface CreateSubmissionOptions {
    */
   projectId?: string | null
   /**
-   * The `clients` row this submission's customer already belongs to, or
-   * `null` for one nobody has matched to a client yet — issue #146's
-   * `submission.created` client identity. Only for a caller that can trust
-   * the id it already has in hand: `createSubmission` below resolves it with
-   * a plain lookup of a row that already existed *before* this transaction
-   * started, and `promoteLead`'s matched-client branch (`src/leads.ts`) reads
-   * an existing row the same way — neither is minting the row itself, so
-   * there is no race to resolve. Mutually exclusive with
-   * `clientEmailToResolve` below; a caller sets whichever one it actually has.
+   * The id of the `clients` row this submission's customer already belongs
+   * to, or `null` for one nobody has matched to a client yet — issue #146's
+   * `submission.created` client identity. An **id only**, never the client's
+   * address: no email of any kind crosses the bridge (see the payload comment
+   * in `createSubmissionStatements`).
+   *
+   * Only for a caller that can trust the id it already has in hand:
+   * `createSubmission` below resolves it with a plain lookup of a row that
+   * already existed *before* this transaction started, and `promoteLead`'s
+   * matched-client branch (`src/leads.ts`) reads an existing row the same
+   * way — neither is minting the row itself, so there is no race to resolve.
+   * Mutually exclusive with `clientEmailToResolve` below; a caller sets
+   * whichever one it actually has.
    */
-  client?: { id: string; email: string } | null
+  clientId?: string | null
   /**
-   * Set instead of `client` by a caller whose own client-identity write is
+   * Set instead of `clientId` by a caller whose own client-identity write is
    * itself racy and guarded — `promoteLead`'s no-match branch, whose
    * `clientCreationStatement` insert (`src/clients.ts`) can lose to a
    * concurrent promotion of a *different* lead sharing the same email (see
    * that statement's own doc comment: "two different leads sharing an email,
    * promoted at once"). A JS-generated candidate id is not safe to ship in
-   * the event here the way `client` above is, so this instead resolves the
-   * event's `client_id`/`client_email` via a live subquery on this email,
-   * inside the same batch — the same trick `projectCreationForEmailResolvedClient`
+   * the event here the way `clientId` above is, so this instead resolves the
+   * event's `client_id` via a live subquery on this email, inside the same
+   * batch — the same trick `projectCreationForEmailResolvedClient`
    * (`src/projects.ts`) already uses to resolve `client_id` for the project
    * row it inserts alongside. See `PayloadSubquery` in `src/bridge/events.ts`.
+   *
+   * The email is a *lookup key* evaluated inside the database, bound to a
+   * `WHERE` clause; the value spliced into the payload is the resolved `id`
+   * and nothing else. The address itself never reaches the event.
    */
   clientEmailToResolve?: string
 }
@@ -346,11 +354,6 @@ export function createSubmissionStatements(
           expr: "SELECT id FROM clients WHERE lower(email) = lower(?)",
           bindings: [options.clientEmailToResolve],
         },
-        {
-          path: "$.client_email",
-          expr: "SELECT email FROM clients WHERE lower(email) = lower(?)",
-          bindings: [options.clientEmailToResolve],
-        },
       ]
     : []
 
@@ -363,26 +366,33 @@ export function createSubmissionStatements(
       /**
        * Everything the coordinator needs to start work, and nothing else.
        *
-       * The customer's email is deliberately absent: #14's emails are sent from
-       * this side, so the fleet has no use for it, and a bridge that does not
-       * carry it cannot leak it. The portal-internal URL id is absent for the
+       * NO EMAIL ADDRESS OF ANY KIND CROSSES THIS BRIDGE. The customer's
+       * email is deliberately absent: #14's emails are sent from this side,
+       * so the fleet has no use for it, and a bridge that does not carry it
+       * cannot leak it. The portal-internal URL id is absent for the
        * mirror-image reason — the daemon addresses submissions by reference.
        *
-       * `client_email`, added by issue #146, is a different thing wearing a
-       * similar shape: it identifies *the client account*, not "who filed
-       * this submission" — coord's approved-work panel has nowhere else to
-       * get a name a human operator would recognise, since `clients` has no
-       * separate display-name column (`migrations/0016_clients.sql`). It is
-       * `null`, not invented, when nobody has matched this customer to a
-       * `clients` row yet (`options.client` is only ever set when a caller
-       * already did that lookup — see its own doc comment). On the paths that
-       * populate it today (lead promotion's no-match branch, reassignment),
-       * it is frequently the same address as `customerEmail` above — it is
-       * not the same *fact*: this one names the account, the absent one would
-       * have named who filed this particular ask. It happening to be the
-       * same string for a brand-new client is a coincidence of there being
-       * only one address on file yet, not the bridge quietly leaking the
-       * thing the paragraph above says it does not carry.
+       * That rule covers the *client account's* address too, not just "who
+       * filed this ask". An earlier round of issue #146 shipped a
+       * `client_email` field here on the reasoning that a client account is a
+       * different fact from a submission's filer; ms-2's contract (note 7,
+       * issue #33: "coord never sees leads") disagrees, and it is the
+       * authority — a promoted lead's contact address reaching the daemon is
+       * exactly the leak that invariant exists to prevent, and on the paths
+       * that populated the field it was in practice the same string as
+       * `customerEmail`. Identity crosses as opaque ids only:
+       *
+       * - `client_id` — the `clients` row (`migrations/0016_clients.sql`),
+       *   `null` and never invented when nobody has matched this customer to
+       *   one yet.
+       * - `project_id` — the `projects` row, which is what coord's
+       *   approved-work panel actually keys `portal.project_repos` on.
+       *
+       * A human-readable label for either is the portal's to render, from its
+       * own screens, where the customer's data already lives. If coord ever
+       * needs to display a client, the answer is a display-name column on
+       * `clients` that no customer's contact address flows into — not putting
+       * the address on the wire.
        */
       payload: {
         reference,
@@ -392,8 +402,7 @@ export function createSubmissionStatements(
         constraints: input.constraints,
         project_scope: input.projectScope,
         created_at: createdAt,
-        client_id: options.client?.id ?? null,
-        client_email: options.client?.email ?? null,
+        client_id: options.clientId ?? null,
         project_id: knownProjectId,
       },
       payloadSubqueries: clientSubqueries.length > 0 ? clientSubqueries : undefined,
@@ -441,10 +450,11 @@ export async function createSubmission(
   input: NewSubmissionInput,
 ): Promise<Submission> {
   // A plain, read-only lookup — never a caller-supplied claim about who a
-  // customer is (issue #146's `client_id`/`client_email`, same posture as
-  // every other identity fact in this module). `null` for the ordinary,
-  // not-yet-a-client customer; `createSubmissionStatements` renders that as
-  // absent rather than inventing one.
+  // customer is (issue #146's `client_id`, same posture as every other
+  // identity fact in this module). `null` for the ordinary, not-yet-a-client
+  // customer; `createSubmissionStatements` renders that as absent rather than
+  // inventing one. Only the row's `id` is ever handed on: its email stays on
+  // this side of the bridge.
   const client = input.customerEmail ? await getClientRecordByEmail(env, input.customerEmail) : null
   // The follow-up target's *current* project, read before this transaction
   // starts — used only to decide, after the fact, whether the origin needs
@@ -455,7 +465,7 @@ export async function createSubmission(
   const origin = input.followUpFrom ? await getSubmission(env, input.followUpFrom) : null
 
   const { submission, statements } = createSubmissionStatements(env, input, {
-    client: client ? { id: client.id, email: client.email } : null,
+    clientId: client?.id ?? null,
   })
   await env.DB.batch(statements)
   // A follow-up's `projectId` is resolved by the batch above, not known to
@@ -490,7 +500,9 @@ export async function createSubmission(
   // here and belongs with whoever owns the epic. This paragraph is that
   // explicit decision, not a silent gap.
   if (created.projectId) {
-    const clientFields = { client_id: client?.id ?? null, client_email: client?.email ?? null }
+    // Ids only, exactly like `submission.created` above — see that event's
+    // payload comment for why no address of any kind rides along.
+    const clientFields = { client_id: client?.id ?? null }
     const corrections = [
       appendEventStatement(env, {
         type: "submission.project_assigned",
@@ -643,15 +655,17 @@ export async function getNewestSubmissionForProject(
  * pair in this codebase gets. `submission` takes `id` and `reference` (not a
  * bare id) because the event, like every bridge event, is addressed by the
  * customer-visible reference, not the row id the caller already has handy.
- * `client` is passed in rather than looked up here because the caller
+ * `clientId` is passed in rather than looked up here because the caller
  * (`postLeadReassign`) already knows it from its own reassignment context —
- * a second lookup would just be a slower way to get the same answer.
+ * a second lookup would just be a slower way to get the same answer. An id
+ * and nothing else: no email crosses the bridge on this event any more than
+ * on `submission.created` (see that payload's comment above).
  */
 export async function setSubmissionProject(
   env: Env,
   submission: { id: string; reference: string },
   projectId: string,
-  client: { id: string | null; email: string | null },
+  clientId: string | null,
 ): Promise<void> {
   await env.DB.batch([
     env.DB.prepare(`UPDATE submissions SET project_id = ? WHERE id = ?`).bind(
@@ -665,8 +679,7 @@ export async function setSubmissionProject(
       payload: {
         reference: submission.reference,
         project_id: projectId,
-        client_id: client.id,
-        client_email: client.email,
+        client_id: clientId,
       },
     }),
   ])

@@ -146,9 +146,14 @@ test("a brand-new email auto-creates a client and Project 1, with no match card"
     .trim()
     .replace(/^Promoted to submission\s+/, "")
   const payload = await submissionCreatedPayload(request, reference)
-  expect(payload?.["client_email"]).toBe(email)
   expect(payload?.["client_id"]).toEqual(expect.any(String))
   expect(payload?.["project_id"]).toEqual(expect.any(String))
+  // Identity crosses as opaque ids only. The client's contact address is a
+  // portal-side fact and stays here — including on the one path where the
+  // client row was minted from this very lead's email (ms-2 contract note 7 /
+  // issue #33: "coord never sees leads").
+  expect(JSON.stringify(payload)).not.toContain(email)
+  expect(payload).not.toHaveProperty("client_email")
 
   await operatorContext.close()
 })

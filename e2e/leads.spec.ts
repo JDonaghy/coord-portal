@@ -348,16 +348,12 @@ test("promotion tells the bridge about a submission, and never about the lead", 
   const wire = JSON.stringify(mine)
   expect(wire).not.toContain("lead")
   expect(wire).not.toContain("LEAD-")
-  // Issue #146 deliberately widened the wire past this test's original
-  // "the customer's email never crosses" — `client_id`/`client_email` name
-  // *the client account*, not "who filed this submission", and this is the
-  // one path (a brand-new email, no existing `clients` row) where the two
-  // happen to be the same string, because a fresh client has exactly one
-  // address on file. `customerEmail` itself — the field that answers "who
-  // filed this" — still never appears; `client_email` is a different fact
-  // that is allowed to coincide with it. See `src/submissions.ts`'s
-  // `submission.created` payload comment for the full reasoning.
-  expect(mine[0]?.payload["client_email"]).toBe(contact)
+  // The lead's contact address never crosses, in any field and under any
+  // name. Issue #146 widened the wire with *identity*, but only as opaque
+  // ids — `client_id` and `project_id`, which coord keys its approved-work
+  // panel on. See `src/submissions.ts`'s `submission.created` payload comment.
+  expect(wire).not.toContain(contact)
+  expect(mine[0]?.payload["client_id"]).toEqual(expect.any(String))
   // ...and what the stranger actually wrote does cross, as the outcome, which
   // is what makes this indistinguishable from a customer filling in /intake.
   expect(mine[0]?.payload["outcome"]).toBe(summary)

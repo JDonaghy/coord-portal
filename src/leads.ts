@@ -260,7 +260,7 @@ export async function promoteLead(
   const preparatory: D1PreparedStatement[] = []
   let projectId: string
   // The matched branch already read an *existing* client row back — no race
-  // to resolve, so `client` (the trusted, synchronously-known shape,
+  // to resolve, so `clientId` (the trusted, synchronously-known shape,
   // `CreateSubmissionOptions` in `src/submissions.ts`) is safe. The no-match
   // branch is different: it mints the client row in this same batch via
   // `clientCreationStatement`, and that insert's own `NOT EXISTS` guard can
@@ -272,10 +272,14 @@ export async function promoteLead(
   // live subquery in the same transaction — the same trick
   // `projectCreationForEmailResolvedClient` (`src/projects.ts`) already uses
   // for the project row's own `client_id`.
-  let submissionClientOptions: { client: { id: string; email: string } | null } | { clientEmailToResolve: string }
+  //
+  // Either way what reaches the bridge is an opaque `client_id`: the lead's
+  // contact address stays on this side (ms-2 contract note 7 / issue #33 —
+  // "coord never sees leads").
+  let submissionClientOptions: { clientId: string | null } | { clientEmailToResolve: string }
 
   if (matchedClient) {
-    submissionClientOptions = { client: { id: matchedClient.id, email: matchedClient.email } }
+    submissionClientOptions = { clientId: matchedClient.id }
     const projects = await listProjectsForClient(env, matchedClient.id)
     const chosen =
       projectChoice && projectChoice !== "new"
