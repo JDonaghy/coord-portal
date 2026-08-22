@@ -194,3 +194,100 @@ test("two submissions filed independently through /intake stay two separate rows
   expect(rowText.some((text) => text.includes(first.reference))).toBe(true)
   expect(rowText.some((text) => text.includes(second.reference))).toBe(true)
 })
+
+/**
+ * Issue #146: a follow-up's own project is resolved inside the transaction
+ * that creates it (`projectAssignmentForFollowUp`, `src/projects.ts`), so
+ * neither submission's `submission.created` event can carry it — see
+ * `createSubmission` in `src/submissions.ts`. This is the bridge-level proof
+ * that both submissions still converge on the truth afterward, over a
+ * `submission.project_assigned` event, rather than staying pinned to the
+ * `project_id: null` their own creation event necessarily shipped.
+ */
+interface BridgeEvent {
+  type: string
+  submission_id: string
+  payload: Record<string, unknown>
+}
+
+interface PullPage {
+  events: BridgeEvent[]
+  cursor: string
+  has_more: boolean
+}
+
+async function pull(
+  request: import("@playwright/test").APIRequestContext,
+  cursor?: string,
+): Promise<PullPage> {
+  const params: Record<string, string> = { limit: "200" }
+  if (cursor) params["cursor"] = cursor
+  const res = await request.get("/api/bridge/pull", { params, headers: SERVICE_TOKEN })
+  expect(res.status()).toBe(200)
+  return (await res.json()) as PullPage
+}
+
+/** Reads to the end of the stream and returns the cursor that sits past it. */
+async function drain(request: import("@playwright/test").APIRequestContext): Promise<string> {
+  let cursor: string | undefined
+  for (let page = 0; page < 50; page++) {
+    const body = await pull(request, cursor)
+    cursor = body.cursor
+    if (!body.has_more) return body.cursor
+  }
+  throw new Error("the stream never drained — the cursor is not advancing")
+}
+
+/** Everything on the stream after `cursor`, following `has_more` to the end. */
+async function collectFrom(
+  request: import("@playwright/test").APIRequestContext,
+  cursor: string,
+): Promise<BridgeEvent[]> {
+  const events: BridgeEvent[] = []
+  let next = cursor
+  for (let page = 0; page < 50; page++) {
+    const body = await pull(request, next)
+    events.push(...body.events)
+    next = body.cursor
+    if (!body.has_more) return events
+  }
+  throw new Error("the stream never drained — the cursor is not advancing")
+}
+
+test("a follow-up's project id converges over the bridge, for both submissions (#146)", async ({
+  page,
+  request,
+}) => {
+  const start = await drain(request)
+  const email = uniqueEmail("e2e-bridge-followup")
+  const { projectId, first, second } = await createProject(page, request, email)
+
+  const events = (await collectFrom(request, start)).filter(
+    (event) => event.submission_id === first.reference || event.submission_id === second.reference,
+  )
+
+  const createdFor = (reference: string) =>
+    events.find((e) => e.submission_id === reference && e.type === "submission.created")
+  const assignedFor = (reference: string) =>
+    events.filter((e) => e.submission_id === reference && e.type === "submission.project_assigned")
+
+  // Neither creation event could have known the project yet.
+  expect(createdFor(first.reference)?.payload["project_id"]).toBeNull()
+  expect(createdFor(second.reference)?.payload["project_id"]).toBeNull()
+
+  // Exactly one correction each, carrying the project the follow-up minted —
+  // the origin's fires because this is the *first* follow-up filed against
+  // it (`origin.projectId === null` before this request ran); the follow-up's
+  // own fires because its own creation event could never carry it at all.
+  const firstAssigned = assignedFor(first.reference)
+  const secondAssigned = assignedFor(second.reference)
+  expect(firstAssigned).toHaveLength(1)
+  expect(secondAssigned).toHaveLength(1)
+  expect(firstAssigned[0]?.payload["project_id"]).toBe(projectId)
+  expect(secondAssigned[0]?.payload["project_id"]).toBe(projectId)
+
+  // Neither submission here was ever matched to a `clients` row — that only
+  // happens through lead promotion (`e2e/lead-client-link.spec.ts` covers it).
+  expect(firstAssigned[0]?.payload["client_id"]).toBeNull()
+  expect(secondAssigned[0]?.payload["client_id"]).toBeNull()
+})

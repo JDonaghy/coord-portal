@@ -28,9 +28,24 @@ import type { Env } from "../types"
  * *customer* authored — see `src/startWork.ts`'s doc comment for the full
  * reasoning and the `source: "operator_start_work"` marker that keeps the two
  * distinguishable in the payload without a new event kind.
+ *
+ * A second, narrower exception is `submission.project_assigned` (#146). Every
+ * other event above is appended in the same `DB.batch()` as the fact it
+ * announces — "an event committed without its fact ... is how the daemon
+ * ends up building something nobody asked for" (see `appendEventStatement`'s
+ * own comment). `submission.created` now carries `project_id` too, but two
+ * things can attach — or move — a submission's project *after* that event has
+ * already shipped: a follow-up (#109, `src/projects.ts`'s
+ * `projectAssignmentForFollowUp`) resolving which project it lands in only
+ * once its own transaction commits, and an operator's reassignment (#130,
+ * `setSubmissionProject` in `src/submissions.ts`). `submission.project_assigned`
+ * is how either reaches the daemon afterward, so a submission already on the
+ * wire converges on the truth instead of staying pinned to whatever
+ * `project_id` (often absent) it carried at creation.
  */
 export const BRIDGE_EVENT_TYPES = [
   "submission.created",
+  "submission.project_assigned",
   "signoff.approved",
   "signoff.changes_requested",
   "question.answered",

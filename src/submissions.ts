@@ -1,4 +1,5 @@
 import { appendEventStatement } from "./bridge/events"
+import { getClientRecordByEmail } from "./clients"
 import { generateSubmissionId, generateSubmissionReference } from "./ids"
 import { projectAssignmentForFollowUp } from "./projects"
 import type { Env } from "./types"
@@ -234,6 +235,16 @@ export interface CreateSubmissionOptions {
    * look up. Ignored when `followUpFrom` is set; no caller sets both.
    */
   projectId?: string | null
+  /**
+   * The `clients` row this submission's customer already belongs to, or
+   * `null` for one nobody has matched to a client yet — issue #146's
+   * `submission.created` client identity. Like `projectId` above, this is
+   * only ever a value the caller already knows synchronously: `createSubmission`
+   * below resolves it with a plain lookup before building the batch, and
+   * `promoteLead` (`src/leads.ts`) already has it in hand from its own
+   * match-or-mint decision.
+   */
+  client?: { id: string; email: string } | null
 }
 
 /**
@@ -295,6 +306,18 @@ export function createSubmissionStatements(
     ...(guard ? guard.bindings : []),
   )
 
+  // A follow-up's true `projectId` (freshly minted, or an existing one
+  // reused) is resolved by the SQL above, not known synchronously here — it
+  // only exists once the batch this statement is part of actually commits.
+  // `createSubmission` below reads it back for exactly that reason, and
+  // sends the daemon the same correction over the bridge (issue #146:
+  // `submission.project_assigned`), because `null` is what this event ships
+  // in the meantime. `options.projectId`, by contrast, *is* known
+  // synchronously (see its own doc comment above) — this is the value the
+  // row will carry once this transaction actually commits, and any caller
+  // that needs it before then (`promoteLead` does not) can already trust it.
+  const knownProjectId = followUpFrom ? null : (options.projectId ?? null)
+
   const appendEvent = appendEventStatement(
     env,
     {
@@ -308,6 +331,15 @@ export function createSubmissionStatements(
        * this side, so the fleet has no use for it, and a bridge that does not
        * carry it cannot leak it. The portal-internal URL id is absent for the
        * mirror-image reason — the daemon addresses submissions by reference.
+       *
+       * `client_email`, added by issue #146, is a different thing wearing a
+       * similar shape: it identifies *the client account*, not "who filed
+       * this submission" — coord's approved-work panel has nowhere else to
+       * get a name a human operator would recognise, since `clients` has no
+       * separate display-name column (`migrations/0016_clients.sql`). It is
+       * `null`, not invented, when nobody has matched this customer to a
+       * `clients` row yet (`options.client` is only ever set when a caller
+       * already did that lookup — see its own doc comment).
        */
       payload: {
         reference,
@@ -317,6 +349,9 @@ export function createSubmissionStatements(
         constraints: input.constraints,
         project_scope: input.projectScope,
         created_at: createdAt,
+        client_id: options.client?.id ?? null,
+        client_email: options.client?.email ?? null,
+        project_id: knownProjectId,
       },
     },
     guard,
@@ -335,15 +370,7 @@ export function createSubmissionStatements(
       projectScope: input.projectScope,
       createdAt,
       coordRevision: null,
-      // A follow-up's true `projectId` (freshly minted, or an existing one
-      // reused) is resolved by the SQL above, not known synchronously here —
-      // it only exists once the batch this statement is part of actually
-      // commits. `createSubmission` below reads it back for exactly that
-      // reason. `options.projectId`, by contrast, *is* known synchronously
-      // (see its own doc comment above) — this is the value the row will
-      // carry once this transaction actually commits, and any caller that
-      // needs it before then (`promoteLead` does not) can already trust it.
-      projectId: followUpFrom ? null : (options.projectId ?? null),
+      projectId: knownProjectId,
       // No preview build exists yet for a submission that was just created —
       // `preview_url` only ever arrives later, over the bridge (issue #107).
       previewUrl: null,
@@ -369,17 +396,71 @@ export async function createSubmission(
   env: Env,
   input: NewSubmissionInput,
 ): Promise<Submission> {
-  const { submission, statements } = createSubmissionStatements(env, input)
+  // A plain, read-only lookup — never a caller-supplied claim about who a
+  // customer is (issue #146's `client_id`/`client_email`, same posture as
+  // every other identity fact in this module). `null` for the ordinary,
+  // not-yet-a-client customer; `createSubmissionStatements` renders that as
+  // absent rather than inventing one.
+  const client = input.customerEmail ? await getClientRecordByEmail(env, input.customerEmail) : null
+  // The follow-up target's *current* project, read before this transaction
+  // starts — used only to decide, after the fact, whether the origin needs
+  // telling it just gained a project (below). Never trusted for what this
+  // new submission's own `project_id` will be: a concurrent follow-up from
+  // the same origin could still win the mint inside the batch, which is
+  // exactly why `createSubmissionStatements` never guesses either.
+  const origin = input.followUpFrom ? await getSubmission(env, input.followUpFrom) : null
+
+  const { submission, statements } = createSubmissionStatements(env, input, {
+    client: client ? { id: client.id, email: client.email } : null,
+  })
   await env.DB.batch(statements)
   // A follow-up's `projectId` is resolved by the batch above, not known to
   // `submission` yet (see the comment in `createSubmissionStatements`) — read
   // the row back rather than guess at what the guarded SQL decided. Skipped
   // for the ordinary case: it is not a follow-up, so `projectId` is already
   // correctly `null` and a second round trip would buy nothing.
-  if (input.followUpFrom) {
-    return (await getSubmission(env, submission.id)) ?? submission
+  if (!input.followUpFrom) return submission
+
+  const created = (await getSubmission(env, submission.id)) ?? submission
+
+  // Issue #146: the `submission.created` event this batch just appended
+  // necessarily shipped `project_id: null` for a follow-up — nothing in JS
+  // knew, before the transaction committed, whether this submission would
+  // reuse the origin's project or mint a fresh one (see
+  // `projectAssignmentForFollowUp` in `src/projects.ts`). Tell the daemon the
+  // truth now that it exists, in a `submission.project_assigned` event of its
+  // own — necessarily a *separate* write from the fact it announces, since
+  // the fact only became knowable once the first write had already landed.
+  if (created.projectId) {
+    const clientFields = { client_id: client?.id ?? null, client_email: client?.email ?? null }
+    const corrections = [
+      appendEventStatement(env, {
+        type: "submission.project_assigned",
+        submissionReference: created.reference,
+        occurredAt: new Date().toISOString(),
+        payload: { reference: created.reference, project_id: created.projectId, ...clientFields },
+      }),
+    ]
+    // The origin only needs telling the *first* time a follow-up gives it a
+    // project it did not already have — a submission's project is assigned
+    // at most once and never cleared (`setSubmissionProject` only ever moves
+    // it to another project, `src/projects.ts` never unsets it), so
+    // `origin.projectId === null` (read before this request's own batch ran)
+    // is true on exactly the one follow-up that first mints or attaches one.
+    if (origin && origin.projectId === null) {
+      corrections.push(
+        appendEventStatement(env, {
+          type: "submission.project_assigned",
+          submissionReference: origin.reference,
+          occurredAt: new Date().toISOString(),
+          payload: { reference: origin.reference, project_id: created.projectId, ...clientFields },
+        }),
+      )
+    }
+    await env.DB.batch(corrections)
   }
-  return submission
+
+  return created
 }
 
 /** A durable lookup by row id — not tied to any session or request. */
@@ -477,15 +558,41 @@ export async function getNewestSubmissionForProject(
  * project — this function trusts the id it is given, the same way every
  * other write in this module trusts a caller that has already done its own
  * scoping (see `NewSubmissionInput.followUpFrom`'s doc comment).
+ *
+ * Batches the update with a `submission.project_assigned` event (issue #146)
+ * — unlike the follow-up correction in `createSubmission` above, the new
+ * value is already known here before any write happens, so there is no
+ * reason to give up the same-transaction guarantee every other fact/event
+ * pair in this codebase gets. `submission` takes `id` and `reference` (not a
+ * bare id) because the event, like every bridge event, is addressed by the
+ * customer-visible reference, not the row id the caller already has handy.
+ * `client` is passed in rather than looked up here because the caller
+ * (`postLeadReassign`) already knows it from its own reassignment context —
+ * a second lookup would just be a slower way to get the same answer.
  */
 export async function setSubmissionProject(
   env: Env,
-  submissionId: string,
+  submission: { id: string; reference: string },
   projectId: string,
+  client: { id: string | null; email: string | null },
 ): Promise<void> {
-  await env.DB.prepare(`UPDATE submissions SET project_id = ? WHERE id = ?`)
-    .bind(projectId, submissionId)
-    .run()
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE submissions SET project_id = ? WHERE id = ?`).bind(
+      projectId,
+      submission.id,
+    ),
+    appendEventStatement(env, {
+      type: "submission.project_assigned",
+      submissionReference: submission.reference,
+      occurredAt: new Date().toISOString(),
+      payload: {
+        reference: submission.reference,
+        project_id: projectId,
+        client_id: client.id,
+        client_email: client.email,
+      },
+    }),
+  ])
 }
 
 /**

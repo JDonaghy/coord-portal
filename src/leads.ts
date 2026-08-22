@@ -259,8 +259,17 @@ export async function promoteLead(
   const matchedClient = await getClientRecordByEmail(env, lead.email)
   const preparatory: D1PreparedStatement[] = []
   let projectId: string
+  // Known synchronously either way — the matched branch already read it back,
+  // the no-match branch mints it in this same batch — so issue #146's
+  // `submission.created` client identity costs nothing extra to resolve here,
+  // unlike the follow-up case (`createSubmission` in `src/submissions.ts`)
+  // where the equivalent project id genuinely is not knowable yet.
+  let clientId: string
+  let clientEmail: string
 
   if (matchedClient) {
+    clientId = matchedClient.id
+    clientEmail = matchedClient.email
     const projects = await listProjectsForClient(env, matchedClient.id)
     const chosen =
       projectChoice && projectChoice !== "new"
@@ -281,7 +290,8 @@ export async function promoteLead(
       )
     }
   } else {
-    const clientId = generateClientId()
+    clientId = generateClientId()
+    clientEmail = lead.email
     projectId = generateProjectId()
     preparatory.push(clientCreationStatement(env, clientId, lead.email, promotedAt, leadId))
     preparatory.push(projectCreationForEmailResolvedClient(env, projectId, lead.email, promotedAt, leadId))
@@ -305,6 +315,7 @@ export async function promoteLead(
       reference: generateSubmissionReference(),
       guard,
       projectId,
+      client: { id: clientId, email: clientEmail },
     },
   )
 
