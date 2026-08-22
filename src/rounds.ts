@@ -1,3 +1,4 @@
+import { chunkForBinding } from "./d1"
 import { generateEventId } from "./ids"
 import type { Env } from "./types"
 import type { SubmissionStatus } from "./submissions"
@@ -161,9 +162,21 @@ export interface SignoffState {
 }
 
 /**
- * The newest round + verdict for many submissions in one query — the dashboard
- * renders a derived status per row, and a per-row lookup would spend one D1
- * subrequest per submission for a fact that fits in a single statement.
+ * The newest round + verdict for many submissions in as few queries as D1
+ * allows — the dashboard renders a derived status per row, and a per-row
+ * lookup would spend one D1 subrequest per submission for a fact that fits in
+ * a single statement.
+ *
+ * "As few as D1 allows", not "one": a statement may bind at most
+ * `D1_MAX_BOUND_PARAMS` parameters (`src/d1.ts`), and this builds one
+ * placeholder per reference, so a longer list is split into runs of that size
+ * and the results merged. Every caller-facing property is unchanged by the
+ * split — the runs are disjoint by construction, so no reference can be
+ * written twice and the returned map is the same one a single statement would
+ * have produced. Unsplit, a list of 101 took the whole page down with
+ * `D1_ERROR: too many SQL variables` — reachable from `/submissions` with a
+ * prolific customer, and reachable from `/requests` (#104) with 101
+ * submissions in the whole portal.
  */
 export async function loadSignoffStates(
   env: Env,
@@ -172,19 +185,24 @@ export async function loadSignoffStates(
   const states = new Map<string, SignoffState>()
   if (submissionReferences.length === 0) return states
 
-  const placeholders = submissionReferences.map(() => "?").join(", ")
-  const { results } = await env.DB.prepare(
-    `SELECT r.submission_id, r.round, s.verdict
-       FROM design_rounds r
-       LEFT JOIN signoffs s
-         ON s.submission_id = r.submission_id AND s.round = r.round
-      WHERE r.submission_id IN (${placeholders})
-        AND r.round = (SELECT MAX(round) FROM design_rounds x WHERE x.submission_id = r.submission_id)`,
+  const batches = await Promise.all(
+    chunkForBinding(submissionReferences).map(async (references) => {
+      const placeholders = references.map(() => "?").join(", ")
+      const { results } = await env.DB.prepare(
+        `SELECT r.submission_id, r.round, s.verdict
+           FROM design_rounds r
+           LEFT JOIN signoffs s
+             ON s.submission_id = r.submission_id AND s.round = r.round
+          WHERE r.submission_id IN (${placeholders})
+            AND r.round = (SELECT MAX(round) FROM design_rounds x WHERE x.submission_id = r.submission_id)`,
+      )
+        .bind(...references)
+        .all<{ submission_id: string; round: number; verdict: string | null }>()
+      return results ?? []
+    }),
   )
-    .bind(...submissionReferences)
-    .all<{ submission_id: string; round: number; verdict: string | null }>()
 
-  for (const row of results ?? []) {
+  for (const row of batches.flat()) {
     states.set(row.submission_id, {
       round: row.round,
       verdict: isDecidedVerdict(row.verdict) ? row.verdict : "pending",

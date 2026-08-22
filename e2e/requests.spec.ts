@@ -214,3 +214,131 @@ test("the requests surface is a 404 to anyone who is not the operator, the same 
 
   await ownerContext.close()
 })
+
+/**
+ * Comfortably past D1's ceiling of 100 bound parameters per statement, so the
+ * test seeds its own failure condition rather than inheriting it from whatever
+ * the rest of the suite happened to leave behind — see `src/d1.ts`.
+ */
+const OVER_D1_BIND_LIMIT = 105
+
+/**
+ * Seeds a submission straight through `POST /intake`, no browser, and returns
+ * its customer-visible `SUB-XXXXXX` reference — the identifier `/requests`
+ * renders and the bridge addresses a submission by. The 303's `Location`
+ * carries the internal `sub_...` id instead, so the detail page it points at
+ * is where the reference is read from.
+ */
+async function seedViaApi(request: APIRequestContext, tag: string): Promise<string> {
+  const res = await request.post("/intake", {
+    form: {
+      outcome: `A synthetic outcome for e2e requests bulk coverage (${tag}).`,
+      audience: "synthetic e2e readers",
+      doneDefinition: "The requests e2e suite goes green at scale.",
+    },
+    maxRedirects: 0,
+  })
+  expect(res.status(), `POST /intake for ${tag}`).toBe(303)
+  const location = res.headers()["location"]
+  if (!location) throw new Error(`POST /intake for ${tag} returned no Location`)
+
+  const detail = await request.get(location)
+  expect(detail.status(), `GET ${location}`).toBe(200)
+  const reference = /SUB-[0-9A-F]{6}/.exec(await detail.text())?.[0]
+  if (!reference) throw new Error(`no submission reference on ${location}`)
+  return reference
+}
+
+/**
+ * REGRESSION, and the reason this file's other two tests went red in CI while
+ * passing locally.
+ *
+ * `/requests` is the portal's first *unscoped* reader: it asks
+ * `loadSignoffStates`/`loadStartWorkStates` (`src/rounds.ts`,
+ * `src/startWork.ts`) about every submission the portal holds, and those build
+ * one bound parameter per reference. D1 refuses a statement carrying more than
+ * 100 of them (`D1_ERROR: too many SQL variables ...: SQLITE_ERROR`), so the
+ * screen returned a bare 500 the moment the table passed 100 rows — invisible
+ * against a fresh database and permanent against a real one. CI caught it only
+ * because the full e2e suite accumulates submissions across every spec into
+ * one shared `serve:test` database; this test makes it deterministic by
+ * seeding past the ceiling itself.
+ *
+ * It also pins the half a naive `LIMIT 100` would break: a design round on a
+ * submission far down the list still renders, so the chunked reads are being
+ * merged rather than truncated.
+ */
+test("/requests holds up once the portal has more submissions than D1 will bind in one statement", async ({
+  browser,
+  baseURL,
+}) => {
+  test.slow()
+
+  const email = uniqueEmail("e2e-requests-bulk")
+  const context = await contextFor(browser, baseURL, email)
+
+  // Seeded in small concurrent batches: 105 sequential round trips is most of
+  // this test's wall clock, and 105 at once is a thundering herd at one
+  // `wrangler dev`.
+  const references: string[] = []
+  for (let batch = 0; batch * 15 < OVER_D1_BIND_LIMIT; batch += 1) {
+    const size = Math.min(15, OVER_D1_BIND_LIMIT - references.length)
+    references.push(
+      ...(await Promise.all(
+        Array.from({ length: size }, (_unused, i) =>
+          seedViaApi(context.request, `bulk-${batch * 15 + i}`),
+        ),
+      )),
+    )
+  }
+  expect(references).toHaveLength(OVER_D1_BIND_LIMIT)
+
+  // A round on the oldest and on the newest of the run. `/requests` orders
+  // newest-created first, so these two sit at opposite ends of the list and
+  // therefore in different chunks of the reference list the loaders bind —
+  // both verdicts surviving is what proves the chunks are merged.
+  const oldest = references[0]
+  const newest = references[references.length - 1]
+  if (!oldest || !newest) throw new Error("bulk seeding produced no references")
+
+  for (const reference of [oldest, newest]) {
+    const applied = await push(context.request, reference, 1, {
+      design_round: {
+        outcome_definition: "A synthetic outcome definition for e2e requests bulk coverage.",
+        decomposition: ["A synthetic first step"],
+      },
+      status: "awaiting-signoff",
+    })
+    expect(applied.outcome).toBe("applied")
+  }
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+
+  // The plain HTTP answer first: before this fix the page was a 500, not a
+  // rendering the browser could be asked anything about.
+  const response = await operatorContext.request.get("/requests")
+  expect(response.status(), "GET /requests over D1's bound-parameter ceiling").toBe(200)
+
+  // Not a sample: every reference seeded above is on the one screen. A chunked
+  // read that dropped or truncated a batch would show up right here.
+  const body = await response.text()
+  const missing = references.filter((reference) => !body.includes(reference))
+  expect(missing, "every seeded submission is listed on /requests").toEqual([])
+
+  const operator = await operatorContext.newPage()
+  await operator.goto("/requests")
+  await expect(operator.getByTestId("requests-list")).toBeVisible()
+  expect(
+    await operator.getByTestId("request-row").count(),
+    "at least the submissions this test seeded",
+  ).toBeGreaterThanOrEqual(OVER_D1_BIND_LIMIT)
+
+  for (const reference of [oldest, newest]) {
+    const row = operator.getByTestId("request-row").filter({ hasText: reference })
+    await expect(row, `exactly one request-row for ${reference}`).toHaveCount(1)
+    await expect(row).toHaveAttribute("data-status", "awaiting-signoff")
+    await expect(row.getByTestId("request-round")).toHaveText(/Round 1/)
+  }
+
+  await Promise.all([context.close(), operatorContext.close()])
+})

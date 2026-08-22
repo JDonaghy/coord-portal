@@ -1,4 +1,5 @@
 import { appendEventStatement } from "./bridge/events"
+import { chunkForBinding } from "./d1"
 import type { SubmissionStatus } from "./submissions"
 import type { Env } from "./types"
 
@@ -104,10 +105,13 @@ export async function getStartWork(
 }
 
 /**
- * The same lookup as `getStartWork`, for many submissions in one query —
- * mirrors `loadSignoffStates` (`src/rounds.ts`): the dashboard renders a
- * derived status per row, and a per-row lookup would spend one D1 subrequest
- * per submission for a fact that fits in a single statement.
+ * The same lookup as `getStartWork`, for many submissions at once — mirrors
+ * `loadSignoffStates` (`src/rounds.ts`): the dashboard renders a derived
+ * status per row, and a per-row lookup would spend one D1 subrequest per
+ * submission for a fact that fits in a single statement.
+ *
+ * Chunked at `D1_MAX_BOUND_PARAMS` for the same reason and with the same
+ * guarantees as that function — see `src/d1.ts` for the limit this is dodging.
  */
 export async function loadStartWorkStates(
   env: Env,
@@ -116,14 +120,19 @@ export async function loadStartWorkStates(
   const states = new Map<string, StartWorkRecord>()
   if (submissionReferences.length === 0) return states
 
-  const placeholders = submissionReferences.map(() => "?").join(", ")
-  const { results } = await env.DB.prepare(
-    `SELECT submission_id, started_at FROM start_work WHERE submission_id IN (${placeholders})`,
+  const batches = await Promise.all(
+    chunkForBinding(submissionReferences).map(async (references) => {
+      const placeholders = references.map(() => "?").join(", ")
+      const { results } = await env.DB.prepare(
+        `SELECT submission_id, started_at FROM start_work WHERE submission_id IN (${placeholders})`,
+      )
+        .bind(...references)
+        .all<StartWorkRow>()
+      return results ?? []
+    }),
   )
-    .bind(...submissionReferences)
-    .all<StartWorkRow>()
 
-  for (const row of results ?? []) {
+  for (const row of batches.flat()) {
     states.set(row.submission_id, { startedAt: row.started_at })
   }
   return states
