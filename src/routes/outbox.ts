@@ -1,6 +1,7 @@
 import { isBehindCloudflareEdge } from "../deployment"
 import { accessRefused, resolveSiteIdentity } from "../identity"
 import { DELIVERY_STATUS_TEXT, listOutboxForCustomer, type OutboxEmail } from "../notifications"
+import { readOperator } from "../operators"
 import { escapeHtml, html, page, topbar } from "../render"
 import type { Env } from "../types"
 
@@ -33,16 +34,19 @@ export async function outbox(request: Request, env: Env): Promise<Response> {
   if (!email && isBehindCloudflareEdge(request)) return accessRefused()
 
   const emails = email ? await listOutboxForCustomer(env, email) : []
-  return html(page("Outbox — coord-portal", outboxPage(email, emails)))
+  // Additive to the ownership scoping above, never a substitute for it — see
+  // `dashboard.ts`'s identical call for the full rationale (issue #103).
+  const isOperator = (await readOperator(request, env)) !== null
+  return html(page("Outbox — coord-portal", outboxPage(email, isOperator, emails)))
 }
 
-function outboxPage(email: string | null, emails: OutboxEmail[]): string {
+function outboxPage(email: string | null, isOperator: boolean, emails: OutboxEmail[]): string {
   const body =
     emails.length > 0
       ? emails.map(emailPreview).join("\n")
       : `    <p class="lede" data-testid="outbox-empty">Nothing sent yet.</p>`
 
-  return `${topbar(email, "outbox")}
+  return `${topbar(email, "outbox", isOperator)}
 <main>
   <h1>Sent emails</h1>
   <div data-testid="outbox-list">

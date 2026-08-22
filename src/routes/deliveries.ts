@@ -1,6 +1,6 @@
 import { DELIVERY_STATUS_TEXT, listAllOutbox, type OutboxEmail } from "../notifications"
 import { readOperator, type Operator } from "../operators"
-import { escapeHtml, html, operatorTopbar, page } from "../render"
+import { escapeHtml, html, page, topbar } from "../render"
 import type { Env } from "../types"
 import { leadsNotFound } from "./leads"
 
@@ -57,7 +57,7 @@ export async function deliveries(request: Request, env: Env): Promise<Response> 
 }
 
 function deliveriesPage(operator: Operator, rows: OutboxEmail[]): string {
-  return `${operatorTopbar(operator.email, "deliveries")}
+  return `${topbar(operator.email, "deliveries", true)}
 <main>
   <div class="page-head">
     <h1>Deliveries</h1>

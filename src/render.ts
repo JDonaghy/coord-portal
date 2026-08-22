@@ -15,26 +15,67 @@ export function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;")
 }
 
-export type NavCurrent = "dashboard" | "new" | "outbox" | "account" | "none"
+export type NavCurrent =
+  | "dashboard"
+  | "new"
+  | "outbox"
+  | "account"
+  | "leads"
+  | "deliveries"
+  | "none"
 
 /**
- * The header every authenticated screen carries, per the contract's global
- * hook list: `brand-home`, `nav-dashboard`, `nav-new`, `identity-email`.
- * `nav-outbox` (issue #14) and `nav-account` (issue #131, `/account`) are
- * both additive — the contract's list is not stated as exhaustive, and
- * without `nav-account` a customer has no in-product link to their own
- * profile (ms-4 Gate-A contract: "one new nav entry ... additive the same way
- * issue #14 added `nav-outbox`").
+ * The one header every screen behind Access carries — issue #103 merged what
+ * used to be two separate functions here, `topbar()` (the customer-facing
+ * screens) and `operatorTopbar()` (`/leads`, `/deliveries`), because neither
+ * knew the other existed: from `/leads` there was no link to `/submissions`,
+ * from `/submissions` there was no link to `/leads`, and the only way across
+ * was to type the URL. A person who is both an operator and a customer —
+ * which is every operator today — got whichever nav the page they happened
+ * to be on decided.
+ *
+ * The customer links (`nav-dashboard`, `nav-new`, `nav-outbox`,
+ * `nav-account`) render unconditionally. The operator section
+ * (`nav-leads`, `nav-deliveries`) is appended only when `isOperator` is
+ * true — the caller passes exactly the same fact `readOperator(request,
+ * env) !== null` already gates `/leads` and `/deliveries` on
+ * (`src/operators.ts`), so this introduces no new notion of role and no new
+ * way to learn who is staff. A non-operator customer must see no operator
+ * link at all — that is the part issue #103 calls "worth a test": the nav
+ * must not become a directory of surfaces a customer cannot open.
+ *
+ * Per the contract's global hook list: `brand-home`, `nav-dashboard`,
+ * `nav-new`, `identity-email`. `nav-outbox` (issue #14), `nav-account`
+ * (issue #131) and the operator pair above are all additive — the
+ * contract's list is not stated as exhaustive.
  *
  * `email` is deliberately not asserted as verified here or anywhere else —
  * see `src/identity.ts`. It is display copy, not an authorization decision.
+ *
+ * `signout-link` (issue #103) is a plain link to
+ * `/cdn-cgi/access/logout` next to the identity span. Cloudflare Access owns
+ * the session and clears its own cookie for the whole team domain at that
+ * path — the portal has no session of its own to end, so there is nothing
+ * for this function to build beyond the link itself.
  */
-export function topbar(email: string | null, current: NavCurrent): string {
+export function topbar(email: string | null, current: NavCurrent, isOperator: boolean): string {
   const dashboardCurrent = current === "dashboard" ? ' aria-current="page"' : ""
   const newCurrent = current === "new" ? ' aria-current="page"' : ""
   const outboxCurrent = current === "outbox" ? ' aria-current="page"' : ""
   const accountCurrent = current === "account" ? ' aria-current="page"' : ""
+  const leadsCurrent = current === "leads" ? ' aria-current="page"' : ""
+  const deliveriesCurrent = current === "deliveries" ? ' aria-current="page"' : ""
   const identity = email ? escapeHtml(email) : "unknown"
+
+  // Appended after the customer links, inside the same `<nav>`, rather than a
+  // second `<nav>` — one landmark for one primary-navigation region (the
+  // customer links and the operator links are both "where can I go from
+  // here", never two competing lists).
+  const operatorLinks = isOperator
+    ? `
+    <a href="/leads" data-testid="nav-leads"${leadsCurrent}>Leads</a>
+    <a href="/deliveries" data-testid="nav-deliveries"${deliveriesCurrent}>Deliveries</a>`
+    : ""
 
   return `<header class="topbar">
   <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
@@ -42,9 +83,10 @@ export function topbar(email: string | null, current: NavCurrent): string {
     <a href="/submissions" data-testid="nav-dashboard"${dashboardCurrent}>My requests</a>
     <a href="/intake" data-testid="nav-new"${newCurrent}>New request</a>
     <a href="/outbox" data-testid="nav-outbox"${outboxCurrent}>Sent emails</a>
-    <a href="/account" data-testid="nav-account"${accountCurrent}>My profile</a>
+    <a href="/account" data-testid="nav-account"${accountCurrent}>My profile</a>${operatorLinks}
   </nav>
   <span class="identity" data-testid="identity-email">signed in as ${identity}</span>
+  <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>
 </header>`
 }
 
@@ -63,46 +105,11 @@ export function publicHeader(): string {
 </header>`
 }
 
-export type OperatorNavCurrent = "leads" | "deliveries"
-
-/**
- * The header every OPERATOR screen carries — issue #33's `/leads*` and, as of
- * issue #55, `/deliveries`.
- *
- * Deliberately not `topbar()`. That one's nav points at `/submissions` and
- * `/intake`, which are the *customer's* screens: `/submissions` is scoped to
- * the caller's own submissions (#12), and an operator's own is always empty, so
- * offering it would be a link to a permanently blank page. An operator is a
- * different kind of identity, not a customer with extra buttons.
- *
- * `identity-email` reuses the customer topbar's hook name and copy on purpose —
- * "who does this page say is signed in" is the same question on both, and one
- * name for it is one thing to learn.
- *
- * `current` picks which nav entry carries `aria-current="page"` — issue #55's
- * Gate-A contract amendment: this used to hardcode it on `nav-leads` (the only
- * operator screen there was), and now that there are two, the current one has
- * to be computed the same way `topbar()`'s `nav-dashboard` / `nav-new` /
- * `nav-outbox` already are.
- */
-export function operatorTopbar(email: string, current: OperatorNavCurrent): string {
-  const leadsCurrent = current === "leads" ? ' aria-current="page"' : ""
-  const deliveriesCurrent = current === "deliveries" ? ' aria-current="page"' : ""
-
-  return `<header class="topbar">
-  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
-  <nav aria-label="primary">
-    <a href="/leads" data-testid="nav-leads"${leadsCurrent}>Leads</a>
-    <a href="/deliveries" data-testid="nav-deliveries"${deliveriesCurrent}>Deliveries</a>
-  </nav>
-  <span class="identity" data-testid="identity-email">signed in as ${escapeHtml(email)}</span>
-</header>`
-}
-
 /**
  * Component styles for the AUTHENTICATED and OPERATOR screens — every route
- * behind Access (`topbar()` / `operatorTopbar()`). `/start`, the one public
- * route (issue #31), does NOT use this sheet — see `PUBLIC_STYLES` below.
+ * behind Access, all rendered with the single `topbar()` above. `/start`, the
+ * one public route (issue #31), does NOT use this sheet — see
+ * `PUBLIC_STYLES` below.
  *
  * Issue #41: before this split, `page()` inlined this entire sheet on every
  * screen it rendered, `/start` included, so a stranger's `GET /start` shipped
@@ -146,6 +153,12 @@ const APP_STYLES = `
     color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono);
     min-width: 0; overflow-wrap: anywhere;
   }
+  /* The sign-out link (issue #103) — same treatment as a nav link, not the
+     identity span's muted, monospace styling: it is an action, not a readout. */
+  header.topbar .signout {
+    color: var(--text-dim); text-decoration: none; font-size: var(--step--1); flex-shrink: 0;
+  }
+  header.topbar .signout:hover { color: var(--accent); }
   main { max-width: 44rem; margin: 0 auto; padding: 0 1rem 3rem; }
 
   form.intake, form.lead, form.account { display: grid; gap: 1.25rem; }

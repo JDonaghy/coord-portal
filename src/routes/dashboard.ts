@@ -1,5 +1,6 @@
 import { isBehindCloudflareEdge } from "../deployment"
 import { accessRefused, resolveSiteIdentity } from "../identity"
+import { readOperator } from "../operators"
 import { escapeHtml, html, page, topbar } from "../render"
 import { derivedStatus, loadSignoffStates } from "../rounds"
 import { derivedStartWorkStatus, loadStartWorkStates } from "../startWork"
@@ -66,7 +67,13 @@ export async function submissionsDashboard(request: Request, env: Env): Promise<
 
   const rows = groupByProject(submissions, displayOf)
 
-  return html(page("My requests — coord-portal", dashboard(email, rows)))
+  // Additive to the ownership scoping above, never a substitute for it: this
+  // decides only whether the nav's operator section (Leads, Deliveries)
+  // appears, the same `readOperator` gate `/leads` and `/deliveries`
+  // themselves apply — see issue #103 and `src/render.ts`'s `topbar()`.
+  const isOperator = (await readOperator(request, env)) !== null
+
+  return html(page("My requests — coord-portal", dashboard(email, isOperator, rows)))
 }
 
 /**
@@ -160,8 +167,8 @@ function groupByProject(
   )
 }
 
-function dashboard(email: string | null, rows: DashboardRow[]): string {
-  return `${topbar(email, "dashboard")}
+function dashboard(email: string | null, isOperator: boolean, rows: DashboardRow[]): string {
+  return `${topbar(email, "dashboard", isOperator)}
 <main>
   <div class="page-head">
     <h1>My requests</h1>

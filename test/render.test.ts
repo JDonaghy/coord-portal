@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { operatorTopbar, page, publicHeader, publicPage, topbar } from "../src/render"
+import { page, publicHeader, publicPage, topbar } from "../src/render"
 
 /**
  * Regression cover for the topbar's NARROW-VIEWPORT behaviour.
@@ -60,7 +60,7 @@ describe("the shared page shell", () => {
 
 describe("topbar", () => {
   it("carries the five navigation hooks, outbox and account included", () => {
-    const rendered = topbar("someone@example.test", "dashboard")
+    const rendered = topbar("someone@example.test", "dashboard", false)
     for (const hook of [
       "brand-home",
       "nav-dashboard",
@@ -80,31 +80,80 @@ describe("topbar", () => {
       ["outbox", "nav-outbox"],
       ["account", "nav-account"],
     ] as const) {
-      const rendered = topbar("someone@example.test", current)
+      const rendered = topbar("someone@example.test", current, false)
       expect(rendered).toContain(`data-testid="${testid}" aria-current="page"`)
       expect(rendered.match(/aria-current="page"/g)).toHaveLength(1)
     }
-    expect(topbar("someone@example.test", "none")).not.toContain('aria-current="page"')
+    expect(topbar("someone@example.test", "none", false)).not.toContain('aria-current="page"')
   })
 
   it("escapes the identity and names an absent one rather than rendering nothing", () => {
-    expect(topbar('a<script>@example.test', "none")).toContain(
+    expect(topbar("a<script>@example.test", "none", false)).toContain(
       "signed in as a&lt;script&gt;@example.test",
     )
-    expect(topbar(null, "none")).toContain("signed in as unknown")
+    expect(topbar(null, "none", false)).toContain("signed in as unknown")
+  })
+
+  /**
+   * Issue #103: sign-out reaches Cloudflare Access's own logout path, on
+   * every screen this function renders — not conditioned on `isOperator` or
+   * `current`, because there is no authenticated screen where "how do I stop
+   * being signed in" should be unreachable.
+   */
+  it("always carries a sign-out link to Cloudflare Access's own logout path", () => {
+    for (const isOperator of [false, true]) {
+      const rendered = topbar("someone@example.test", "dashboard", isOperator)
+      expect(rendered).toContain('data-testid="signout-link"')
+      expect(rendered).toContain('href="/cdn-cgi/access/logout"')
+    }
+  })
+
+  /**
+   * Issue #103's merge: the customer links (My requests, New request, Sent
+   * emails, My profile) render unconditionally, and the operator section
+   * (Leads, Deliveries) is appended only when the caller says the viewer is
+   * an operator — the one thing the issue calls "worth a test": a
+   * non-operator customer must see no operator link at all, so the nav never
+   * becomes a directory of surfaces a customer cannot open.
+   */
+  describe("the operator section", () => {
+    it("is entirely absent for a non-operator", () => {
+      const rendered = topbar("customer@example.test", "dashboard", false)
+      expect(rendered).not.toContain('data-testid="nav-leads"')
+      expect(rendered).not.toContain('data-testid="nav-deliveries"')
+      expect(rendered).not.toContain(">Leads<")
+      expect(rendered).not.toContain(">Deliveries<")
+    })
+
+    it("appends Leads and Deliveries, alongside the customer links, for an operator", () => {
+      const rendered = topbar("operator@example.test", "leads", true)
+      for (const hook of ["nav-dashboard", "nav-new", "nav-outbox", "nav-account", "nav-leads", "nav-deliveries"]) {
+        expect(rendered).toContain(`data-testid="${hook}"`)
+      }
+    })
+
+    it("marks the current operator screen, exclusive of every other nav entry", () => {
+      const leads = topbar("operator@example.test", "leads", true)
+      expect(leads).toContain('data-testid="nav-leads" aria-current="page"')
+      expect(leads.match(/aria-current="page"/g)).toHaveLength(1)
+
+      const deliveries = topbar("operator@example.test", "deliveries", true)
+      expect(deliveries).toContain('data-testid="nav-deliveries" aria-current="page"')
+      expect(deliveries.match(/aria-current="page"/g)).toHaveLength(1)
+    })
   })
 })
 
-describe("the other two headers", () => {
-  it("share header.topbar, so they inherit the same wrapping rules", () => {
+describe("publicHeader", () => {
+  it("shares header.topbar, so it inherits the same wrapping rules", () => {
     expect(publicHeader()).toContain('<header class="topbar">')
-    expect(operatorTopbar("operator@example.test", "leads")).toContain('<header class="topbar">')
   })
 
-  it("keeps the public header free of nav and identity", () => {
+  it("keeps the public header free of nav, identity and sign-out — issue #31/#41", () => {
     const rendered = publicHeader()
     expect(rendered).toContain('data-testid="brand-home"')
-    expect(rendered).not.toContain("data-testid=\"identity-email\"")
+    expect(rendered).not.toContain('data-testid="identity-email"')
+    expect(rendered).not.toContain('data-testid="signout-link"')
     expect(rendered).not.toContain("<nav")
   })
 })

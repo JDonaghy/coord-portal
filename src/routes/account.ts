@@ -2,6 +2,7 @@ import { getClientByEmail, saveClientProfile, type Client } from "../clients"
 import { isBehindCloudflareEdge } from "../deployment"
 import { parseFormData } from "../formData"
 import { accessRefused, resolveSiteIdentity } from "../identity"
+import { readOperator } from "../operators"
 import { escapeHtml, html, page, topbar } from "../render"
 import type { Env } from "../types"
 
@@ -30,7 +31,10 @@ export async function accountProfile(request: Request, env: Env): Promise<Respon
   if (!email && isBehindCloudflareEdge(request)) return accessRefused()
 
   const client = email ? await getClientByEmail(env, email) : null
-  return html(page("My profile — coord-portal", accountPage(email, client)))
+  // Additive to the ownership scoping above, never a substitute for it — see
+  // `dashboard.ts`'s identical call for the full rationale (issue #103).
+  const isOperator = (await readOperator(request, env)) !== null
+  return html(page("My profile — coord-portal", accountPage(email, isOperator, client)))
 }
 
 /**
@@ -58,7 +62,10 @@ export async function submitAccountProfile(request: Request, env: Env): Promise<
   const form = await parseFormData(request)
   if (!form) {
     const client = await getClientByEmail(env, email)
-    return html(page("My profile — coord-portal", accountPage(email, client)), { status: 400 })
+    const isOperator = (await readOperator(request, env)) !== null
+    return html(page("My profile — coord-portal", accountPage(email, isOperator, client)), {
+      status: 400,
+    })
   }
 
   await saveClientProfile(env, email, {
@@ -77,9 +84,9 @@ function optionalField(form: FormData, name: string): string | null {
   return trimmed === "" ? null : trimmed
 }
 
-function accountPage(email: string | null, client: Client | null): string {
+function accountPage(email: string | null, isOperator: boolean, client: Client | null): string {
   const identity = email ?? ""
-  return `${topbar(email, "account")}
+  return `${topbar(email, "account", isOperator)}
 <main>
   <div class="page-head">
     <h1>My profile</h1>

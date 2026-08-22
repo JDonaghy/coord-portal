@@ -19,7 +19,7 @@ import { listMessages, postMessage } from "../messages"
 import { readOperator, type Operator } from "../operators"
 import { derivedQualityCheckStatus, getCurrentPreviewReview } from "../previewReviews"
 import { createClientProject, getProject, listProjectsForClient, type Project } from "../projects"
-import { escapeHtml, html, operatorTopbar, page } from "../render"
+import { escapeHtml, html, page, topbar } from "../render"
 import { derivedStatus, getCurrentRound } from "../rounds"
 import { derivedStartWorkStatus, getStartWork, recordStartWork } from "../startWork"
 import {
@@ -649,7 +649,7 @@ export async function postLeadMessage(request: Request, env: Env, id: string): P
 }
 
 function inbox(operator: Operator, leads: Lead[]): string {
-  return `${operatorTopbar(operator.email, "leads")}
+  return `${topbar(operator.email, "leads", true)}
 <main>
   <div class="page-head">
     <h1>Leads</h1>
@@ -703,7 +703,7 @@ function detail(
   const status = leadStatus(lead)
   const promoted = status === "promoted"
 
-  return `${operatorTopbar(operator.email, "leads")}
+  return `${topbar(operator.email, "leads", true)}
 <main data-testid="lead-detail" data-status="${status}">
   <a class="back-link" href="/leads" data-testid="back-to-leads">&larr; Leads</a>
 
