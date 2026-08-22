@@ -704,6 +704,20 @@ const APP_STYLES = `
     padding: 0.25em 0.75em; border-radius: 999px; font-size: var(--step--1); font-weight: 600;
     background: var(--surface-2); color: var(--text-dim);
   }
+
+  /* ── The operator's client list (issue #144) — GET /clients. Reuses the
+     lead inbox's .lead-row chassis above, with the one difference that
+     matters on a phone: this row's side carries a full ISO timestamp
+     ("last activity …") rather than the lead inbox's two-word pill, and
+     .lead-row .row-side is flex-shrink: 0. At the 412px viewport the e2e
+     suite's "mobile" project uses, that unshrinkable side pushed the "View"
+     link past the right edge of the viewport and let the row's own
+     unbreakable strings (a customer email, the timestamp) paint over it, so
+     the link could not be clicked at all. Let this row wrap onto a second
+     line, let its side shrink, and let those space-free strings break. */
+  .client-row { flex-wrap: wrap; overflow-wrap: anywhere; }
+  .client-row .row-main { flex: 1 1 16rem; }
+  .client-row .row-side { flex-shrink: 1; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
 `
 
 /**

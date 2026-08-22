@@ -91,7 +91,7 @@ function clientRow(client: ClientSummary): string {
     client.submissionCount === 1 ? "1 submission" : `${client.submissionCount} submissions`
 
   return `    <li>
-      <div class="lead-row" data-testid="client-row">
+      <div class="lead-row client-row" data-testid="client-row">
         <div class="row-main">
           <span class="summary" data-testid="client-name">${escapeHtml(client.displayName)}</span>
           <span class="meta">
