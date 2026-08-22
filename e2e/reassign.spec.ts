@@ -252,9 +252,10 @@ test("reassigning to a new project emits a submission.project_assigned event (#1
   expect(assigned[0]?.payload["project_id"]).toEqual(expect.any(String))
   // The client this submission belongs to does not change on a reassignment
   // — only which of its projects the submission sits in does — so the same
-  // client identity `submission.created` shipped travels along again here.
-  expect(assigned[0]?.payload["client_email"]).toBe(email)
+  // client identity `submission.created` shipped travels along again here,
+  // as an opaque id and nothing else: no email rides on this event either.
   expect(assigned[0]?.payload["client_id"]).toEqual(expect.any(String))
+  expect(JSON.stringify(assigned)).not.toContain(email)
 
   await operatorContext.close()
 })

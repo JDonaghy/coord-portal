@@ -83,7 +83,7 @@ export interface NewBridgeEvent {
    * does not exist or belongs to someone else, permanently, since there is
    * no later correction event for client identity the way
    * `submission.project_assigned` corrects `project_id`. A `payloadSubquery`
-   * resolves the true value the same way `projectCreationForEmailResolvedClient`
+   * resolves the true id the same way `projectCreationForEmailResolvedClient`
    * (`src/projects.ts`) already resolves `client_id` for the project row it
    * inserts in the same batch, so the event always names whichever row the
    * transaction actually left behind.

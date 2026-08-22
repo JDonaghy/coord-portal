@@ -525,28 +525,20 @@ export async function postLeadReassign(request: Request, env: Env, id: string): 
   const choice = typeof rawChoice === "string" ? rawChoice.trim() : ""
 
   if (choice === "new") {
+    // `findOrCreateClientId` always hands back the id of whichever row won,
+    // even when its own guarded insert lost to a concurrent reassignment or
+    // promotion racing on the same email (the class of race
+    // `clientCreationStatement`'s doc comment names in `src/clients.ts`) — so
+    // this id is safe to put on the bridge event below. Nothing needs the
+    // client's *address* here: `submission.project_assigned` carries ids only
+    // (see `setSubmissionProject` in `src/submissions.ts`).
     const clientId = context.clientId ?? (await findOrCreateClientId(env, lead.email))
-    // `context.client` already carries this client's stored email verbatim
-    // when `clientId` matched an existing row read *before* this request ran.
-    // When it did not — `findOrCreateClientId` just minted or resolved one —
-    // its own guarded insert can still lose to a concurrent reassignment or
-    // promotion racing on the same email (same class of race
-    // `clientCreationStatement`'s doc comment names in `src/clients.ts`), and
-    // `findOrCreateClientId` only ever hands back the winning `id`, not the
-    // email that actually landed. `lead.email` is this request's own guess,
-    // not necessarily what is stored — so re-read the row `clientId` now
-    // names rather than trust the guess; `lead.email` remains only as a
-    // last-resort fallback for a row that has since vanished.
-    const clientEmail = context.client?.email ?? (await getClientById(env, clientId))?.email ?? lead.email
     const project = await createClientProject(env, clientId, lead.email)
-    await setSubmissionProject(env, context.submission, project.id, { id: clientId, email: clientEmail })
+    await setSubmissionProject(env, context.submission, project.id, clientId)
   } else if (choice) {
     const target = context.siblings.find((sibling) => sibling.project.id === choice)
     if (target) {
-      await setSubmissionProject(env, context.submission, target.project.id, {
-        id: context.clientId,
-        email: context.client?.email ?? null,
-      })
+      await setSubmissionProject(env, context.submission, target.project.id, context.clientId)
     }
   }
 
