@@ -7,14 +7,16 @@ import { expect, test, type APIRequestContext, type Browser, type Page } from "@
  * `e2e/` tier, not the sealed acceptance suite under `tests/acceptance/`; per
  * CLAUDE.md this repo still ships its own coverage for behaviour-changing work.
  *
- * SCOPE. #130 depends on the `clients` table (#128, landed) but not on #129's
- * own client-match UI on the promotion form — that issue is still open. So
- * this file's only black-box way to get a client a *second* project is #130's
- * own "start a new project instead" reassignment option: the promoted lead's
- * submission moves into a freshly created project, which then makes the
- * project it came from a valid reassignment target too. See
- * `src/clients.ts` for how a promoted lead's submission gets its first
- * client-linked project without #129's promotion-time choice.
+ * SCOPE. #130 depends on the `clients` table (#128, landed). #129 has since
+ * landed too — every `seedPromotedLead` below already gets a client and a
+ * first project ("Project 1") the moment it promotes, for any email nothing
+ * has matched before (see `promoteLead` in `src/leads.ts`) — so a promoted
+ * lead in this file is never truly project-less, only ever a "solo" client
+ * with exactly one project. This file's only black-box way to get a client a
+ * *second* project remains #130's own "start a new project instead"
+ * reassignment option: the promoted lead's submission moves into a freshly
+ * created second project, which then makes the first one (the auto-created
+ * "Project 1") a valid reassignment target too.
  *
  * Every string below is invented — see CLAUDE.md rule 1.
  */
@@ -134,25 +136,16 @@ test("creating a new project moves the submission, and moving it back works too"
   const operator = await operatorContext.newPage()
   const path = await seedPromotedLead(browser, baseURL, operator, summary, email)
 
-  // A freshly promoted lead has no project of its own at all yet (see
-  // `src/clients.ts`), so the first "start a new project instead" only ever
-  // mints ONE project — there is nothing yet to leave behind.
+  // #129: promotion already gave this client its first project ("Project 1"),
+  // so the very first "start a new project instead" already has something to
+  // leave behind — one "new" click is enough to give the client two projects,
+  // unlike the pre-#129 world this test used to need a second click for.
   await openReassign(operator)
   await expect(operator.getByTestId("reassign-project-option")).toHaveCount(0)
   await operator.getByTestId("reassign-project-option-new").click()
   await operator.getByTestId("reassign-submit").click()
   await expect(operator.getByTestId("reassign-form")).toBeHidden()
   expect(new URL(operator.url()).pathname, "reassignment stays on the same screen").toBe(path)
-
-  // Splitting a SECOND time — reassignment is not consumed by having just
-  // been used (#130: "applies to any already-promoted submission, not just
-  // at promotion time") — finally gives the client two projects, and the
-  // first one now shows up as somewhere to move back to.
-  await openReassign(operator)
-  await expect(operator.getByTestId("reassign-project-option")).toHaveCount(0)
-  await operator.getByTestId("reassign-project-option-new").click()
-  await operator.getByTestId("reassign-submit").click()
-  await expect(operator.getByTestId("reassign-form")).toBeHidden()
 
   await openReassign(operator)
   const afterSplit = await offeredProjectIds(operator)
@@ -169,15 +162,18 @@ test("creating a new project moves the submission, and moving it back works too"
   expect(afterMoveBack, "the project just left is now offered instead").toHaveLength(1)
   expect(afterMoveBack).not.toContain(originalProjectId)
 
-  // The customer's own dashboard now groups the submission under whichever
-  // project it is in today (issue #109's `project-row`) — reassignment moved
-  // it into a real project, which is visible from their side too, not just
-  // the operator's.
+  // This customer's own dashboard: still exactly one submission, only ever
+  // moved between projects, never duplicated — so `groupByProject`
+  // (`src/routes/dashboard.ts`) renders it as an ordinary `submission-row`,
+  // the same as a project-less one, not a `project-row` (issue #129: a
+  // project only collapses into that once it holds *two or more*
+  // submissions — see that function's own doc comment for why).
   await operatorContext.close()
   const customerContext = await contextFor(browser, baseURL, email)
   const customer = await customerContext.newPage()
   await customer.goto("/submissions")
-  await expect(customer.getByTestId("project-row")).toHaveCount(1)
+  await expect(customer.getByTestId("project-row")).toHaveCount(0)
+  await expect(customer.getByTestId("submission-row")).toHaveCount(1)
   await customerContext.close()
 })
 

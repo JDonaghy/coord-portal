@@ -1,4 +1,17 @@
-import { generateLeadId, generateLeadReference, generateSubmissionId, generateSubmissionReference } from "./ids"
+import { getClientRecordByEmail, clientCreationStatement } from "./clients"
+import {
+  generateClientId,
+  generateLeadId,
+  generateLeadReference,
+  generateProjectId,
+  generateSubmissionId,
+  generateSubmissionReference,
+} from "./ids"
+import {
+  listProjectsForClient,
+  projectCreationForEmailResolvedClient,
+  projectCreationForKnownClient,
+} from "./projects"
 import { createSubmissionStatements } from "./submissions"
 import type { Env } from "./types"
 
@@ -164,73 +177,114 @@ const NOT_CAPTURED_AT_FIRST_CONTACT =
   "Not captured at first contact — this came in through the contact form, so it still needs to be agreed with the customer."
 
 /**
- * Promotes a lead: one submission, owned by the lead's email, and the lead
- * recording what it produced. Idempotent.
+ * Promotes a lead: one submission, owned by the lead's email, attached to a
+ * client-linked project, and the lead recording what it produced. Idempotent.
  *
  * ── HOW IT IS IDEMPOTENT ───────────────────────────────────────────────────
  * "Promoting the same lead twice creates one submission, not two. A
  * double-click, a retried request, or an operator who forgot they already did
- * it must all converge on the same submission" (issue #33).
+ * it must all converge on the same submission" (issue #33) — and, per #129,
+ * "does not double-create a client" either.
  *
  * A read-then-write would not survive that: two concurrent promotes both read a
- * `new` lead and both write. So all three statements go into one `DB.batch()`
- * — which D1 runs as a single transaction — and all three are guarded on the
- * same predicate, `this lead is still unpromoted`:
+ * `new` lead and both write. So every statement this function can produce goes
+ * into one `DB.batch()` — which D1 runs as a single transaction — and every one
+ * of them is guarded on the same predicate, `this lead is still unpromoted`
+ * (`leads.id = ? AND leads.promoted_at IS NULL`, `lead.id` bound as `leadId`
+ * below): the client insert (no-match branch only), the project insert
+ * (whichever branch needs one), the submission insert, its `submission.created`
+ * event, and finally the lead's own `UPDATE`. On the losing side of a race —
+ * the double-click, the retry — every one of them matches zero rows: nothing
+ * errors, nothing duplicates, and the caller reads back exactly what the first
+ * promote produced, which is what "converge" has to mean for an operator who
+ * cannot tell which of their two clicks landed.
  *
- *   1. INSERT the submission   ┐ guarded: `FROM leads WHERE id = ? AND
- *   2. INSERT submission.created ┘          promoted_at IS NULL`
- *   3. UPDATE the lead to point at them, `WHERE id = ? AND promoted_at IS NULL`
- *
- * The guard is evaluated before (3) commits, so within one transaction all
- * three fire or none do. A second transaction — the double-click, the retry —
- * sees a non-NULL `promoted_at` and every statement matches zero rows. Nothing
- * errors, nothing duplicates, and the caller reads back the same submission the
- * first promote created, which is what "converge" has to mean for an operator
- * who cannot tell which of their two clicks landed.
- *
- * The submission is built by `createSubmissionStatements`, the same function
- * `POST /intake` uses — so the `submission.created` event this emits is
- * byte-identical in shape to the one a customer filling in the intake form
+ * The submission itself is built by `createSubmissionStatements`, the same
+ * function `POST /intake` uses — so the `submission.created` event this emits
+ * is byte-identical in shape to the one a customer filling in the intake form
  * produces. From the daemon's side promotion is indistinguishable from ordinary
  * intake, and the daemon never learns a lead was involved.
  *
- * ── WHY THIS IS NOT WHERE A PROJECT GETS CREATED (ISSUE #109) ──────────────
- * `createSubmissionStatements`'s `input` here never sets `followUpFrom`, so a
- * promoted lead is always a fresh, project-less submission — even when the
- * lead's email happens to match a customer who already has one. Two reasons,
- * not one:
+ * ── WHY THIS *IS* WHERE A PROJECT GETS CREATED NOW (ISSUE #129) ────────────
+ * Until #129, this function deliberately left every promoted submission
+ * project-less — see git history for the reasoning that used to live here,
+ * built on #109's own constraint that a matching email alone must never
+ * silently fold one customer's history into another's. #129 changes the
+ * requirement itself, not that reasoning: an operator who promotes a lead from
+ * an address `clients` already knows now *resolves* that match — explicitly,
+ * on the promotion screen itself (`client-match-card`, `src/routes/leads.ts`),
+ * never inferred silently — and either attaches the new submission to a
+ * project the operator picked, or (an address nothing matches) mints a brand
+ * new client and a first project in the same transaction. This is no longer
+ * the #109 "guess from a bare email match" case #109's own sealed suite rules
+ * out — it is an operator's explicit, informed choice, made once per
+ * promotion, the same way `NewSubmissionInput.followUpFrom` is a customer's
+ * own explicit choice on `/submissions/:id`. See `src/clients.ts`'s module
+ * comment for the still-open tension this creates with a *different* sealed
+ * suite (ms-2's), which this function's own output cannot avoid triggering.
  *
- *   1. A lead is "first contact from a stranger with no account" by this
- *      module's own definition (see the module comment). An operator has no
- *      reliable way to know, at triage time, whether `bo@example.com` writing
- *      in through `/start` is a brand-new customer or an existing one using a
- *      different address than the one on file — guessing wrong would silently
- *      fold one customer's history into another's.
- *   2. Even a confirmed match is not "the same round of work" the way a
- *      follow-up is. Issue #109's own sealed-suite constraint
- *      (`tests/acceptance/ms-1/12-access-auth.spec.ts`, "the dashboard lists
- *      only the caller's own submissions") already pins two submissions one
- *      customer creates independently as two separate rows — a promoted lead
- *      auto-joining a project on nothing but a matching email would be the
- *      exact inference that test rules out, just reached from the operator
- *      side instead of `/intake`'s.
+ * ── THE THREE SHAPES `projectChoice` CAN TAKE ───────────────────────────────
+ * `projectChoice` is untrusted input straight off `promote-lead-form`
+ * (`src/routes/leads.ts`), validated here, never in the route:
  *
- * The one deliberate trigger is a signed-in customer explicitly starting a
- * follow-up from a submission they already own (`routes/submission.ts`'s
- * "Start a follow-up" link, `NewSubmissionInput.followUpFrom` in
- * `src/submissions.ts`) — an act only the account owner can take, on a
- * specific prior submission, never a background inference. If a later issue
- * wants an operator to *merge* a freshly promoted lead into an existing
- * customer's project, that is a new, explicit action on this surface, not a
- * behavior this function should grow implicitly.
+ *   1. No client matches `lead.email` at all — `projectChoice` is ignored
+ *      outright (there is nothing it could name); a client and a first
+ *      project are minted together.
+ *   2. A client matches, and `projectChoice` names one of *that* client's own
+ *      projects (`listProjectsForClient` — never a project belonging to
+ *      someone else, and never a project with `client_id IS NULL`, e.g. one
+ *      born from a customer's own "Start a follow-up" action) — the
+ *      submission joins it, no INSERT beyond the submission itself.
+ *   3. A client matches, but `projectChoice` is `"new"`, absent, or names
+ *      nothing real — a new project is minted for that *same* client (`"new"`
+ *      is the operator's explicit choice; absent-or-garbage falls back to the
+ *      newest project when the client has one, matching what the match card
+ *      pre-selects, and only mints a new one when even that fallback has
+ *      nothing to offer).
  */
-export async function promoteLead(env: Env, lead: Lead): Promise<Lead> {
+export async function promoteLead(
+  env: Env,
+  lead: Lead,
+  projectChoice: string | null = null,
+): Promise<Lead> {
   if (lead.promotedAt !== null) return lead
 
   const promotedAt = new Date().toISOString()
+  const leadId = lead.id
   const guard = {
     clause: "FROM leads WHERE leads.id = ? AND leads.promoted_at IS NULL",
-    bindings: [lead.id],
+    bindings: [leadId],
+  }
+
+  const matchedClient = await getClientRecordByEmail(env, lead.email)
+  const preparatory: D1PreparedStatement[] = []
+  let projectId: string
+
+  if (matchedClient) {
+    const projects = await listProjectsForClient(env, matchedClient.id)
+    const chosen =
+      projectChoice && projectChoice !== "new"
+        ? projects.find((candidate) => candidate.id === projectChoice)
+        : undefined
+
+    if (chosen) {
+      projectId = chosen.id
+    } else if (projectChoice !== "new" && projects.length > 0) {
+      // No usable choice came in — the match card always pre-selects the
+      // newest project, so an ordinary form submit already carries its id;
+      // this branch only covers a malformed or omitted `projectChoice`.
+      projectId = projects[0]!.id
+    } else {
+      projectId = generateProjectId()
+      preparatory.push(
+        projectCreationForKnownClient(env, projectId, lead.email, matchedClient.id, promotedAt, leadId),
+      )
+    }
+  } else {
+    const clientId = generateClientId()
+    projectId = generateProjectId()
+    preparatory.push(clientCreationStatement(env, clientId, lead.email, promotedAt, leadId))
+    preparatory.push(projectCreationForEmailResolvedClient(env, projectId, lead.email, promotedAt, leadId))
   }
 
   const { submission, statements } = createSubmissionStatements(
@@ -250,16 +304,18 @@ export async function promoteLead(env: Env, lead: Lead): Promise<Lead> {
       id: generateSubmissionId(),
       reference: generateSubmissionReference(),
       guard,
+      projectId,
     },
   )
 
   await env.DB.batch([
+    ...preparatory,
     ...statements,
     env.DB.prepare(
       `UPDATE leads
           SET promoted_at = ?, promoted_submission_id = ?, promoted_submission_reference = ?
         WHERE id = ? AND promoted_at IS NULL`,
-    ).bind(promotedAt, submission.id, submission.reference, lead.id),
+    ).bind(promotedAt, submission.id, submission.reference, leadId),
   ])
 
   // Read back rather than assuming we won the race: on the losing side of a

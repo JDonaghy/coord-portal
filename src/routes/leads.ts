@@ -1,4 +1,4 @@
-import { findOrCreateClientId, getClientIdByEmail } from "../clients"
+import { findOrCreateClientId, getClientRecordByEmail, getClientById, getClientIdByEmail, type ClientRecord } from "../clients"
 import { parseFormData } from "../formData"
 import {
   getLead,
@@ -167,9 +167,14 @@ export async function leadDetail(request: Request, env: Env, id: string): Promis
 
   const thread = await threadFor(env, lead)
   const reassignment = await reassignmentContext(env, lead)
+  const match = leadStatus(lead) === "new" ? await clientMatchContext(env, lead) : null
+  const attachment = reassignment ? await attachmentInfo(env, lead, reassignment) : null
   const attached = await attachedSubmissionContext(env, lead)
   return html(
-    page(`${lead.reference} — coord-portal`, detail(operator, lead, thread, reassignment, attached)),
+    page(
+      `${lead.reference} — coord-portal`,
+      detail(operator, lead, thread, reassignment, match, attachment, attached),
+    ),
   )
 }
 
@@ -262,6 +267,9 @@ interface ReassignmentContext {
    * rendering a genuinely single-project client gets.
    */
   clientId: string | null
+  /** The full `clients` row named by `clientId`, or `null` — `attachmentInfo`
+   * below needs `email` and `createdAt`, not just the id. */
+  client: ClientRecord | null
   currentTitle: string
   siblings: Array<{ project: Project; title: string }>
 }
@@ -274,6 +282,7 @@ async function reassignmentContext(env: Env, lead: Lead): Promise<ReassignmentCo
 
   const project = submission.projectId ? await getProject(env, submission.projectId) : null
   const clientId = project?.clientId ?? (await getClientIdByEmail(env, lead.email))
+  const client = clientId ? await getClientById(env, clientId) : null
 
   const clientProjects = clientId ? await listProjectsForClient(env, clientId) : []
   const siblings = await Promise.all(
@@ -286,7 +295,96 @@ async function reassignmentContext(env: Env, lead: Lead): Promise<ReassignmentCo
     ? await projectTitle(env, project)
     : "Not yet in a project of its own"
 
-  return { submission, project, clientId, currentTitle, siblings }
+  return { submission, project, clientId, client, currentTitle, siblings }
+}
+
+/**
+ * Everything `client-match-card` (#129, mock 01) needs to render on an
+ * *unpromoted* lead — `null` when `lead.email` matches no `clients` row,
+ * which is the common case and renders nothing (`leadDetail` only calls this
+ * for a `data-status="new"` lead in the first place; a promoted lead's own
+ * attachment is `attachmentInfo` below, a related but distinct read).
+ *
+ * `projects` is newest-first (`listProjectsForClient`'s own ordering), which
+ * is also the pre-selection rule the contract pins ("the newest/most-recent
+ * project is pre-selected") — `clientMatchSection` below trusts this order
+ * rather than re-deriving it.
+ */
+interface ClientMatchContext {
+  clientId: string
+  /** The matched row's own stored email — rendered verbatim in
+   * `client-match-email`, which may differ in casing from `lead.email` (the
+   * match itself is case-insensitive; see `getClientRecordByEmail`). */
+  email: string
+  projects: Array<{ project: Project; title: string }>
+}
+
+async function clientMatchContext(env: Env, lead: Lead): Promise<ClientMatchContext | null> {
+  const client = await getClientRecordByEmail(env, lead.email)
+  if (!client) return null
+
+  const clientProjects = await listProjectsForClient(env, client.id)
+  const projects = await Promise.all(
+    clientProjects.map(async (project) => ({ project, title: await projectTitle(env, project) })),
+  )
+
+  return { clientId: client.id, email: client.email, projects }
+}
+
+/**
+ * Everything `client-attachment` and `attached-submission-status` (#129,
+ * mocks 02/03) need on a *promoted* lead — `null` only when `reassignment`
+ * itself is (defensive: a promoted lead's submission always gets a
+ * client-linked project now, see `promoteLead`'s own doc comment in
+ * `src/leads.ts`, so `reassignment.client`/`reassignment.project` being unset
+ * here would mean that invariant broke, not an expected state this contract
+ * describes).
+ *
+ * ── HOW "existing" VS "new" IS TOLD APART, PURELY FROM STORED STATE ────────
+ * There is no column recording which branch a promotion took — `data-match`
+ * is derived, on every render, by comparing two timestamps: `promoteLead`
+ * stamps `leads.promoted_at` and (in its no-match branch) `clients.created_at`
+ * with the *same* `new Date().toISOString()` value, in the same transaction.
+ * If they are equal, this promotion is the one that created the client — the
+ * no-match branch — so `data-match="new"`. Any other value means the client
+ * already existed. `freshProject` below is the identical trick applied to
+ * `projects.created_at`, for the "existing client, but this ask started a new
+ * project" branch, so the copy can say "started" rather than the misleading
+ * "joins" for a project that had nothing in it a moment before.
+ */
+interface AttachmentInfo {
+  matchType: "existing" | "new"
+  clientEmail: string
+  /** How many projects this client has *including* the one this promotion
+   * may have just created — the count `client-attachment`'s "already has N
+   * projects" text and the "Project N" placeholder both read from. */
+  projectCount: number
+  projectTitle: string
+  /** Whether the project this submission landed in was created by this very
+   * promotion (see the module comment above) — governs "started" vs "joins"
+   * in `clientAttachmentSection`'s copy. */
+  freshProject: boolean
+}
+
+async function attachmentInfo(
+  env: Env,
+  lead: Lead,
+  reassignment: ReassignmentContext,
+): Promise<AttachmentInfo | null> {
+  const { client, project } = reassignment
+  if (!client || !project) return null
+
+  const matchType: "existing" | "new" = client.createdAt === lead.promotedAt ? "new" : "existing"
+  const freshProject = project.createdAt === lead.promotedAt
+  const projectCount = (await listProjectsForClient(env, client.id)).length
+
+  return {
+    matchType,
+    clientEmail: client.email,
+    projectCount,
+    projectTitle: freshProject ? `Project ${projectCount}` : await projectTitle(env, project),
+    freshProject,
+  }
 }
 
 /**
@@ -312,6 +410,16 @@ async function projectTitle(env: Env, project: Project): Promise<string> {
  * reload never re-posts. The UI stops offering the button once a lead is
  * promoted, but that is not what makes this safe: the backend's guard is, and
  * it has to be, because a double-click races the render.
+ *
+ * `projectChoice` (#129) rides in the same `promote-lead-form` submit as the
+ * button itself — see `clientMatchSection`'s radios — so it is read the same
+ * lenient way `postLeadReassign` reads its own form field, except a missing
+ * or unparseable body is not a 404 here: unlike reassignment, a promote with
+ * no client match at all has no `client-match-card` and therefore no
+ * `projectChoice` field to submit — `form: {}` (this repo's own idempotency
+ * tests, and any bare retry) must keep working exactly as it always has.
+ * `promoteLead` itself validates whatever comes through; this route never
+ * decides what a value means.
  */
 export async function promoteLeadAction(
   request: Request,
@@ -324,12 +432,28 @@ export async function promoteLeadAction(
   const lead = await getLead(env, id)
   if (!lead) return leadsNotFound()
 
-  await promoteLead(env, lead)
+  const projectChoice = await readProjectChoice(request)
+  await promoteLead(env, lead, projectChoice)
 
   return new Response(null, {
     status: 303,
     headers: { location: `/leads/${lead.id}` },
   })
+}
+
+/** `null` for anything that is not a well-formed, non-blank form field —
+ * never a 404, since an absent `projectChoice` is the ordinary case for most
+ * promotions (no client match, or a match with nothing to reassign yet). */
+async function readProjectChoice(request: Request): Promise<string | null> {
+  const contentType = request.headers.get("content-type") ?? ""
+  if (!isFormContentType(contentType)) return null
+
+  const form = await parseFormData(request)
+  if (!form) return null
+
+  const raw = form.get("projectChoice")
+  const trimmed = typeof raw === "string" ? raw.trim() : ""
+  return trimmed || null
 }
 
 /**
@@ -479,9 +603,13 @@ export async function postLeadMessage(request: Request, env: Env, id: string): P
       error: "Write a message before sending.",
     }
     const reassignment = await reassignmentContext(env, lead)
+    const attachment = reassignment ? await attachmentInfo(env, lead, reassignment) : null
     const attached = await attachedSubmissionContext(env, lead)
     return html(
-      page(`${lead.reference} — coord-portal`, detail(operator, lead, thread, reassignment, attached)),
+      page(
+        `${lead.reference} — coord-portal`,
+        detail(operator, lead, thread, reassignment, null, attachment, attached),
+      ),
       { status: 400 },
     )
   }
@@ -542,6 +670,8 @@ function detail(
   lead: Lead,
   thread: ThreadContext | null,
   reassignment: ReassignmentContext | null,
+  match: ClientMatchContext | null,
+  attachment: AttachmentInfo | null,
   attached: AttachedSubmissionContext | null,
 ): string {
   const status = leadStatus(lead)
@@ -557,6 +687,7 @@ function detail(
 
   ${promoted ? manualStep(lead) : seatReminder(lead)}
   ${promoted ? promotedReference(lead) : ""}
+  ${promoted && attachment ? clientAttachmentSection(attachment) : ""}
   ${attached ? attachedSubmissionStatus(attached) : ""}
 
   <dl class="card">
@@ -567,7 +698,7 @@ function detail(
     ${nameBlock(lead)}
   </dl>
 
-  ${promoted ? "" : promoteForm(lead)}
+  ${promoted ? "" : promoteForm(lead, match)}
   ${attached && attached.submission.status === "describing" && !attached.startWorkUsed ? startWorkSection(lead) : ""}
   ${promoted && reassignment ? reassignSection(lead, reassignment) : ""}
 
@@ -651,14 +782,88 @@ function promotedReference(lead: Lead): string {
 }
 
 /**
+ * #129, "the rendered response after promotion says the work is attached to
+ * the existing client, not just 'submission created'" — the sentence the
+ * issue calls out by name. Wording is not pinned verbatim (ms-4 contract:
+ * "a worker's wording is compliant as long as those facts are present"), only
+ * that it names the client's email and, for a match, the project it joined;
+ * for no-match, that a new client was created.
+ *
+ * `freshProject` picks the verb: a project this same promotion just minted
+ * was never "joined", it was started — see `AttachmentInfo`'s own doc
+ * comment in this file for how that is told apart from an ordinary join,
+ * purely from stored timestamps.
+ */
+function clientAttachmentSection(attachment: AttachmentInfo): string {
+  if (attachment.matchType === "new") {
+    return `<p class="client-attachment" data-testid="client-attachment" data-match="new">
+    No existing client matched ${escapeHtml(attachment.clientEmail)} — created a new client and started
+    <strong>${escapeHtml(attachment.projectTitle)}</strong>.
+  </p>`
+  }
+
+  const projectWord = attachment.projectCount === 1 ? "project" : "projects"
+  const verb = attachment.freshProject ? "started" : "joins"
+  return `<p class="client-attachment" data-testid="client-attachment" data-match="existing">
+    Attached to an existing client — ${escapeHtml(attachment.clientEmail)} already has ${attachment.projectCount} ${projectWord}
+    with us. This request ${verb} <strong>${escapeHtml(attachment.projectTitle)}</strong>.
+  </p>`
+}
+
+/**
  * Absent once the lead is promoted: promotion is a one-way transition in the
  * UI. The backend's idempotency is what makes a double-click or a retry safe
  * (see `promoteLead`), not the absence of a second button.
+ *
+ * `match` (#129) renders inside this same `<form>`, not as a sibling before
+ * it — `client-project-list`'s radios have to land in the identical POST as
+ * the button click ("Submitted as part of the same `promote-lead-form` — one
+ * POST, no separate confirmation step", ms-4 contract), and nesting is the
+ * simplest way to guarantee that without an explicit `form="…"` attribute on
+ * every radio.
  */
-function promoteForm(lead: Lead): string {
+function promoteForm(lead: Lead, match: ClientMatchContext | null): string {
   return `<form class="promote" method="POST" action="/leads/${encodeURIComponent(lead.id)}/promote" data-testid="promote-lead-form">
+    ${match ? clientMatchSection(match) : ""}
     <button type="submit" class="primary" data-testid="promote-button">Promote to submission</button>
   </form>`
+}
+
+/**
+ * `client-match-card` (#129, mock 01) — "the operator sees the existing
+ * client and their project list on the promotion screen, and picks one to
+ * attach the new submission to (or creates a new project for that client
+ * instead)". The newest project (`match.projects[0]` — `clientMatchContext`
+ * preserves `listProjectsForClient`'s own newest-first order) is
+ * pre-selected, matching what a promote with no explicit choice falls back
+ * to server-side (`promoteLead`).
+ */
+function clientMatchSection(match: ClientMatchContext): string {
+  const count = match.projects.length
+  const projectWord = count === 1 ? "project" : "projects"
+  return `<section class="client-match-card" data-testid="client-match-card" data-match="existing">
+      <h2>This looks like an existing client</h2>
+      <p class="hint">
+        <span data-testid="client-match-email">${escapeHtml(match.email)}</span> already has
+        <span data-testid="client-match-project-count">${count}</span> ${projectWord} with us. Pick which one
+        this joins, or start a new one.
+      </p>
+      <fieldset class="client-project-list" data-testid="client-project-list">
+        <legend class="visually-hidden">Attach this request to</legend>
+        ${match.projects.map((entry, index) => clientProjectOption(entry, index === 0)).join("\n        ")}
+        <label class="client-project-option-new" data-testid="client-project-option-new">
+          <input type="radio" name="projectChoice" value="new"${count === 0 ? " checked" : ""}>
+          Start a new project instead
+        </label>
+      </fieldset>
+    </section>`
+}
+
+function clientProjectOption(entry: { project: Project; title: string }, selected: boolean): string {
+  return `<label class="client-project-option" data-testid="client-project-option" data-project-id="${escapeHtml(entry.project.id)}">
+          <input type="radio" name="projectChoice" value="${escapeHtml(entry.project.id)}"${selected ? " checked" : ""}>
+          ${escapeHtml(entry.title)}
+        </label>`
 }
 
 /**
