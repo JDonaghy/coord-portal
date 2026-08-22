@@ -1,15 +1,26 @@
+import { parseFormData } from "../formData"
 import { readOperator, type Operator } from "../operators"
 import { escapeHtml, html, operatorTopbar, page } from "../render"
-import { derivedStatus, loadSignoffStates, VERDICT_TEXT, type SignoffState } from "../rounds"
-import { derivedStartWorkStatus, loadStartWorkStates } from "../startWork"
+import { derivedStatus, getCurrentRound, loadSignoffStates, VERDICT_TEXT, type SignoffState } from "../rounds"
+import { derivedStartWorkStatus, getStartWork, loadStartWorkStates, type StartWorkRecord } from "../startWork"
 import {
   customerFacingStatus,
+  getSubmission,
   isSubmissionStatus,
   statusText,
+  titleOf,
+  type Submission,
   type SubmissionStatus,
 } from "../submissions"
 import type { Env } from "../types"
-import { leadsNotFound } from "./leads"
+import {
+  applyReassignmentChoice,
+  leadsNotFound,
+  loadReassignmentOptions,
+  reassignPanel,
+  type ReassignmentOptions,
+} from "./leads"
+import { isFormContentType } from "./submission"
 
 /**
  * `GET /requests` — issue #104, the operator's counterpart to `/submissions`.
@@ -54,11 +65,31 @@ import { leadsNotFound } from "./leads"
  * `outbox`, which also has no unscoped-anywhere-else caller.
  *
  * ── SCOPE ─────────────────────────────────────────────────────────────────
- * Read-only, like `/deliveries`. No link into `/submissions/:id`: that route
- * is ownership-scoped to the customer's own Access identity (#12) and 404s an
- * operator by construction, so a link into it from here would be a link to a
- * 404. No filtering, search or pagination — the same restraint #55 puts on
- * `/deliveries` until the volume exists to justify them.
+ * Read-only, like `/deliveries` — at first. No link into `/submissions/:id`:
+ * that route is ownership-scoped to the customer's own Access identity (#12)
+ * and 404s an operator by construction, so a link into it from here would be
+ * a link to a 404. No filtering, search or pagination — the same restraint
+ * #55 puts on `/deliveries` until the volume exists to justify them.
+ *
+ * ── `GET`/`POST /requests/:id` — ISSUE #145's REASSIGNMENT SURFACE ─────────
+ * #125/#130 built "move a submission to a different, or new, project of the
+ * same client" but wired it up as `POST /leads/:id/reassign` — reachable only
+ * from the lead that produced the promoted submission. A submission an
+ * already-onboarded customer files through `/intake` has no lead at all
+ * (leads only exist for the public `/start` form), so there was structurally
+ * no page anywhere that could offer to move it. This list is the one screen
+ * that already renders *every* submission the portal holds regardless of
+ * whether it has a lead, a project, or even a matched `clients` row, so it is
+ * also the one screen that can host the fix without inventing a new query.
+ *
+ * `requestDetail`/`postRequestReassign` below are a second, submission-keyed
+ * entry point to the exact same mechanic #130 already shipped —
+ * `loadReassignmentOptions`/`applyReassignmentChoice`/`reassignPanel`
+ * (`routes/leads.ts`) are shared, unchanged code, not a reimplementation.
+ * `POST /leads/:id/reassign` keeps working exactly as it did; this adds a
+ * second door onto the same room; it does not move the first one. Same
+ * `readOperator` gate and indistinguishable 404 as every route on this
+ * surface, so a non-operator gets a 404, never a 403.
  */
 export async function requestsInbox(request: Request, env: Env): Promise<Response> {
   const operator = await readOperator(request, env)
@@ -68,7 +99,27 @@ export async function requestsInbox(request: Request, env: Env): Promise<Respons
   return html(page("Requests — coord-portal", requestsPage(operator, rows)))
 }
 
+const REQUESTS_PATH = "/requests"
+const REQUEST_DETAIL_PATH = /^\/requests\/([^/?#]+)$/
+const REQUEST_REASSIGN_PATH = /^\/requests\/([^/?#]+)\/reassign$/
+
+/** What `handlePages` needs to know about a `/requests…` URL, or `null`. */
+export function matchRequestsPath(
+  pathname: string,
+): { kind: "index" } | { kind: "detail"; id: string } | { kind: "reassign"; id: string } | null {
+  if (pathname === REQUESTS_PATH) return { kind: "index" }
+
+  const reassign = pathname.match(REQUEST_REASSIGN_PATH)
+  if (reassign?.[1]) return { kind: "reassign", id: reassign[1] }
+
+  const detail = pathname.match(REQUEST_DETAIL_PATH)
+  if (detail?.[1]) return { kind: "detail", id: detail[1] }
+
+  return null
+}
+
 interface SubmissionRow {
+  id: string
   reference: string
   status: string
   customer_email: string | null
@@ -77,6 +128,7 @@ interface SubmissionRow {
 }
 
 interface RequestRow {
+  id: string
   reference: string
   title: string
   customerEmail: string | null
@@ -95,7 +147,7 @@ interface RequestRow {
  */
 async function listAllRequestRows(env: Env): Promise<RequestRow[]> {
   const { results } = await env.DB.prepare(
-    `SELECT reference, status, customer_email, outcome, created_at
+    `SELECT id, reference, status, customer_email, outcome, created_at
        FROM submissions
       ORDER BY created_at DESC`,
   ).all<SubmissionRow>()
@@ -119,13 +171,9 @@ async function listAllRequestRows(env: Env): Promise<RequestRow[]> {
   return submissions.map((row) => {
     const status = isSubmissionStatus(row.status) ? row.status : "describing"
     const state = roundStates.get(row.reference) ?? null
-    const display = customerFacingStatus(
-      derivedStartWorkStatus(
-        derivedStatus(status, state),
-        startWorkStates.get(row.reference) ?? null,
-      ),
-    )
+    const display = deriveDisplayStatus(status, state, startWorkStates.get(row.reference) ?? null)
     return {
+      id: row.id,
       reference: row.reference,
       title: titleFromOutcome(row.outcome),
       customerEmail: row.customer_email,
@@ -134,6 +182,22 @@ async function listAllRequestRows(env: Env): Promise<RequestRow[]> {
       round: state,
     }
   })
+}
+
+/**
+ * The one derivation `listAllRequestRows` and `requestDetail` (issue #145)
+ * both need — factored out so the list's batched lookups
+ * (`loadSignoffStates`/`loadStartWorkStates`, chunked for D1's bound-parameter
+ * ceiling, see `src/d1.ts`) and the detail screen's single-submission ones
+ * (`getCurrentRound`/`getStartWork`) feed the exact same composition rather
+ * than two copies drifting apart.
+ */
+function deriveDisplayStatus(
+  status: SubmissionStatus,
+  round: SignoffState | null,
+  startWork: StartWorkRecord | null,
+): SubmissionStatus {
+  return customerFacingStatus(derivedStartWorkStatus(derivedStatus(status, round), startWork))
 }
 
 /**
@@ -184,6 +248,7 @@ function requestRow(row: RequestRow): string {
         </div>
         <div class="row-side">
           <span class="status-pill" data-testid="status-pill" data-status="${escapeHtml(row.display)}">${escapeHtml(statusText(row.display))}</span>${roundBadge(row.round)}
+          <a class="button secondary" href="/requests/${encodeURIComponent(row.id)}" data-testid="request-reassign-link">Reassign</a>
         </div>
       </div>
     </li>`
@@ -198,4 +263,126 @@ function roundBadge(round: SignoffState | null): string {
   if (!round) return ""
   return `
           <span class="round-pill" data-testid="request-round" data-verdict="${escapeHtml(round.verdict)}">Round ${round.round} &middot; ${escapeHtml(VERDICT_TEXT[round.verdict])}</span>`
+}
+
+/**
+ * `GET /requests/:id` — issue #145. One submission, operator-facing, keyed by
+ * the row id `listAllRequestRows` already carries rather than the
+ * `SUB-XXXXXX` reference: `getSubmission` (`src/submissions.ts`) is the
+ * durable by-id lookup every other write path in this codebase already
+ * trusts, and reusing it here means this route needs no query of its own
+ * beyond the one call.
+ *
+ * Exists for exactly one reason today — hosting the reassignment panel for a
+ * submission `/leads/:id` cannot reach (see this file's module comment) — so
+ * it renders just enough to orient an operator who followed the "Reassign"
+ * link off the list (`requestRow` above): what it is, whose it is, and the
+ * panel itself. It is not a second `/submissions/:id`; there is no message
+ * thread, round history or preview link here, and none should be added
+ * without its own issue — this route's contract is the reassignment panel,
+ * not a general operator submission detail screen.
+ */
+export async function requestDetail(request: Request, env: Env, id: string): Promise<Response> {
+  const operator = await readOperator(request, env)
+  if (!operator) return leadsNotFound()
+
+  const submission = await getSubmission(env, id)
+  if (!submission) return leadsNotFound()
+
+  const display = await displayStatusFor(env, submission)
+  const options = await loadReassignmentOptions(env, submission.projectId, submission.customerEmail)
+
+  return html(
+    page(
+      `${submission.reference} — coord-portal`,
+      requestDetailPage(operator, submission, display, options),
+    ),
+  )
+}
+
+/**
+ * `POST /requests/:id/reassign` — issue #145's second entry point for #130's
+ * mechanic. Same guard shape as `postLeadReassign` (`routes/leads.ts`): an
+ * unknown id gets the one operator-surface 404, a malformed or unparseable
+ * body gets the same 404 (`isFormContentType`, mirroring
+ * `postLeadReassign`'s identical check), and an unrecognised `projectChoice`
+ * is a no-op 303 back to the screen — never an error for an operator who did
+ * nothing wrong.
+ *
+ * `applyReassignmentChoice` is the exact function `postLeadReassign` calls —
+ * same "existing sibling or a brand-new project, same client only" contract,
+ * same idempotency, same event on the bridge. This route supplies
+ * `submission.customerEmail` where `postLeadReassign` supplies `lead.email`;
+ * every other line is the shared function's, not a second copy of it.
+ */
+export async function postRequestReassign(request: Request, env: Env, id: string): Promise<Response> {
+  const operator = await readOperator(request, env)
+  if (!operator) return leadsNotFound()
+
+  const submission = await getSubmission(env, id)
+  if (!submission) return leadsNotFound()
+
+  const contentType = request.headers.get("content-type") ?? ""
+  if (!isFormContentType(contentType)) return leadsNotFound()
+
+  const form = await parseFormData(request)
+  if (!form) return leadsNotFound()
+
+  const options = await loadReassignmentOptions(env, submission.projectId, submission.customerEmail)
+
+  const rawChoice = form.get("projectChoice")
+  const choice = typeof rawChoice === "string" ? rawChoice.trim() : ""
+
+  await applyReassignmentChoice(env, submission, options, choice, submission.customerEmail)
+
+  return new Response(null, {
+    status: 303,
+    headers: { location: `/requests/${encodeURIComponent(submission.id)}` },
+  })
+}
+
+/**
+ * The same derivation `listAllRequestRows` applies per row, for the one
+ * submission this detail screen renders — `getCurrentRound`/`getStartWork`
+ * rather than the list's batched `loadSignoffStates`/`loadStartWorkStates`:
+ * a single-submission lookup has no D1 bound-parameter ceiling to dodge (see
+ * `src/d1.ts`), so there is no reason to route it through the batch helpers
+ * built for a table-wide scan.
+ */
+async function displayStatusFor(env: Env, submission: Submission): Promise<SubmissionStatus> {
+  // Fetched unconditionally, same as `listAllRequestRows`'s own
+  // `loadSignoffStates` call: an operator benefits from seeing round history
+  // on a submission that has since moved past sign-off too, not only the one
+  // status where it changes the derived value.
+  const round = await getCurrentRound(env, submission.reference)
+  const startWork =
+    submission.status === "describing" ? await getStartWork(env, submission.reference) : null
+  return deriveDisplayStatus(
+    submission.status,
+    round ? { round: round.round, verdict: round.verdict } : null,
+    startWork,
+  )
+}
+
+function requestDetailPage(
+  operator: Operator,
+  submission: Submission,
+  display: SubmissionStatus,
+  options: ReassignmentOptions,
+): string {
+  return `${operatorTopbar(operator.email, "requests")}
+<main data-testid="request-detail">
+  <a class="back-link" href="/requests" data-testid="back-to-requests">&larr; Requests</a>
+
+  <span class="status-pill" data-testid="status-pill" data-status="${escapeHtml(display)}">${escapeHtml(statusText(display))}</span>
+  <h1 data-testid="request-detail-title">${escapeHtml(titleOf(submission))}</h1>
+  <p class="meta" data-testid="request-detail-reference">${escapeHtml(submission.reference)}</p>
+
+  <dl class="card">
+    <dt>Customer</dt>
+    <dd data-testid="request-detail-customer">${escapeHtml(submission.customerEmail ?? "no email on file")}</dd>
+  </dl>
+
+  ${reassignPanel(`/requests/${encodeURIComponent(submission.id)}/reassign`, options)}
+</main>`
 }

@@ -286,8 +286,52 @@ async function reassignmentContext(env: Env, lead: Lead): Promise<ReassignmentCo
   const submission = await getSubmission(env, lead.promotedSubmissionId)
   if (!submission) return null
 
-  const project = submission.projectId ? await getProject(env, submission.projectId) : null
-  const clientId = project?.clientId ?? (await getClientIdByEmail(env, lead.email))
+  const options = await loadReassignmentOptions(env, submission.projectId, lead.email)
+  return { submission, ...options }
+}
+
+/**
+ * Everything issue #130's reassignment panel needs about the *project* side
+ * of the decision — the current project (if any), the client it resolves to,
+ * and every sibling project of that same client. Factored out of
+ * `reassignmentContext` so issue #145's second entry point
+ * (`routes/requests.ts`, "reassign from the operator's own submissions
+ * list") can build the identical decision for a submission that has no lead
+ * at all, rather than re-deriving it from scratch or depending on one.
+ *
+ * `currentProjectId` and `fallbackEmail` are exactly the two facts a caller
+ * needs regardless of whether it is working from a `Lead` (`lead.email`) or a
+ * bare `Submission` (`submission.customerEmail`) — this function has no
+ * opinion on which kind of record produced them.
+ */
+export interface ReassignmentOptions {
+  /** The submission's current project, or `null` — most promoted leads',
+   * until an operator's first reassignment (see `src/clients.ts`). */
+  project: Project | null
+  /**
+   * The same client scope `client-project-list` would use if #129 had
+   * already matched one — from the current project's own `client_id` if it
+   * has one, otherwise looked up by `fallbackEmail` (read-only:
+   * `getClientIdByEmail` never creates a row). `null` when neither exists
+   * yet, which just means "nothing to offer but a new project" — the same
+   * rendering a genuinely single-project client gets.
+   */
+  clientId: string | null
+  /** The full `clients` row named by `clientId`, or `null` — `attachmentInfo`
+   * below needs `email` and `createdAt`, not just the id. */
+  client: ClientRecord | null
+  currentTitle: string
+  siblings: Array<{ project: Project; title: string }>
+}
+
+export async function loadReassignmentOptions(
+  env: Env,
+  currentProjectId: string | null,
+  fallbackEmail: string | null,
+): Promise<ReassignmentOptions> {
+  const project = currentProjectId ? await getProject(env, currentProjectId) : null
+  const clientId =
+    project?.clientId ?? (fallbackEmail ? await getClientIdByEmail(env, fallbackEmail) : null)
   const client = clientId ? await getClientById(env, clientId) : null
 
   const clientProjects = clientId ? await listProjectsForClient(env, clientId) : []
@@ -301,7 +345,7 @@ async function reassignmentContext(env: Env, lead: Lead): Promise<ReassignmentCo
     ? await projectTitle(env, project)
     : "Not yet in a project of its own"
 
-  return { submission, project, clientId, client, currentTitle, siblings }
+  return { project, clientId, client, currentTitle, siblings }
 }
 
 /**
@@ -424,7 +468,7 @@ async function attachmentInfo(
  * this screen; the fallback below exists only as a defensive backstop, not a
  * rendering this contract pins.
  */
-async function projectTitle(env: Env, project: Project): Promise<string> {
+export async function projectTitle(env: Env, project: Project): Promise<string> {
   const newest = await getNewestSubmissionForProject(env, project.id)
   return newest ? titleOf(newest) : "Untitled project"
 }
@@ -524,6 +568,44 @@ export async function postLeadReassign(request: Request, env: Env, id: string): 
   const rawChoice = form.get("projectChoice")
   const choice = typeof rawChoice === "string" ? rawChoice.trim() : ""
 
+  await applyReassignmentChoice(env, context.submission, context, choice, lead.email)
+
+  return new Response(null, {
+    status: 303,
+    headers: { location: `/leads/${lead.id}` },
+  })
+}
+
+/**
+ * The actual move: applies a `projectChoice` read off a reassignment form to
+ * one submission. Factored out of `postLeadReassign` so issue #145's second
+ * entry point (`routes/requests.ts`) performs the identical move — same
+ * "existing sibling or a brand-new project, anything else is a no-op"
+ * contract — without a submission needing a lead to reach it through.
+ *
+ * `choice` names either an existing sibling project (validated against
+ * `options.siblings`, so a request cannot name a project outside this
+ * client — the scoping #130 is explicit is not this function's to relax) or
+ * the literal `"new"`. Anything else is a no-op: the caller still redirects
+ * back to its own screen, because a malformed or replayed choice should
+ * never look like an error to an operator who did nothing wrong, but nothing
+ * moves.
+ *
+ * `"new"` is also the one branch that can mint a `clients` row
+ * (`findOrCreateClientId`) — the first time a submission is ever moved
+ * anywhere, there may be no client row yet at all. Every other branch only
+ * ever reads. `fallbackEmail` is only used by that branch, and only when
+ * `options.clientId` is not already known; a caller with no email to offer
+ * (defensive only — see `ReassignmentOptions`' own doc comment) simply gets
+ * a no-op for `choice === "new"`, the same as any other unmatched choice.
+ */
+export async function applyReassignmentChoice(
+  env: Env,
+  submission: { id: string; reference: string },
+  options: Pick<ReassignmentOptions, "clientId" | "siblings">,
+  choice: string,
+  fallbackEmail: string | null,
+): Promise<void> {
   if (choice === "new") {
     // `findOrCreateClientId` always hands back the id of whichever row won,
     // even when its own guarded insert lost to a concurrent reassignment or
@@ -532,20 +614,20 @@ export async function postLeadReassign(request: Request, env: Env, id: string): 
     // this id is safe to put on the bridge event below. Nothing needs the
     // client's *address* here: `submission.project_assigned` carries ids only
     // (see `setSubmissionProject` in `src/submissions.ts`).
-    const clientId = context.clientId ?? (await findOrCreateClientId(env, lead.email))
-    const project = await createClientProject(env, clientId, lead.email)
-    await setSubmissionProject(env, context.submission, project.id, clientId)
+    if (options.clientId) {
+      const project = await createClientProject(env, options.clientId, fallbackEmail)
+      await setSubmissionProject(env, submission, project.id, options.clientId)
+    } else if (fallbackEmail) {
+      const clientId = await findOrCreateClientId(env, fallbackEmail)
+      const project = await createClientProject(env, clientId, fallbackEmail)
+      await setSubmissionProject(env, submission, project.id, clientId)
+    }
   } else if (choice) {
-    const target = context.siblings.find((sibling) => sibling.project.id === choice)
+    const target = options.siblings.find((sibling) => sibling.project.id === choice)
     if (target) {
-      await setSubmissionProject(env, context.submission, target.project.id, context.clientId)
+      await setSubmissionProject(env, submission, target.project.id, options.clientId)
     }
   }
-
-  return new Response(null, {
-    status: 303,
-    headers: { location: `/leads/${lead.id}` },
-  })
 }
 
 /**
@@ -928,7 +1010,21 @@ function clientProjectOption(entry: { project: Project; title: string }, selecte
  * to any already-promoted submission, not just at promotion time").
  */
 function reassignSection(lead: Lead, reassignment: ReassignmentContext): string {
-  const action = `/leads/${encodeURIComponent(lead.id)}/reassign`
+  return reassignPanel(`/leads/${encodeURIComponent(lead.id)}/reassign`, reassignment)
+}
+
+/**
+ * The reassign form itself, generic in its `action` — issue #145's second
+ * entry point (`routes/requests.ts`) renders the identical panel against
+ * `/requests/:id/reassign` rather than `/leads/:id/reassign`, for a
+ * submission that may have no lead at all. Everything below this line is
+ * unchanged from #130's own markup; only the parameter that used to be a
+ * hardcoded `/leads/${lead.id}/reassign` moved to the caller.
+ */
+export function reassignPanel(
+  action: string,
+  reassignment: Pick<ReassignmentOptions, "project" | "currentTitle" | "siblings">,
+): string {
   const currentProjectLine = reassignment.project
     ? `Currently in <strong>${escapeHtml(reassignment.currentTitle)}</strong>`
     : escapeHtml(reassignment.currentTitle)
