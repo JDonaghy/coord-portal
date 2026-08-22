@@ -17,7 +17,7 @@ import {
 import { matchMockBundlePath, mockBundle } from "./routes/mocks"
 import { outbox } from "./routes/outbox"
 import { projectDetail } from "./routes/project"
-import { requestsInbox } from "./routes/requests"
+import { matchRequestsPath, postRequestReassign, requestDetail, requestsInbox } from "./routes/requests"
 import { startForm, submitStart } from "./routes/start"
 import { submissionDetail, submissionRounds, submitSubmissionAction } from "./routes/submission"
 import type { Env } from "./types"
@@ -116,8 +116,24 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
   // just above: falling through to `ASSETS.fetch` on an unsupported method
   // would hand an unauthenticated caller a response this contract says is
   // operator-only. See `routes/requests.ts`.
-  if (pathname === "/requests") {
-    if (request.method === "GET") return requestsInbox(request, env)
+  // `/requests/:id` and `/requests/:id/reassign` (issue #145) — the second
+  // entry point onto #130's reassignment mechanic, for a submission that has
+  // no lead to reach `/leads/:id` through. Owned here for every method on any
+  // `/requests…` path, same reasoning as `/leads…` below: falling through to
+  // `ASSETS.fetch` on an unsupported method would hand an unauthenticated
+  // caller a response this contract says is operator-only. See
+  // `routes/requests.ts`.
+  const requestsMatch = matchRequestsPath(pathname)
+  if (requestsMatch) {
+    if (requestsMatch.kind === "index" && request.method === "GET") {
+      return requestsInbox(request, env)
+    }
+    if (requestsMatch.kind === "detail" && request.method === "GET") {
+      return requestDetail(request, env, requestsMatch.id)
+    }
+    if (requestsMatch.kind === "reassign" && request.method === "POST") {
+      return postRequestReassign(request, env, requestsMatch.id)
+    }
     return leadsNotFound()
   }
 
