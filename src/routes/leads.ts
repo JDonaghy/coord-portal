@@ -404,11 +404,14 @@ export async function postLeadReassign(request: Request, env: Env, id: string): 
  * genuinely concurrent POSTs converge on exactly one recorded decision and
  * one `signoff.approved` event, not the missing button.
  *
- * A lead that has not been promoted, or one whose attached submission has
- * vanished (defensive only — promotion always attaches one), gets the same
- * 404 every other refusal on this operator surface gets: there is nothing
- * here yet for the override to act on, and this route never hints at which
- * is true to a caller who is not an operator.
+ * A lead that has not been promoted, one whose attached submission has
+ * vanished (defensive only — promotion always attaches one), or one whose
+ * attached submission is not (or is no longer) at `describing` — already
+ * mid design-round, already shipped, anything else the coordinator has
+ * independently pushed it to — gets the same 404 every other refusal on this
+ * operator surface gets: there is nothing here for the override to act on,
+ * and this route never hints at which is true to a caller who is not an
+ * operator.
  */
 export async function postLeadStartWork(request: Request, env: Env, id: string): Promise<Response> {
   const operator = await readOperator(request, env)
@@ -419,6 +422,16 @@ export async function postLeadStartWork(request: Request, env: Env, id: string):
 
   const attached = await attachedSubmissionContext(env, lead)
   if (!attached) return leadsNotFound()
+  // The override only ever applies pre-sign-off: `derivedStartWorkStatus`
+  // (`src/startWork.ts`) only has an opinion while the stored status is
+  // still `describing`, and once the coordinator has independently pushed
+  // it past that — into a live design round, a shipped submission, anything
+  // else — recording a `start_work` row here would emit a `signoff.approved`
+  // bridge event that misrepresents a submission the customer may already be
+  // mid-decision on, or long past. Same 404 every other refusal on this
+  // surface gets, not a distinct error that would hint a submission exists
+  // in some other state to a caller who is not an operator.
+  if (attached.submission.status !== "describing") return leadsNotFound()
 
   await recordStartWork(env, attached.submission.reference)
 
@@ -555,7 +568,7 @@ function detail(
   </dl>
 
   ${promoted ? "" : promoteForm(lead)}
-  ${attached && !attached.startWorkUsed ? startWorkSection(lead) : ""}
+  ${attached && attached.submission.status === "describing" && !attached.startWorkUsed ? startWorkSection(lead) : ""}
   ${promoted && reassignment ? reassignSection(lead, reassignment) : ""}
 
   ${thread ? messageThreadSection(`/leads/${encodeURIComponent(lead.id)}/message`, thread, "operator", operator.email) : ""}
@@ -576,11 +589,15 @@ function attachedSubmissionStatus(attached: AttachedSubmissionContext): string {
 
 /**
  * Issue #132 — "operator 'start work' override: skip sign-off, go straight to
- * planned." Rendered only while the attached submission's status has not yet
- * been moved forward by this action (`!attached.startWorkUsed`) — gone
- * entirely afterwards, the same one-way-in-the-UI convention `promoteForm`
- * above already establishes. See `postLeadStartWork` for why the missing
- * card is a courtesy, not the safety guarantee.
+ * planned." Rendered only while the attached submission is still at
+ * `describing` and has not already had the override used on it
+ * (`attached.submission.status === "describing" && !attached.startWorkUsed`)
+ * — gone once the coordinator has independently pushed the submission past
+ * `describing` (a live design round, `shipped`, anything else), and gone
+ * once the override itself has already fired, the same one-way-in-the-UI
+ * convention `promoteForm` above already establishes. See
+ * `postLeadStartWork` for why the missing card is a courtesy, not the safety
+ * guarantee — the route re-checks the same condition itself.
  */
 function startWorkSection(lead: Lead): string {
   return `<div class="card start-work-card" data-testid="start-work-card">
