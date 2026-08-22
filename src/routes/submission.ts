@@ -2,7 +2,7 @@ import { parseFormData } from "../formData"
 import { resolveSiteIdentity } from "../identity"
 import { listLifecycleEvents, type LifecycleEvent, type LifecycleEventKind } from "../lifecycle"
 import { listMessages, postMessage, type Message, type MessageAuthorRole } from "../messages"
-import { readOperator } from "../operators"
+import { isOperatorEmail } from "../operators"
 import {
   derivedQualityCheckStatus,
   getCurrentPreviewReview,
@@ -84,10 +84,11 @@ export async function submissionDetail(
   }
 
   // Additive to the ownership scoping above, never a substitute for it — see
-  // `dashboard.ts`'s identical call for the full rationale (issue #103).
+  // `dashboard.ts`'s identical call, and `isOperatorEmail` in
+  // `src/operators.ts`, for the full rationale (issue #103).
   // Whether *this* submission belongs to the viewer is unaffected; this only
   // decides whether the nav's operator section (Leads, Deliveries) appears.
-  const isOperator = (await readOperator(request, env)) !== null
+  const isOperator = isOperatorEmail(email, request, env)
 
   const thread = { messages: await listMessages(env, submission.reference) }
   const main = await detailFor(env, email, isOperator, submission, thread)
@@ -130,7 +131,7 @@ export async function submitSubmissionAction(
 
   // Additive to the ownership check above, never a substitute for it — see
   // `submissionDetail`'s identical call for the full rationale (issue #103).
-  const isOperator = (await readOperator(request, env)) !== null
+  const isOperator = isOperatorEmail(email, request, env)
 
   // `request.formData()` throws a raw `TypeError` — an unhandled 500 — when
   // the request carries no `Content-Type` at all, or one it can't parse as a
@@ -421,7 +422,7 @@ export async function submissionRounds(
   const rounds = await listRounds(env, submission.reference)
   // Additive to the ownership check above, never a substitute for it — see
   // `submissionDetail`'s identical call for the full rationale (issue #103).
-  const isOperator = (await readOperator(request, env)) !== null
+  const isOperator = isOperatorEmail(email, request, env)
   return html(
     page(
       `Round history — ${submission.reference} — coord-portal`,

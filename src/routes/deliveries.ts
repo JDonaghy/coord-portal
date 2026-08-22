@@ -1,6 +1,6 @@
 import { DELIVERY_STATUS_TEXT, listAllOutbox, type OutboxEmail } from "../notifications"
 import { readOperator, type Operator } from "../operators"
-import { escapeHtml, html, page, topbar } from "../render"
+import { escapeHtml, html, operatorTopbar, page } from "../render"
 import type { Env } from "../types"
 import { leadsNotFound } from "./leads"
 
@@ -41,6 +41,15 @@ import { leadsNotFound } from "./leads"
  * `src/notifications.ts`) — which carries no customer-safety weight — is
  * shared between them.
  *
+ * `src/render.ts`'s `topbar(email, current, isOperator)` (issue #103) is an
+ * `isOperator`-flag function in that same shape, but this route does not
+ * call it — it renders with `operatorTopbar()`, the unmerged operator-only
+ * header, precisely because the sealed ms-3 issue #55 oracle for this screen
+ * (`expectOperatorTopbar` in `tests/acceptance/ms-3/
+ * 55-operator-deliveries.spec.ts`) forbids the customer nav hooks that
+ * `topbar()` would carry. So the two paragraphs above stay true here: this
+ * route's own rendering never takes an `isOperator` boolean.
+ *
  * ── SCOPE ─────────────────────────────────────────────────────────────────
  * Read-only. No retry, no requeue, no resend button: ms-3's contract pins
  * `failed` as terminal with no path back, and a write here would silently
@@ -57,7 +66,7 @@ export async function deliveries(request: Request, env: Env): Promise<Response> 
 }
 
 function deliveriesPage(operator: Operator, rows: OutboxEmail[]): string {
-  return `${topbar(operator.email, "deliveries", true)}
+  return `${operatorTopbar(operator.email, "deliveries")}
 <main>
   <div class="page-head">
     <h1>Deliveries</h1>

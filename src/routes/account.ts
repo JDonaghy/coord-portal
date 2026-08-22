@@ -2,7 +2,7 @@ import { getClientByEmail, saveClientProfile, type Client } from "../clients"
 import { isBehindCloudflareEdge } from "../deployment"
 import { parseFormData } from "../formData"
 import { accessRefused, resolveSiteIdentity } from "../identity"
-import { readOperator } from "../operators"
+import { isOperatorEmail } from "../operators"
 import { escapeHtml, html, page, topbar } from "../render"
 import type { Env } from "../types"
 
@@ -32,8 +32,9 @@ export async function accountProfile(request: Request, env: Env): Promise<Respon
 
   const client = email ? await getClientByEmail(env, email) : null
   // Additive to the ownership scoping above, never a substitute for it — see
-  // `dashboard.ts`'s identical call for the full rationale (issue #103).
-  const isOperator = (await readOperator(request, env)) !== null
+  // `dashboard.ts`'s identical call, and `isOperatorEmail` in
+  // `src/operators.ts`, for the full rationale (issue #103).
+  const isOperator = isOperatorEmail(email, request, env)
   return html(page("My profile — coord-portal", accountPage(email, isOperator, client)))
 }
 
@@ -62,7 +63,7 @@ export async function submitAccountProfile(request: Request, env: Env): Promise<
   const form = await parseFormData(request)
   if (!form) {
     const client = await getClientByEmail(env, email)
-    const isOperator = (await readOperator(request, env)) !== null
+    const isOperator = isOperatorEmail(email, request, env)
     return html(page("My profile — coord-portal", accountPage(email, isOperator, client)), {
       status: 400,
     })

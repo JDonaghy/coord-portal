@@ -8,7 +8,7 @@ import { expect, test, type Browser, type Page } from "@playwright/test"
  * `tests/acceptance/`; per CLAUDE.md this repo still ships its own black-box
  * coverage for behaviour-changing work.
  *
- * SCOPE. Two things, both fixed in `src/render.ts`'s single `topbar()`:
+ * SCOPE. Two things:
  *
  *   1. Every screen behind Access carries a sign-out link
  *      (`signout-link`, `href="/cdn-cgi/access/logout"`) — Cloudflare Access
@@ -16,12 +16,26 @@ import { expect, test, type Browser, type Page } from "@playwright/test"
  *      the link actually ends one (there is no real Access in front of
  *      `wrangler dev`); what this suite CAN and does assert is that the
  *      control exists, everywhere it needs to, with the exact href Access
- *      documents for team-domain logout.
- *   2. The customer nav (My requests, New request, Sent emails, My profile)
- *      and the operator nav (Leads, Deliveries) now share one header: an
- *      operator sees both, without typing a URL, and — "the part worth a
- *      test" per the issue — a non-operator customer sees no operator link
- *      at all.
+ *      documents for team-domain logout. This includes `/leads` and
+ *      `/deliveries` — `operatorTopbar()` carries it too.
+ *   2. The customer screens' header (`src/render.ts`'s `topbar()`) now
+ *      appends the operator nav (Leads, Deliveries) when the caller is an
+ *      operator, so an operator can reach `/leads`/`/deliveries` from any
+ *      customer screen without typing a URL — and, "the part worth a test"
+ *      per the issue, a non-operator customer sees no operator link at all.
+ *
+ *      The reverse direction does NOT hold: `/leads` and `/deliveries`
+ *      themselves keep their own separate, customer-link-free
+ *      `operatorTopbar()`, unchanged from before this issue. A first attempt
+ *      at a full, bidirectional merge broke the sealed acceptance oracles for
+ *      ms-2 issue #33 and ms-3 issue #55 (`expectOperatorTopbar` in each of
+ *      those specs asserts, `toHaveCount(0)`, that these two screens carry
+ *      none of `nav-dashboard`/`nav-new`/`nav-outbox`) — see the comment on
+ *      `topbar()` in `src/render.ts` for the full account. Reconciling that
+ *      conflict is an epic-owner decision, not this issue's to make
+ *      unilaterally, so this suite pins the one-directional behaviour that
+ *      actually shipped, not the fully bidirectional one the issue opened
+ *      with.
  *
  * `/start` is deliberately untouched (issue #41) and out of scope here —
  * `e2e/start.spec.ts` already pins that no authenticated-portal hook,
@@ -109,7 +123,7 @@ test.describe("a non-operator customer's nav", () => {
 })
 
 test.describe("an operator's nav", () => {
-  test("reaches every customer and operator surface from any authenticated screen, with sign-out everywhere", async ({
+  test("reaches Leads/Deliveries from any customer screen, with sign-out everywhere", async ({
     browser,
     baseURL,
   }) => {
@@ -121,15 +135,12 @@ test.describe("an operator's nav", () => {
       ["/intake", "nav-new"],
       ["/outbox", "nav-outbox"],
       ["/account", "nav-account"],
-      ["/leads", "nav-leads"],
-      ["/deliveries", "nav-deliveries"],
     ] as const) {
       await page.goto(path)
       await expect(page.getByTestId("identity-email")).toHaveText(`signed in as ${DEV_OPERATOR}`)
 
-      // Every customer link AND every operator link, on every one of these
-      // screens — including the two operator-only ones, which used to show
-      // only Leads/Deliveries before this issue merged the two headers.
+      // Every customer link AND every operator link, on every customer
+      // screen — the one-directional merge this issue actually shipped.
       for (const hook of [...CUSTOMER_NAV_HOOKS, ...OPERATOR_NAV_HOOKS]) {
         await expect(page.getByTestId(hook)).toHaveCount(1)
       }
@@ -143,7 +154,38 @@ test.describe("an operator's nav", () => {
     await context.close()
   })
 
-  test("clicking Leads from a customer screen, and My requests from an operator screen, actually navigates — no URL typed", async ({
+  test("/leads and /deliveries stay on their own operator-only nav, with sign-out but no customer links", async ({
+    browser,
+    baseURL,
+  }) => {
+    const context = await contextFor(browser, baseURL, DEV_OPERATOR)
+    const page = await context.newPage()
+
+    for (const [path, currentHook] of [
+      ["/leads", "nav-leads"],
+      ["/deliveries", "nav-deliveries"],
+    ] as const) {
+      await page.goto(path)
+      await expect(page.getByTestId("identity-email")).toHaveText(`signed in as ${DEV_OPERATOR}`)
+      await expect(page.getByTestId("brand-home")).toBeVisible()
+
+      for (const hook of OPERATOR_NAV_HOOKS) {
+        await expect(page.getByTestId(hook)).toHaveCount(1)
+      }
+      // Sealed ms-2 issue #33 / ms-3 issue #55 pin this absence — see the
+      // module comment above and `topbar()` in `src/render.ts`.
+      for (const hook of CUSTOMER_NAV_HOOKS) {
+        await expect(page.getByTestId(hook)).toHaveCount(0)
+      }
+      await expect(page.getByTestId(currentHook)).toHaveAttribute("aria-current", "page")
+
+      await expectSignOut(page)
+    }
+
+    await context.close()
+  })
+
+  test("clicking Leads from a customer screen actually navigates — no URL typed", async ({
     browser,
     baseURL,
   }) => {
@@ -154,10 +196,6 @@ test.describe("an operator's nav", () => {
     await page.getByTestId("nav-leads").click()
     await expect(page).toHaveURL(/\/leads$/)
     await expect(page.getByTestId("nav-leads")).toHaveAttribute("aria-current", "page")
-
-    await page.getByTestId("nav-dashboard").click()
-    await expect(page).toHaveURL(/\/submissions$/)
-    await expect(page.getByTestId("nav-dashboard")).toHaveAttribute("aria-current", "page")
 
     await context.close()
   })

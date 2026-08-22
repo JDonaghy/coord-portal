@@ -1,6 +1,6 @@
 import { isBehindCloudflareEdge } from "../deployment"
 import { accessRefused, resolveSiteIdentity } from "../identity"
-import { readOperator } from "../operators"
+import { isOperatorEmail } from "../operators"
 import { escapeHtml, html, page, topbar } from "../render"
 import { derivedStatus, loadSignoffStates } from "../rounds"
 import { derivedStartWorkStatus, loadStartWorkStates } from "../startWork"
@@ -69,9 +69,11 @@ export async function submissionsDashboard(request: Request, env: Env): Promise<
 
   // Additive to the ownership scoping above, never a substitute for it: this
   // decides only whether the nav's operator section (Leads, Deliveries)
-  // appears, the same `readOperator` gate `/leads` and `/deliveries`
-  // themselves apply — see issue #103 and `src/render.ts`'s `topbar()`.
-  const isOperator = (await readOperator(request, env)) !== null
+  // appears, checked against the identity already resolved above rather than
+  // re-verifying it via `readOperator` — see `isOperatorEmail` in
+  // `src/operators.ts` for why (issue #103, its review's non-blocking
+  // finding on double JWT verification).
+  const isOperator = isOperatorEmail(email, request, env)
 
   return html(page("My requests — coord-portal", dashboard(email, isOperator, rows)))
 }
