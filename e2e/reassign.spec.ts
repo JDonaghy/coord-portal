@@ -28,8 +28,47 @@ const DEV_OPERATOR = "ops@example.test"
 
 const TURNSTILE_FIELD = "cf-turnstile-response"
 
+const SERVICE_TOKEN = {
+  "CF-Access-Client-Id": "6a1f0c93d7e845b2a061e93f8c7d24b0.access",
+  "CF-Access-Client-Secret":
+    "7c2e5a08d4b1697fa8e3c60d1b7f4a92e6c0d8b3f5a2e19c67d0b4f8a1c6e39d",
+}
+
 function nonce(): string {
   return Math.random().toString(36).slice(2, 10)
+}
+
+/**
+ * Every bridge event for `reference` — issue #146's `submission.project_assigned`
+ * has no portal-side screen of its own, so this is the only black-box way to
+ * see it land after a reassignment.
+ */
+async function bridgeEventsFor(
+  request: APIRequestContext,
+  reference: string,
+): Promise<Array<{ type: string; payload: Record<string, unknown> }>> {
+  const matches: Array<{ type: string; payload: Record<string, unknown> }> = []
+  let cursor: string | undefined
+  for (let page = 0; page < 50; page++) {
+    const res = await request.get("/api/bridge/pull", {
+      params: { limit: "200", ...(cursor ? { cursor } : {}) },
+      headers: SERVICE_TOKEN,
+    })
+    expect(res.status()).toBe(200)
+    const body = (await res.json()) as {
+      events: Array<{ type: string; submission_id: string; payload: Record<string, unknown> }>
+      cursor: string
+      has_more: boolean
+    }
+    matches.push(
+      ...body.events
+        .filter((event) => event.submission_id === reference)
+        .map((event) => ({ type: event.type, payload: event.payload })),
+    )
+    cursor = body.cursor
+    if (!body.has_more) return matches
+  }
+  throw new Error("the stream never drained — the cursor is not advancing")
 }
 
 async function settleBotGate(page: Page) {
@@ -175,6 +214,49 @@ test("creating a new project moves the submission, and moving it back works too"
   await expect(customer.getByTestId("project-row")).toHaveCount(0)
   await expect(customer.getByTestId("submission-row")).toHaveCount(1)
   await customerContext.close()
+})
+
+test("reassigning to a new project emits a submission.project_assigned event (#146)", async ({
+  browser,
+  baseURL,
+  request,
+}) => {
+  const tag = nonce()
+  const summary = `A synthetic bridge-event reassignment check (${tag}).`
+  const email = `reassign-bridge-${tag}@example.test`
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+  await seedPromotedLead(browser, baseURL, operator, summary, email)
+
+  const reference = (await operator.getByTestId("promoted-submission-reference").innerText())
+    .trim()
+    .replace(/^Promoted to submission\s+/, "")
+
+  // Nothing has moved the submission yet — its `submission.created` event
+  // already carries the right project (#129/#146 do this synchronously), so
+  // there is nothing for `submission.project_assigned` to correct.
+  expect((await bridgeEventsFor(request, reference)).map((e) => e.type)).not.toContain(
+    "submission.project_assigned",
+  )
+
+  await openReassign(operator)
+  await operator.getByTestId("reassign-project-option-new").click()
+  await operator.getByTestId("reassign-submit").click()
+  await expect(operator.getByTestId("reassign-form")).toBeHidden()
+
+  const afterReassign = await bridgeEventsFor(request, reference)
+  const assigned = afterReassign.filter((e) => e.type === "submission.project_assigned")
+  expect(assigned).toHaveLength(1)
+  expect(assigned[0]?.payload["reference"]).toBe(reference)
+  expect(assigned[0]?.payload["project_id"]).toEqual(expect.any(String))
+  // The client this submission belongs to does not change on a reassignment
+  // — only which of its projects the submission sits in does — so the same
+  // client identity `submission.created` shipped travels along again here.
+  expect(assigned[0]?.payload["client_email"]).toBe(email)
+  expect(assigned[0]?.payload["client_id"]).toEqual(expect.any(String))
+
+  await operatorContext.close()
 })
 
 /** File a request through `POST /intake`, returning the new submission's id. */

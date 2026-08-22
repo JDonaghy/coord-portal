@@ -28,8 +28,45 @@ const DEV_OPERATOR = "ops@example.test"
 
 const TURNSTILE_FIELD = "cf-turnstile-response"
 
+const SERVICE_TOKEN = {
+  "CF-Access-Client-Id": "d4e8f2a961b7405c8e21f0a6c9b3d5e7.access",
+  "CF-Access-Client-Secret":
+    "2f7b1e9c4d0a68f3b5e2c7908a4d1f6e3c9b7a2d5f0e8c14a69b3d7e2f5c8091",
+}
+
 function nonce(): string {
   return Math.random().toString(36).slice(2, 10)
+}
+
+/**
+ * The `submission.created` payload for `reference`, off the real bridge
+ * stream — issue #146's client/project identity has no portal-side screen of
+ * its own to assert on, so this is the only black-box way to see it.
+ */
+async function submissionCreatedPayload(
+  request: import("@playwright/test").APIRequestContext,
+  reference: string,
+): Promise<Record<string, unknown> | undefined> {
+  let cursor: string | undefined
+  for (let page = 0; page < 50; page++) {
+    const res = await request.get("/api/bridge/pull", {
+      params: { limit: "200", ...(cursor ? { cursor } : {}) },
+      headers: SERVICE_TOKEN,
+    })
+    expect(res.status()).toBe(200)
+    const body = (await res.json()) as {
+      events: Array<{ type: string; submission_id: string; payload: Record<string, unknown> }>
+      cursor: string
+      has_more: boolean
+    }
+    const match = body.events.find(
+      (event) => event.submission_id === reference && event.type === "submission.created",
+    )
+    if (match) return match.payload
+    cursor = body.cursor
+    if (!body.has_more) return undefined
+  }
+  throw new Error("the stream never drained — the cursor is not advancing")
 }
 
 async function settleBotGate(page: Page) {
@@ -77,6 +114,7 @@ async function sendLeadAndOpen(
 test("a brand-new email auto-creates a client and Project 1, with no match card", async ({
   browser,
   baseURL,
+  request,
 }) => {
   const tag = nonce()
   const summary = `A synthetic first-contact lead for client linking (${tag}).`
@@ -100,6 +138,17 @@ test("a brand-new email auto-creates a client and Project 1, with no match card"
   const statusPill = operator.getByTestId("attached-submission-status")
   await expect(statusPill).toHaveAttribute("data-status", "describing")
   await expect(statusPill).toHaveText("Describing")
+
+  // Issue #146: promotion knows the client and project synchronously — no
+  // separate `submission.project_assigned` correction is needed, unlike a
+  // follow-up's own project (`e2e/projects.spec.ts` covers that case).
+  const reference = (await operator.getByTestId("promoted-submission-reference").innerText())
+    .trim()
+    .replace(/^Promoted to submission\s+/, "")
+  const payload = await submissionCreatedPayload(request, reference)
+  expect(payload?.["client_email"]).toBe(email)
+  expect(payload?.["client_id"]).toEqual(expect.any(String))
+  expect(payload?.["project_id"]).toEqual(expect.any(String))
 
   await operatorContext.close()
 })

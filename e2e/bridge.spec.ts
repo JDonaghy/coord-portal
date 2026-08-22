@@ -225,6 +225,12 @@ test("a new submission reaches the stream once, and replays from the same cursor
   expect(event.payload["outcome"]).toBe("A synthetic outcome for bridge coverage.")
   // The customer's email is a portal-side fact and does not cross the bridge.
   expect(JSON.stringify(event.payload)).not.toContain("@example.test")
+  // Issue #146: client and project identity are absent, not invented, for a
+  // plain first-time intake — nobody has matched this address to a `clients`
+  // row, and there is no follow-up or promotion to attach a project.
+  expect(event.payload["client_id"]).toBeNull()
+  expect(event.payload["client_email"]).toBeNull()
+  expect(event.payload["project_id"]).toBeNull()
 
   // Replay-safety: the same cursor, pulled again, returns the same events in
   // the same order.
