@@ -12,7 +12,7 @@
 # and an id that matches nothing is reported as a missing test, not as a pass.
 #
 # One block per issue. Later slices MERGE into this file; do not rewrite another
-# issue's block. Issues #129 and #132 are still to be authored.
+# issue's block. Issue #132 is still to be authored.
 
 issues:
   128:
@@ -33,6 +33,25 @@ issues:
     - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › no backfill — a submission keeps the bare customer_email it was filed with"
     - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › the migration disturbs nothing that already reads projects and submissions"
 
+  129:
+    # RED at authoring time — promotion knows nothing about `clients` yet, so
+    # neither the pre-promotion match card nor the post-promotion attachment
+    # sentence renders at all.
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › promoting an unrecognised email says a new client was created"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › an unrecognised email gets a clients row with the email and nothing else"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › the promoted screen shows where the attached submission is"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › a returning address is recognised before the operator commits"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › promoting into a matched client says the work joined that client"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › the operator can start a new project for a client who already has one"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › the operator's chosen project is the one the submission lands in"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › a double-submitted promotion creates one submission and one client"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › a client match ignores the case of the email address"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › a project that never came from a lead promotion is not offered"
+    # GREEN at authoring time, and deliberately so — a CONTROL. It guards the
+    # over-eager reading of #129 (a match card that renders for a total
+    # stranger), so it must keep passing rather than start passing. Per the
+    # observed-not-intended rule it is absent from `expected_red` below.
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › a lead from an address no client has ever used shows no match card"
   130:
     # RED at authoring time — none of #130's reassignment surface exists yet.
     #
@@ -89,7 +108,26 @@ issues:
 # 2 passed. The nine below are exactly the nine that were watched to fail — the
 # two that passed are the ratchet and the control noted above and are excluded
 # because they never failed, not because they are out of scope.
+#
+# #129 recorded from a full `npm run test:acceptance -- ms-4` run on 2026-08-21
+# against schema head 0016 (`0016_clients.sql` — #128 had landed by then): 10
+# failed, 12 passed. The ten below are exactly the ten that were watched to
+# fail. The eleventh test in the slice ("a lead from an address no client has
+# ever used shows no match card") passed and is excluded because it never
+# failed — it is the control described in its own block above, not an
+# out-of-scope test.
 expected_red:
+  129:
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › promoting an unrecognised email says a new client was created"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › an unrecognised email gets a clients row with the email and nothing else"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › the promoted screen shows where the attached submission is"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › a returning address is recognised before the operator commits"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › promoting into a matched client says the work joined that client"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › the operator can start a new project for a client who already has one"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › the operator's chosen project is the one the submission lands in"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › a double-submitted promotion creates one submission and one client"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › a client match ignores the case of the email address"
+    - "[chromium] ms-4/129-lead-promotion-client-link.spec.ts › ms-4 issue 129 lead promotion links a client › a project that never came from a lead promotion is not offered"
   128:
     - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › the migration lands, and the running Worker reports the newer schema"
     - "[chromium] ms-4/128-clients-schema.spec.ts › ms-4 issue 128 clients table and projects.client_id › a clients table exists at schema head"
