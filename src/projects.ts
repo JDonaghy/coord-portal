@@ -200,6 +200,18 @@ export function projectCreationForKnownClient(
  * `NOT EXISTS` fails), and this subquery still finds the client row that
  * actually exists, so the project it creates lands on the real one instead
  * of an orphaned id nothing else points to.
+ *
+ * That said, this statement is only guarded on `leadId`, not on whether its
+ * sibling client-insert was the one that won the race — so the losing lead's
+ * own project insert still fires, and still resolves `client_id` correctly
+ * via the subquery above. The accepted-but-real outcome of that race is a
+ * client left with *two* projects (one per concurrently-promoted lead)
+ * instead of the second lead joining the first project the winning
+ * transaction created. That is judged strictly better than the alternative
+ * (an orphaned id), but it is not "resolves correctly" in every sense — a
+ * client can end up with an extra "Project 1"-shaped project nobody asked
+ * for, from a race window that only exists for two never-before-seen leads
+ * sharing an email promoted at the same instant.
  */
 export function projectCreationForEmailResolvedClient(
   env: Env,
