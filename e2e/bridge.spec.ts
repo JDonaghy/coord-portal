@@ -223,7 +223,11 @@ test("a new submission reaches the stream once, and replays from the same cursor
   expect(event.occurred_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/)
   expect(event.payload["reference"]).toBe(seeded.reference)
   expect(event.payload["outcome"]).toBe("A synthetic outcome for bridge coverage.")
-  // The customer's email is a portal-side fact and does not cross the bridge.
+  // The customer's email — "who filed this submission" — is a portal-side
+  // fact and does not cross the bridge; `client_email` (asserted below) is a
+  // different fact ("the client account's own address") that sometimes reads
+  // the same string once a `clients` row exists, but this seeded submission
+  // has no match at all, so neither appears anywhere in the payload here.
   expect(JSON.stringify(event.payload)).not.toContain("@example.test")
   // Issue #146: client and project identity are absent, not invented, for a
   // plain first-time intake — nobody has matched this address to a `clients`
