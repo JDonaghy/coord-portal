@@ -1,6 +1,7 @@
 import { isBehindCloudflareEdge } from "../deployment"
 import { parseFormData } from "../formData"
 import { accessRefused, resolveSiteIdentity } from "../identity"
+import { readOperator } from "../operators"
 import { escapeHtml, html, page, topbar } from "../render"
 import { createSubmission, getSubmission, type Submission } from "../submissions"
 import type { Env } from "../types"
@@ -32,7 +33,15 @@ export async function intakeForm(request: Request, env: Env): Promise<Response> 
   if (!email && isBehindCloudflareEdge(request)) return accessRefused()
 
   const followUpFrom = await resolveFollowUpTarget(request, env, email)
-  return html(page("New request — coord-portal", renderForm(email, EMPTY_DRAFT, undefined, followUpFrom)))
+  // Additive to the ownership scoping above, never a substitute for it — see
+  // `dashboard.ts`'s identical call for the full rationale (issue #103).
+  const isOperator = (await readOperator(request, env)) !== null
+  return html(
+    page(
+      "New request — coord-portal",
+      renderForm(email, isOperator, EMPTY_DRAFT, undefined, followUpFrom),
+    ),
+  )
 }
 
 /**
@@ -78,6 +87,7 @@ const EMPTY_DRAFT: DraftValues = {
 
 function renderForm(
   email: string | null,
+  isOperator: boolean,
   draft: DraftValues = EMPTY_DRAFT,
   error?: string,
   followUpFrom: Submission | null = null,
@@ -93,7 +103,7 @@ function renderForm(
   // this way a plain page reload never loses it.
   const action = followUpFrom ? `/intake?from=${encodeURIComponent(followUpFrom.id)}` : "/intake"
 
-  return `${topbar(email, "new")}
+  return `${topbar(email, "new", isOperator)}
 <main>
   <h1>Describe what you want done</h1>
   <p class="lede">No live chat, no back-and-forth right now — write it once, and the team will follow up.</p>
@@ -175,6 +185,7 @@ export async function submitIntake(request: Request, env: Env): Promise<Response
   if (!email && isBehindCloudflareEdge(request)) return accessRefused()
 
   const followUpFrom = await resolveFollowUpTarget(request, env, email)
+  const isOperator = (await readOperator(request, env)) !== null
 
   // Issue #71: the identical unguarded `request.formData()` throws a raw
   // `TypeError` on a malformed body. This route already has a
@@ -186,7 +197,13 @@ export async function submitIntake(request: Request, env: Env): Promise<Response
     return html(
       page(
         "New request — coord-portal",
-        renderForm(email, EMPTY_DRAFT, "Please fill in every required field.", followUpFrom),
+        renderForm(
+          email,
+          isOperator,
+          EMPTY_DRAFT,
+          "Please fill in every required field.",
+          followUpFrom,
+        ),
       ),
       { status: 400 },
     )
@@ -204,7 +221,7 @@ export async function submitIntake(request: Request, env: Env): Promise<Response
     return html(
       page(
         "New request — coord-portal",
-        renderForm(email, draft, "Please fill in every required field.", followUpFrom),
+        renderForm(email, isOperator, draft, "Please fill in every required field.", followUpFrom),
       ),
       { status: 400 },
     )

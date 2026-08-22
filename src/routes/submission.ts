@@ -2,6 +2,7 @@ import { parseFormData } from "../formData"
 import { resolveSiteIdentity } from "../identity"
 import { listLifecycleEvents, type LifecycleEvent, type LifecycleEventKind } from "../lifecycle"
 import { listMessages, postMessage, type Message, type MessageAuthorRole } from "../messages"
+import { readOperator } from "../operators"
 import {
   derivedQualityCheckStatus,
   getCurrentPreviewReview,
@@ -82,8 +83,14 @@ export async function submissionDetail(
     return notFoundResponse()
   }
 
+  // Additive to the ownership scoping above, never a substitute for it — see
+  // `dashboard.ts`'s identical call for the full rationale (issue #103).
+  // Whether *this* submission belongs to the viewer is unaffected; this only
+  // decides whether the nav's operator section (Leads, Deliveries) appears.
+  const isOperator = (await readOperator(request, env)) !== null
+
   const thread = { messages: await listMessages(env, submission.reference) }
-  const main = await detailFor(env, email, submission, thread)
+  const main = await detailFor(env, email, isOperator, submission, thread)
   return html(page(`${submission.reference} — coord-portal`, main))
 }
 
@@ -121,6 +128,10 @@ export async function submitSubmissionAction(
     return notFoundResponse()
   }
 
+  // Additive to the ownership check above, never a substitute for it — see
+  // `submissionDetail`'s identical call for the full rationale (issue #103).
+  const isOperator = (await readOperator(request, env)) !== null
+
   // `request.formData()` throws a raw `TypeError` — an unhandled 500 — when
   // the request carries no `Content-Type` at all, or one it can't parse as a
   // form (issue #46, and issue #71 for the two routes this reasoning missed:
@@ -144,16 +155,16 @@ export async function submitSubmissionAction(
   const action = stringField(form, "action")
 
   if (action === "message") {
-    return submitMessage(env, submission, { role: "customer", email }, form)
+    return submitMessage(env, isOperator, submission, { role: "customer", email }, form)
   }
 
   if (action === "approve" || action === "request-changes") {
-    return submitSignoff(env, email, submission, action, form)
+    return submitSignoff(env, email, isOperator, submission, action, form)
   }
   if (action === "approve-preview" || action === "request-preview-changes") {
-    return submitPreviewReviewAction(env, email, submission, action, form)
+    return submitPreviewReviewAction(env, email, isOperator, submission, action, form)
   }
-  return submitAnswer(env, email, submission, form)
+  return submitAnswer(env, email, isOperator, submission, form)
 }
 
 /**
@@ -168,6 +179,7 @@ export async function submitSubmissionAction(
 async function submitAnswer(
   env: Env,
   email: string | null,
+  isOperator: boolean,
   submission: Submission,
   form: FormData,
 ): Promise<Response> {
@@ -175,7 +187,7 @@ async function submitAnswer(
     submission.status === "needs-input" ? await getOpenQuestion(env, submission.reference) : null
   if (!open) {
     const thread = { messages: await listMessages(env, submission.reference) }
-    const main = await detailFor(env, email, submission, thread)
+    const main = await detailFor(env, email, isOperator, submission, thread)
     return html(page(`${submission.reference} — coord-portal`, main), { status: 409 })
   }
 
@@ -187,7 +199,14 @@ async function submitAnswer(
     return html(
       page(
         `${submission.reference} — coord-portal`,
-        pausedDetail(email, submission, open, thread, "Please write an answer before sending."),
+        pausedDetail(
+          email,
+          isOperator,
+          submission,
+          open,
+          thread,
+          "Please write an answer before sending.",
+        ),
       ),
       { status: 400 },
     )
@@ -216,6 +235,7 @@ async function submitAnswer(
 async function submitSignoff(
   env: Env,
   email: string | null,
+  isOperator: boolean,
   submission: Submission,
   action: "approve" | "request-changes",
   form: FormData,
@@ -227,7 +247,7 @@ async function submitSignoff(
     // Nothing is awaiting this customer's sign-off — already decided, superseded,
     // or the submission has moved on. Re-render what is actually true.
     const thread = { messages: await listMessages(env, submission.reference) }
-    const main = await detailFor(env, email, submission, thread)
+    const main = await detailFor(env, email, isOperator, submission, thread)
     return html(page(`${submission.reference} — coord-portal`, main), { status: 409 })
   }
 
@@ -238,7 +258,7 @@ async function submitSignoff(
       return html(
         page(
           `${submission.reference} — coord-portal`,
-          await awaitingSignoffDetail(env, email, submission, current, thread, {
+          await awaitingSignoffDetail(env, email, isOperator, submission, current, thread, {
             composerOpen: true,
             error: "Tell us what should change before submitting.",
           }),
@@ -275,6 +295,7 @@ async function submitSignoff(
 async function submitPreviewReviewAction(
   env: Env,
   email: string | null,
+  isOperator: boolean,
   submission: Submission,
   action: "approve-preview" | "request-preview-changes",
   form: FormData,
@@ -284,7 +305,7 @@ async function submitPreviewReviewAction(
 
   if (!previewUrl || current) {
     const thread = { messages: await listMessages(env, submission.reference) }
-    const main = await detailFor(env, email, submission, thread)
+    const main = await detailFor(env, email, isOperator, submission, thread)
     return html(page(`${submission.reference} — coord-portal`, main), { status: 409 })
   }
 
@@ -295,7 +316,7 @@ async function submitPreviewReviewAction(
       return html(
         page(
           `${submission.reference} — coord-portal`,
-          await previewReviewDetail(env, email, submission, previewUrl, thread, {
+          await previewReviewDetail(env, email, isOperator, submission, previewUrl, thread, {
             composerOpen: true,
             error: "Tell us what should change before submitting.",
           }),
@@ -330,6 +351,7 @@ async function submitPreviewReviewAction(
  */
 async function submitMessage(
   env: Env,
+  isOperator: boolean,
   submission: Submission,
   actor: { role: MessageAuthorRole; email: string },
   form: FormData,
@@ -340,7 +362,7 @@ async function submitMessage(
       messages: await listMessages(env, submission.reference),
       error: "Write a message before sending.",
     }
-    const main = await detailFor(env, actor.email, submission, thread)
+    const main = await detailFor(env, actor.email, isOperator, submission, thread)
     return html(page(`${submission.reference} — coord-portal`, main), { status: 400 })
   }
 
@@ -397,10 +419,13 @@ export async function submissionRounds(
   }
 
   const rounds = await listRounds(env, submission.reference)
+  // Additive to the ownership check above, never a substitute for it — see
+  // `submissionDetail`'s identical call for the full rationale (issue #103).
+  const isOperator = (await readOperator(request, env)) !== null
   return html(
     page(
       `Round history — ${submission.reference} — coord-portal`,
-      roundHistory(email, submission, rounds),
+      roundHistory(email, isOperator, submission, rounds),
     ),
   )
 }
@@ -458,6 +483,7 @@ function notFoundResponse(): Response {
 async function detailFor(
   env: Env,
   email: string | null,
+  isOperator: boolean,
   submission: Submission,
   thread: ThreadContext,
 ): Promise<string> {
@@ -465,18 +491,18 @@ async function detailFor(
     const startWork = await getStartWork(env, submission.reference)
     const started = derivedStartWorkStatus(submission.status, startWork)
     if (started !== submission.status) {
-      return rollupDetail(env, email, submission, started, thread)
+      return rollupDetail(env, email, isOperator, submission, started, thread)
     }
-    return receipt(email, submission)
+    return receipt(email, isOperator, submission)
   }
   const display = customerFacingStatus(submission.status)
   if (display === "quality-check" && submission.previewUrl) {
-    return qualityCheckDetail(env, email, submission, thread)
+    return qualityCheckDetail(env, email, isOperator, submission, thread)
   }
-  if (isRollupStatus(display)) return rollupDetail(env, email, submission, display, thread)
-  if (display === "shipped") return shippedDetail(env, email, submission, thread)
-  if (display === "needs-input") return needsInputDetail(env, email, submission, thread)
-  return signoffDetail(env, email, submission, thread)
+  if (isRollupStatus(display)) return rollupDetail(env, email, isOperator, submission, display, thread)
+  if (display === "shipped") return shippedDetail(env, email, isOperator, submission, thread)
+  if (display === "needs-input") return needsInputDetail(env, email, isOperator, submission, thread)
+  return signoffDetail(env, email, isOperator, submission, thread)
 }
 
 /**
@@ -603,8 +629,8 @@ function referenceLine(submission: Submission): string {
   return `<p class="meta" data-testid="submission-reference">${escapeHtml(submission.reference)} &middot; submitted ${escapeHtml(submission.createdAt)}</p>`
 }
 
-function receipt(email: string | null, submission: Submission): string {
-  return `${topbar(email, "none")}
+function receipt(email: string | null, isOperator: boolean, submission: Submission): string {
+  return `${topbar(email, "none", isOperator)}
 <main data-testid="submission-detail" data-status="${escapeHtml(submission.status)}">
   <section class="receipt" data-testid="intake-receipt">
     <p class="status-pill" data-testid="status-pill" data-status="${escapeHtml(submission.status)}">${escapeHtml(statusText(submission.status))}</p>
@@ -673,6 +699,7 @@ function rollupCopy(status: SubmissionStatus): string {
 async function rollupDetail(
   env: Env,
   email: string | null,
+  isOperator: boolean,
   submission: Submission,
   display: SubmissionStatus,
   thread: ThreadContext,
@@ -684,7 +711,7 @@ async function rollupDetail(
   }).join("\n")
   const events = await listLifecycleEvents(env, submission.reference)
 
-  return `${topbar(email, "none")}
+  return `${topbar(email, "none", isOperator)}
 <main data-testid="submission-detail" data-status="${escapeHtml(display)}">
   ${statusPill(display)}
   <h1>${escapeHtml(titleOf(submission))}</h1>
@@ -804,11 +831,12 @@ function followUpLink(submission: Submission): string {
 async function actionableDetail(
   env: Env,
   email: string | null,
+  isOperator: boolean,
   submission: Submission,
   thread: ThreadContext,
 ): Promise<string> {
   const events = await listLifecycleEvents(env, submission.reference)
-  return `${topbar(email, "none")}
+  return `${topbar(email, "none", isOperator)}
 <main data-testid="submission-detail" data-status="${escapeHtml(submission.status)}">
   ${statusPill(submission.status)}
   <h1>${escapeHtml(titleOf(submission))}</h1>
@@ -844,16 +872,19 @@ ${messageThreadSection(`/submissions/${submission.id}`, thread, "customer", emai
 async function signoffDetail(
   env: Env,
   email: string | null,
+  isOperator: boolean,
   submission: Submission,
   thread: ThreadContext,
 ): Promise<string> {
   const current = await getCurrentRound(env, submission.reference)
-  if (!current) return actionableDetail(env, email, submission, thread)
+  if (!current) return actionableDetail(env, email, isOperator, submission, thread)
 
   const display = derivedStatus(submission.status, { round: current.round, verdict: current.verdict })
-  if (display !== "awaiting-signoff") return rollupDetail(env, email, submission, display, thread)
+  if (display !== "awaiting-signoff") {
+    return rollupDetail(env, email, isOperator, submission, display, thread)
+  }
 
-  return awaitingSignoffDetail(env, email, submission, current, thread)
+  return awaitingSignoffDetail(env, email, isOperator, submission, current, thread)
 }
 
 interface ComposerState {
@@ -900,6 +931,7 @@ interface ComposerState {
 async function awaitingSignoffDetail(
   env: Env,
   email: string | null,
+  isOperator: boolean,
   submission: Submission,
   round: DesignRound,
   thread: ThreadContext,
@@ -912,7 +944,7 @@ async function awaitingSignoffDetail(
     : ""
   const events = await listLifecycleEvents(env, submission.reference)
 
-  return `${topbar(email, "none")}
+  return `${topbar(email, "none", isOperator)}
 <main data-testid="submission-detail" data-status="awaiting-signoff">
   ${statusPill("awaiting-signoff")}
   <h1>${escapeHtml(titleOf(submission))}</h1>
@@ -1042,17 +1074,18 @@ export function mockBundleHref(submission: Submission, round: DesignRound): stri
 async function qualityCheckDetail(
   env: Env,
   email: string | null,
+  isOperator: boolean,
   submission: Submission,
   thread: ThreadContext,
 ): Promise<string> {
   const previewUrl = submission.previewUrl
-  if (!previewUrl) return rollupDetail(env, email, submission, "quality-check", thread)
+  if (!previewUrl) return rollupDetail(env, email, isOperator, submission, "quality-check", thread)
 
   const current = await getCurrentPreviewReview(env, submission.reference, previewUrl)
-  if (!current) return previewReviewDetail(env, email, submission, previewUrl, thread)
+  if (!current) return previewReviewDetail(env, email, isOperator, submission, previewUrl, thread)
 
   const display = derivedQualityCheckStatus(submission.status, { verdict: current.verdict })
-  return rollupDetail(env, email, submission, display, thread)
+  return rollupDetail(env, email, isOperator, submission, display, thread)
 }
 
 interface PreviewComposerState {
@@ -1073,6 +1106,7 @@ interface PreviewComposerState {
 async function previewReviewDetail(
   env: Env,
   email: string | null,
+  isOperator: boolean,
   submission: Submission,
   previewUrl: string,
   thread: ThreadContext,
@@ -1084,7 +1118,7 @@ async function previewReviewDetail(
     : ""
   const events = await listLifecycleEvents(env, submission.reference)
 
-  return `${topbar(email, "none")}
+  return `${topbar(email, "none", isOperator)}
 <main data-testid="submission-detail" data-status="quality-check">
   ${statusPill("quality-check")}
   <h1>${escapeHtml(titleOf(submission))}</h1>
@@ -1146,6 +1180,7 @@ ${messageThreadSection(`/submissions/${submission.id}`, thread, "customer", emai
  */
 function roundHistory(
   email: string | null,
+  isOperator: boolean,
   submission: Submission,
   rounds: DesignRound[],
 ): string {
@@ -1154,7 +1189,7 @@ function roundHistory(
       ? rounds.map(roundEntry).join("\n")
       : `    <p class="lede">No design round has been published for this request yet.</p>`
 
-  return `${topbar(email, "none")}
+  return `${topbar(email, "none", isOperator)}
 <main>
   <a class="back-link" href="/submissions/${submission.id}" data-testid="back-to-submission">&larr; ${escapeHtml(titleOf(submission))}</a>
   <h1>Round history</h1>
@@ -1228,12 +1263,13 @@ ${comment}
 async function needsInputDetail(
   env: Env,
   email: string | null,
+  isOperator: boolean,
   submission: Submission,
   thread: ThreadContext,
 ): Promise<string> {
   const open = await getOpenQuestion(env, submission.reference)
-  if (!open) return actionableDetail(env, email, submission, thread)
-  return pausedDetail(email, submission, open, thread)
+  if (!open) return actionableDetail(env, email, isOperator, submission, thread)
+  return pausedDetail(email, isOperator, submission, open, thread)
 }
 
 /**
@@ -1262,6 +1298,7 @@ async function needsInputDetail(
  */
 function pausedDetail(
   email: string | null,
+  isOperator: boolean,
   submission: Submission,
   question: OpenQuestion,
   thread: ThreadContext,
@@ -1271,7 +1308,7 @@ function pausedDetail(
     ? `<p class="async-note" data-testid="answer-error" role="alert">${escapeHtml(error)}</p>`
     : ""
 
-  return `${topbar(email, "none")}
+  return `${topbar(email, "none", isOperator)}
 <main data-testid="submission-detail" data-status="${escapeHtml(submission.status)}">
   ${statusPill(submission.status)}
   <h1>${escapeHtml(titleOf(submission))}</h1>
@@ -1322,11 +1359,12 @@ function questionText(value: unknown): string {
 async function shippedDetail(
   env: Env,
   email: string | null,
+  isOperator: boolean,
   submission: Submission,
   thread: ThreadContext,
 ): Promise<string> {
   const events = await listLifecycleEvents(env, submission.reference)
-  return `${topbar(email, "none")}
+  return `${topbar(email, "none", isOperator)}
 <main data-testid="submission-detail" data-status="${escapeHtml(submission.status)}">
   ${statusPill(submission.status)}
   <h1>${escapeHtml(titleOf(submission))}</h1>

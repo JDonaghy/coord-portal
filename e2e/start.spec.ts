@@ -61,8 +61,19 @@ test("GET /start renders the public form to a stranger with no Access identity",
     page.getByRole("button", { name: /log ?in|sign ?in|sign ?up|register/i }),
   ).toHaveCount(0)
 
-  // No authenticated-portal hooks leak onto a public screen.
-  for (const hook of ["nav-dashboard", "nav-new", "identity-email", "submission-list"]) {
+  // No authenticated-portal hooks leak onto a public screen. `signout-link`
+  // and `nav-leads` (issue #103) are additive to this list, not new
+  // exceptions to it: adding either to `/start` would leak that a caller is
+  // signed in, or that they are staff, on the one screen that must carry
+  // neither (see this issue's own "`/start` is untouched").
+  for (const hook of [
+    "nav-dashboard",
+    "nav-new",
+    "identity-email",
+    "submission-list",
+    "signout-link",
+    "nav-leads",
+  ]) {
     await expect(page.getByTestId(hook)).toHaveCount(0)
   }
 })

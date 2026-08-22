@@ -1,4 +1,5 @@
 import { resolveSiteIdentity } from "../identity"
+import { readOperator } from "../operators"
 import { getProject } from "../projects"
 import { escapeHtml, html, page, topbar } from "../render"
 import { derivedStatus, listRounds, loadSignoffStates, type DesignRound } from "../rounds"
@@ -67,10 +68,21 @@ export async function projectDetail(request: Request, env: Env, id: string): Pro
     blocks.push(submissionBlock(submission, display, rounds))
   }
 
-  return html(page("Project history — coord-portal", projectPage(email, submissions, blocks)))
+  // Additive to the ownership scoping above, never a substitute for it — see
+  // `dashboard.ts`'s identical call for the full rationale (issue #103).
+  const isOperator = (await readOperator(request, env)) !== null
+
+  return html(
+    page("Project history — coord-portal", projectPage(email, isOperator, submissions, blocks)),
+  )
 }
 
-function projectPage(email: string | null, submissions: Submission[], blocks: string[]): string {
+function projectPage(
+  email: string | null,
+  isOperator: boolean,
+  submissions: Submission[],
+  blocks: string[],
+): string {
   // Newest first — `listSubmissionsForProject` already orders it that way,
   // and its first entry is the current state of the relationship, the same
   // way the dashboard's grouped row picks its title and status from it.
@@ -79,7 +91,7 @@ function projectPage(email: string | null, submissions: Submission[], blocks: st
   const count = submissions.length
   const countLabel = count === 1 ? "1 request" : `${count} requests`
 
-  return `${topbar(email, "dashboard")}
+  return `${topbar(email, "dashboard", isOperator)}
 <main data-testid="project-detail">
   <a class="back-link" href="/submissions" data-testid="back-to-dashboard">&larr; My requests</a>
   <h1>${escapeHtml(title)}</h1>
