@@ -1,7 +1,7 @@
 import { isBehindCloudflareEdge } from "../deployment"
 import { parseFormData } from "../formData"
 import { accessRefused, resolveSiteIdentity } from "../identity"
-import { readOperator } from "../operators"
+import { isOperatorEmail } from "../operators"
 import { escapeHtml, html, page, topbar } from "../render"
 import { createSubmission, getSubmission, type Submission } from "../submissions"
 import type { Env } from "../types"
@@ -34,8 +34,9 @@ export async function intakeForm(request: Request, env: Env): Promise<Response> 
 
   const followUpFrom = await resolveFollowUpTarget(request, env, email)
   // Additive to the ownership scoping above, never a substitute for it — see
-  // `dashboard.ts`'s identical call for the full rationale (issue #103).
-  const isOperator = (await readOperator(request, env)) !== null
+  // `dashboard.ts`'s identical call, and `isOperatorEmail` in
+  // `src/operators.ts`, for the full rationale (issue #103).
+  const isOperator = isOperatorEmail(email, request, env)
   return html(
     page(
       "New request — coord-portal",
@@ -185,7 +186,7 @@ export async function submitIntake(request: Request, env: Env): Promise<Response
   if (!email && isBehindCloudflareEdge(request)) return accessRefused()
 
   const followUpFrom = await resolveFollowUpTarget(request, env, email)
-  const isOperator = (await readOperator(request, env)) !== null
+  const isOperator = isOperatorEmail(email, request, env)
 
   // Issue #71: the identical unguarded `request.formData()` throws a raw
   // `TypeError` on a malformed body. This route already has a

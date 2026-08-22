@@ -40,6 +40,16 @@ import type { Env } from "../types"
  * ("not 'coord-portal' ... on a page a customer can see"). Every other
  * authenticated or public screen keeps that brand text — this one route
  * builds its own minimal header instead of touching the shared one.
+ *
+ * That header still carries `signout-link` (issue #103): `emptyFrontDoor`
+ * below is reached only once `resolveSiteIdentity` has resolved a caller, the
+ * same authenticated-screen gate every other route behind Access carries a
+ * sign-out control on, and #103's own "done" bar names no carve-out for this
+ * screen — only `/start` (`anonymousFrontDoor`, which stays on
+ * `publicPage()`/no identity at all) is exempted. Same href, same markup
+ * shape as `topbar()`'s, styled by the same `.signout` rule in `APP_STYLES`
+ * (this screen renders with `page()`, not `publicPage()`), just built here by
+ * hand instead of through `topbar()` for the brand-text reason above.
  */
 export async function frontDoor(request: Request, env: Env): Promise<Response> {
   const email = await resolveSiteIdentity(request, env)
@@ -71,6 +81,7 @@ function anonymousFrontDoor(): string {
 function emptyFrontDoor(email: string): string {
   return `<header class="topbar">
   <span class="identity" data-testid="identity-email">signed in as ${escapeHtml(email)}</span>
+  <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>
 </header>
 <main>
   <h1>You don't have any requests yet</h1>

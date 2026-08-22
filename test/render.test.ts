@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { page, publicHeader, publicPage, topbar } from "../src/render"
+import { operatorTopbar, page, publicHeader, publicPage, topbar } from "../src/render"
 
 /**
  * Regression cover for the topbar's NARROW-VIEWPORT behaviour.
@@ -141,6 +141,52 @@ describe("topbar", () => {
       expect(deliveries).toContain('data-testid="nav-deliveries" aria-current="page"')
       expect(deliveries.match(/aria-current="page"/g)).toHaveLength(1)
     })
+  })
+})
+
+/**
+ * `/leads` and `/deliveries` keep their own, unmerged header — see the long
+ * comment on `topbar()` in `src/render.ts`. A first attempt at folding this
+ * into `topbar()` broke the sealed acceptance oracles for ms-2 issue #33 and
+ * ms-3 issue #55 (`expectOperatorTopbar` in each spec asserts, via
+ * `toHaveCount(0)`, that these two screens carry none of the customer
+ * topbar's hooks). The tests below pin exactly that absence at the unit
+ * level, so a regression here is caught in under a second rather than only
+ * once the sealed suite runs.
+ */
+describe("operatorTopbar", () => {
+  it("carries the operator nav hooks, brand and identity", () => {
+    const rendered = operatorTopbar("ops@example.test", "leads")
+    for (const hook of ["brand-home", "nav-leads", "nav-deliveries", "identity-email"]) {
+      expect(rendered).toContain(`data-testid="${hook}"`)
+    }
+  })
+
+  it("carries none of the customer topbar's hooks — ms-2 #33 / ms-3 #55's sealed pin", () => {
+    const rendered = operatorTopbar("ops@example.test", "leads")
+    for (const hook of ["nav-dashboard", "nav-new", "nav-outbox", "nav-account"]) {
+      expect(rendered).not.toContain(`data-testid="${hook}"`)
+    }
+  })
+
+  it("marks exactly the current operator screen", () => {
+    const leads = operatorTopbar("ops@example.test", "leads")
+    expect(leads).toContain('data-testid="nav-leads" aria-current="page"')
+    expect(leads.match(/aria-current="page"/g)).toHaveLength(1)
+
+    const deliveries = operatorTopbar("ops@example.test", "deliveries")
+    expect(deliveries).toContain('data-testid="nav-deliveries" aria-current="page"')
+    expect(deliveries.match(/aria-current="page"/g)).toHaveLength(1)
+  })
+
+  it("still carries sign-out (issue #103) — the sealed oracles never assert its absence", () => {
+    const rendered = operatorTopbar("ops@example.test", "deliveries")
+    expect(rendered).toContain('data-testid="signout-link"')
+    expect(rendered).toContain('href="/cdn-cgi/access/logout"')
+  })
+
+  it("shares header.topbar, so it inherits the same wrapping rules", () => {
+    expect(operatorTopbar("operator@example.test", "leads")).toContain('<header class="topbar">')
   })
 })
 

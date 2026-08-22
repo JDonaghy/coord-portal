@@ -25,24 +25,41 @@ export type NavCurrent =
   | "none"
 
 /**
- * The one header every screen behind Access carries — issue #103 merged what
- * used to be two separate functions here, `topbar()` (the customer-facing
- * screens) and `operatorTopbar()` (`/leads`, `/deliveries`), because neither
- * knew the other existed: from `/leads` there was no link to `/submissions`,
- * from `/submissions` there was no link to `/leads`, and the only way across
- * was to type the URL. A person who is both an operator and a customer —
- * which is every operator today — got whichever nav the page they happened
- * to be on decided.
+ * The header every CUSTOMER-facing screen behind Access carries — issue #103
+ * set out to merge this with `operatorTopbar()` below entirely (one header,
+ * customer links always on, operator section appended when `isOperator`),
+ * because neither used to know the other existed: from `/leads` there was no
+ * link to `/submissions`, from `/submissions` there was no link to `/leads`,
+ * and the only way across was to type the URL.
+ *
+ * That full merge shipped once and broke the sealed acceptance oracles for
+ * ms-2 issue #33 and ms-3 issue #55: both assert, via each spec's own
+ * `expectOperatorTopbar`, that `/leads` and `/deliveries` render **none** of
+ * `nav-dashboard` / `nav-new` / `nav-outbox` — `tests/acceptance/ms-2/
+ * 33-lead-triage-promotion.spec.ts` and `tests/acceptance/ms-3/
+ * 55-operator-deliveries.spec.ts`, both `toHaveCount(0)`. This repo's own
+ * CLAUDE.md is explicit that a sealed test that looks wrong gets flagged, not
+ * edited, and reconciling milestone contracts is an epic-owner decision, not
+ * one a single issue's fix gets to make unilaterally. So the merge here is
+ * one-directional: `topbar()` still appends the operator section
+ * (`nav-leads`, `nav-deliveries`) when `isOperator` is true, giving an
+ * operator a path to Leads/Deliveries from every customer screen without
+ * typing a URL — but `/leads` and `/deliveries` themselves keep their own,
+ * unmerged `operatorTopbar()` below, exactly as ms-2/ms-3 sealed-pin it. The
+ * reverse direction (a link back to `/submissions` etc. *from* `/leads` or
+ * `/deliveries`) is the part issue #103 cannot deliver without either
+ * breaking those oracles or the epic reconciling them — flagged back to the
+ * milestone owner, not silently resolved here.
  *
  * The customer links (`nav-dashboard`, `nav-new`, `nav-outbox`,
- * `nav-account`) render unconditionally. The operator section
- * (`nav-leads`, `nav-deliveries`) is appended only when `isOperator` is
- * true — the caller passes exactly the same fact `readOperator(request,
- * env) !== null` already gates `/leads` and `/deliveries` on
- * (`src/operators.ts`), so this introduces no new notion of role and no new
- * way to learn who is staff. A non-operator customer must see no operator
- * link at all — that is the part issue #103 calls "worth a test": the nav
- * must not become a directory of surfaces a customer cannot open.
+ * `nav-account`) render unconditionally. The operator section is appended
+ * only when `isOperator` is true — the caller passes exactly the same fact
+ * `readOperator(request, env) !== null` already gates `/leads` and
+ * `/deliveries` on (`src/operators.ts`), so this introduces no new notion of
+ * role and no new way to learn who is staff. A non-operator customer must see
+ * no operator link at all — that is the part issue #103 calls "worth a
+ * test": the nav must not become a directory of surfaces a customer cannot
+ * open.
  *
  * Per the contract's global hook list: `brand-home`, `nav-dashboard`,
  * `nav-new`, `identity-email`. `nav-outbox` (issue #14), `nav-account`
@@ -105,9 +122,52 @@ export function publicHeader(): string {
 </header>`
 }
 
+export type OperatorNavCurrent = "leads" | "deliveries"
+
+/**
+ * The header `/leads*` and `/deliveries` carry — kept deliberately separate
+ * from `topbar()` above. Issue #103 asked for these two to merge into
+ * `topbar()` as well, but ms-2 issue #33's and ms-3 issue #55's sealed
+ * acceptance specs each pin, via their own `expectOperatorTopbar` helper,
+ * that these two screens render **none** of the customer topbar's hooks
+ * (`nav-dashboard`, `nav-new`, `nav-outbox`) — see the long comment on
+ * `topbar()` above for the full account of that conflict and why it is
+ * flagged for the epic owner rather than resolved by editing either the
+ * sealed tests or this function to ignore them.
+ *
+ * `identity-email` reuses the customer topbar's hook name and copy on
+ * purpose — "who does this page say is signed in" is the same question on
+ * both, and one name for it is one thing to learn.
+ *
+ * `current` picks which nav entry carries `aria-current="page"` — issue #55's
+ * Gate-A contract amendment: this used to hardcode it on `nav-leads` (the
+ * only operator screen there was), and now that there are two, the current
+ * one has to be computed the same way `topbar()`'s `nav-dashboard` /
+ * `nav-new` / `nav-outbox` already are.
+ *
+ * `signout-link` (issue #103) — same link, same href, as `topbar()`'s: an
+ * operator screen behind Access is still a screen behind Access, and the
+ * sealed oracles above assert its *absence* only for the customer nav hooks,
+ * never for this one.
+ */
+export function operatorTopbar(email: string, current: OperatorNavCurrent): string {
+  const leadsCurrent = current === "leads" ? ' aria-current="page"' : ""
+  const deliveriesCurrent = current === "deliveries" ? ' aria-current="page"' : ""
+
+  return `<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/leads" data-testid="nav-leads"${leadsCurrent}>Leads</a>
+    <a href="/deliveries" data-testid="nav-deliveries"${deliveriesCurrent}>Deliveries</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ${escapeHtml(email)}</span>
+  <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>
+</header>`
+}
+
 /**
  * Component styles for the AUTHENTICATED and OPERATOR screens — every route
- * behind Access, all rendered with the single `topbar()` above. `/start`, the
+ * behind Access, both `topbar()` and `operatorTopbar()` above. `/start`, the
  * one public route (issue #31), does NOT use this sheet — see
  * `PUBLIC_STYLES` below.
  *

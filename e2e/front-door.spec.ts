@@ -46,6 +46,17 @@ test("a signed-in customer with no submissions is named and pointed at /intake",
   await page.goto("/")
 
   await expect(page.getByTestId("identity-email")).toHaveText(`signed in as ${email}`)
+  // Issue #103: this is the "signed in, zero submissions" screen — reachable
+  // only once Access has resolved an identity, and (per that issue's own
+  // review) the one authenticated screen most likely to strand a brand-new
+  // customer on a shared machine with no way to leave. It builds its own
+  // bespoke header (not `topbar()`, see the module comment on `home.ts` for
+  // why) so this has to be asserted here rather than relying on `e2e/
+  // nav.spec.ts`'s shared-header coverage.
+  const signOut = page.getByTestId("signout-link")
+  await expect(signOut).toBeVisible()
+  await expect(signOut).toHaveAttribute("href", "/cdn-cgi/access/logout")
+
   await page.getByTestId("nav-new-cta").click()
   await expect(page).toHaveURL(/\/intake$/)
 

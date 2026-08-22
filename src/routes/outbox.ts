@@ -1,7 +1,7 @@
 import { isBehindCloudflareEdge } from "../deployment"
 import { accessRefused, resolveSiteIdentity } from "../identity"
 import { DELIVERY_STATUS_TEXT, listOutboxForCustomer, type OutboxEmail } from "../notifications"
-import { readOperator } from "../operators"
+import { isOperatorEmail } from "../operators"
 import { escapeHtml, html, page, topbar } from "../render"
 import type { Env } from "../types"
 
@@ -35,8 +35,9 @@ export async function outbox(request: Request, env: Env): Promise<Response> {
 
   const emails = email ? await listOutboxForCustomer(env, email) : []
   // Additive to the ownership scoping above, never a substitute for it — see
-  // `dashboard.ts`'s identical call for the full rationale (issue #103).
-  const isOperator = (await readOperator(request, env)) !== null
+  // `dashboard.ts`'s identical call, and `isOperatorEmail` in
+  // `src/operators.ts`, for the full rationale (issue #103).
+  const isOperator = isOperatorEmail(email, request, env)
   return html(page("Outbox — coord-portal", outboxPage(email, isOperator, emails)))
 }
 

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { clearAccessJwksCache } from "../src/identity"
-import { DEV_OPERATOR_EMAIL, readOperator } from "../src/operators"
+import { DEV_OPERATOR_EMAIL, isOperatorEmail, readOperator } from "../src/operators"
 import type { Env } from "../src/types"
 import { accessSigner, epoch, unsignedToken, type AccessSigner } from "./accessToken"
 
@@ -118,6 +118,56 @@ describe("readOperator", () => {
         await readOperator(asIdentity(DEV_OPERATOR_EMAIL, EDGE), env({ OPERATOR_EMAILS: value })),
       ).toBeNull()
     }
+  })
+})
+
+/**
+ * `isOperatorEmail` (issue #103's non-blocking review finding): the same
+ * allowlist decision as `readOperator`, but for a caller that has already
+ * resolved and verified its own identity this request — a plain, synchronous
+ * lookup against the email handed in, no second `resolveSiteIdentity` call
+ * and so no second JWT verification. Every case below has a `readOperator`
+ * counterpart above; what's pinned here is that the two agree, given the
+ * same already-resolved email, on every input that matters to the allowlist
+ * itself (the JWT-verification cases above are specific to `readOperator`,
+ * which resolves identity itself — `isOperatorEmail` takes identity as a
+ * given).
+ */
+describe("isOperatorEmail", () => {
+  it("is false with no email", () => {
+    expect(isOperatorEmail(null, request(), env())).toBe(false)
+    expect(isOperatorEmail(null, request(), env({ OPERATOR_EMAILS: "ops@example.test" }))).toBe(
+      false,
+    )
+  })
+
+  it("admits an address on the configured list", () => {
+    const configured = env({ OPERATOR_EMAILS: "ops@example.test, second@example.test" })
+    expect(isOperatorEmail("ops@example.test", request(), configured)).toBe(true)
+    expect(isOperatorEmail("second@example.test", request(), configured)).toBe(true)
+  })
+
+  it("matches case-insensitively", () => {
+    expect(
+      isOperatorEmail("Ops@Example.Test", request(), env({ OPERATOR_EMAILS: "ops@example.test" })),
+    ).toBe(true)
+  })
+
+  it("rejects a customer identity that is not on the list", () => {
+    const configured = env({ OPERATOR_EMAILS: "ops@example.test" })
+    expect(isOperatorEmail("customer@example.test", request(), configured)).toBe(false)
+    expect(isOperatorEmail("ops@example.test.evil.test", request(), configured)).toBe(false)
+  })
+
+  it("grants nobody when unset behind Cloudflare's edge, honours the dev fallback off it", () => {
+    expect(isOperatorEmail(DEV_OPERATOR_EMAIL, request(EDGE), env())).toBe(false)
+    expect(isOperatorEmail(DEV_OPERATOR_EMAIL, request(), env())).toBe(true)
+    expect(isOperatorEmail("someone-else@example.test", request(), env())).toBe(false)
+  })
+
+  it("ignores the development fallback the moment a list is configured", () => {
+    const configured = env({ OPERATOR_EMAILS: "ops-real@example.test" })
+    expect(isOperatorEmail(DEV_OPERATOR_EMAIL, request(), configured)).toBe(false)
   })
 })
 

@@ -87,6 +87,31 @@ export async function readOperator(request: Request, env: Env): Promise<Operator
 }
 
 /**
+ * The same allowlist check `readOperator` makes, for a caller that has
+ * ALREADY resolved and verified its own identity via `resolveSiteIdentity`
+ * this request — every customer-facing route that needs `isOperator` purely
+ * to decide whether `topbar()` (`src/render.ts`) appends the operator nav
+ * section falls in this bucket (`dashboard.ts`, `account.ts`, `intake.ts`,
+ * `outbox.ts`, `project.ts`, `submission.ts`).
+ *
+ * Calling `readOperator` there instead would run `resolveSiteIdentity`, and
+ * therefore the RSA `crypto.subtle.verify` JWT check behind Cloudflare's
+ * edge, a second time on the same request for the same answer — the JWKS
+ * fetch itself is cached, but the signature verification is not, and Workers
+ * bills and limits on CPU time. This function does none of that: it is a
+ * synchronous set lookup against an email the caller already paid to verify.
+ *
+ * `readOperator` stays the right call for `/leads` and `/deliveries`
+ * themselves (`src/routes/leads.ts`, `deliveries.ts`) — there, the operator
+ * check IS the route's identity resolution; there is no separate customer
+ * `email` already in hand to check against.
+ */
+export function isOperatorEmail(email: string | null, request: Request, env: Env): boolean {
+  if (!email) return false
+  return operatorAllowlist(request, env).has(email.trim().toLowerCase())
+}
+
+/**
  * The configured allowlist, lower-cased, or the local fallback described above.
  *
  * Both `OPERATOR_EMAILS` (a list) and `OPERATOR_EMAIL` (the singular the Gate-A
