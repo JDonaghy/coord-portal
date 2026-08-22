@@ -9,6 +9,7 @@ import {
   matchLeadsPath,
   postLeadMessage,
   postLeadReassign,
+  postLeadStartWork,
   promoteLeadAction,
 } from "./routes/leads"
 import { matchMockBundlePath, mockBundle } from "./routes/mocks"
@@ -123,6 +124,13 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
     // "THE FIFTH ROUTE", for why this lives here too.
     if (leadsMatch.kind === "reassign" && request.method === "POST") {
       return postLeadReassign(request, env, leadsMatch.id)
+    }
+    // Issue #132 — the operator "start work" override: skip the sign-off
+    // loop and land the attached submission on the customer-visible
+    // equivalent of Planned. Same operator gate, same route file, for the
+    // same reason #130's reassignment does — see `routes/leads.ts`.
+    if (leadsMatch.kind === "start-work" && request.method === "POST") {
+      return postLeadStartWork(request, env, leadsMatch.id)
     }
     // Any other method on a `/leads…` path gets the same 404 a non-operator
     // gets — see `src/operators.ts`. A 405 would confirm the path exists.

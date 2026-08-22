@@ -2,6 +2,7 @@ import { isBehindCloudflareEdge } from "../deployment"
 import { accessRefused, resolveSiteIdentity } from "../identity"
 import { escapeHtml, html, page, topbar } from "../render"
 import { derivedStatus, loadSignoffStates } from "../rounds"
+import { derivedStartWorkStatus, loadStartWorkStates } from "../startWork"
 import {
   customerFacingStatus,
   listSubmissionsForCustomer,
@@ -42,12 +43,26 @@ export async function submissionsDashboard(request: Request, env: Env): Promise<
       .filter((submission) => submission.status === "awaiting-signoff")
       .map((submission) => submission.reference),
   )
+  // Issue #132's operator override — same batched-lookup shape as
+  // `loadSignoffStates` just above, scoped to the one stored status
+  // (`describing`) whose truth can depend on it. See `src/startWork.ts`.
+  const startWorkStates = await loadStartWorkStates(
+    env,
+    submissions
+      .filter((submission) => submission.status === "describing")
+      .map((submission) => submission.reference),
+  )
   // `customerFacingStatus` applies issue #74's `on-hold` -> `in-progress`
   // collapse — the same mapping `detailFor` in `src/routes/submission.ts`
   // applies to the detail screen, so a row on this list and its own detail
   // screen never disagree about what the customer is shown.
   const displayOf = (submission: Submission): SubmissionStatus =>
-    customerFacingStatus(derivedStatus(submission.status, states.get(submission.reference) ?? null))
+    customerFacingStatus(
+      derivedStartWorkStatus(
+        derivedStatus(submission.status, states.get(submission.reference) ?? null),
+        startWorkStates.get(submission.reference) ?? null,
+      ),
+    )
 
   const rows = groupByProject(submissions, displayOf)
 
