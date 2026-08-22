@@ -1,4 +1,5 @@
 import { accountProfile, submitAccountProfile } from "./routes/account"
+import { clientDetail, clientsIndex, matchClientsPath } from "./routes/clients"
 import { submissionsDashboard } from "./routes/dashboard"
 import { deliveries } from "./routes/deliveries"
 import { frontDoor } from "./routes/home"
@@ -117,6 +118,21 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
   // operator-only. See `routes/requests.ts`.
   if (pathname === "/requests") {
     if (request.method === "GET") return requestsInbox(request, env)
+    return leadsNotFound()
+  }
+
+  // The operator's client list and per-client project view (#144) — "who are
+  // my customers" and "what projects does this customer have", the two
+  // questions `/leads` and `/deliveries` cannot answer. Owned here for every
+  // method, same reasoning as `/deliveries` just above. See `routes/clients.ts`.
+  const clientsMatch = matchClientsPath(pathname)
+  if (clientsMatch) {
+    if (clientsMatch.kind === "index" && request.method === "GET") {
+      return clientsIndex(request, env)
+    }
+    if (clientsMatch.kind === "detail" && request.method === "GET") {
+      return clientDetail(request, env, clientsMatch.id)
+    }
     return leadsNotFound()
   }
 
