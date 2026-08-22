@@ -269,6 +269,102 @@ export interface ClientProfileInput {
  * the row was minted by `clientCreationStatement` at promotion (#129) or by
  * `findOrCreateClientId` on the operator's side first.
  */
+/**
+ * One row per client for `GET /clients` (issue #144) — "who are my
+ * customers", the operator screen this repo did not have despite `clients`
+ * (#128) and `projects` (#109) both existing. Newest-client-first, matching
+ * every other operator list in this codebase (`listLeads`,
+ * `listProjectsForClient`) — see that function's own note on why "newest"
+ * means created-first rather than most-recently-active, which is instead one
+ * of the columns this type carries (`lastActivityAt`) rather than the sort
+ * key.
+ *
+ * `displayName` is `email` today, always — there is no `clients.name` column
+ * (0016 never added one; issue #144's own ask, "display name (or email if
+ * unnamed)", degrades to "email" for every client that exists until a future
+ * issue adds one). It is still its own field, not folded into `email`,
+ * because #144's contract draws them as two separate pieces of copy (a
+ * heading and a contact line) and a future name column should not have to
+ * touch this shape again to stop collapsing them.
+ */
+export interface ClientSummary {
+  id: string
+  email: string
+  displayName: string
+  createdAt: string
+  /** Every `projects` row with `client_id = this client`, per
+   * `listProjectsForClient` — never a project matched only by
+   * `customer_email` (see that function's own doc comment). */
+  projectCount: number
+  /** Every submission under one of this client's projects. */
+  submissionCount: number
+  /**
+   * The newest of: this client's own submissions' `created_at`, their
+   * projects' `created_at`, or (a client with neither yet — freshly minted by
+   * a reassignment, `findOrCreateClientId`) the client row's own `created_at`.
+   * "Most recent activity", per #144's own column list.
+   */
+  lastActivityAt: string
+}
+
+interface ClientSummaryRow {
+  id: string
+  email: string
+  created_at: string
+  project_count: number
+  submission_count: number
+  last_activity_at: string
+}
+
+/**
+ * Every client, most-recently-created first, each with the counts and
+ * last-activity timestamp `GET /clients` renders — one query rather than a
+ * `listProjectsForClient` + submissions fan-out per client, the same
+ * aggregate-in-SQL posture `loadSignoffStates` (`src/rounds.ts`) takes for
+ * "many rows' worth of derived facts in one round trip" rather than one D1
+ * subrequest per row.
+ *
+ * `LEFT JOIN`s throughout: a client with no projects yet (freshly created by
+ * a reassignment that has not yet moved anything onto it) must still appear,
+ * with zero counts, not be silently dropped by an inner join.
+ */
+export async function listClients(env: Env): Promise<ClientSummary[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT
+       c.id, c.email, c.created_at,
+       COUNT(DISTINCT p.id) AS project_count,
+       COUNT(DISTINCT s.id) AS submission_count,
+       MAX(COALESCE(s.created_at, p.created_at, c.created_at)) AS last_activity_at
+     FROM clients c
+     LEFT JOIN projects p ON p.client_id = c.id
+     LEFT JOIN submissions s ON s.project_id = p.id
+     GROUP BY c.id
+     ORDER BY c.created_at DESC, c.rowid DESC`,
+  ).all<ClientSummaryRow>()
+
+  return (results ?? []).map((row) => ({
+    id: row.id,
+    email: row.email,
+    displayName: row.email,
+    createdAt: row.created_at,
+    projectCount: row.project_count,
+    submissionCount: row.submission_count,
+    lastActivityAt: row.last_activity_at,
+  }))
+}
+
+/**
+ * The full profile row for `GET /clients/:id` (issue #144) — unlike
+ * `getClientById` above (identity columns only, for `routes/leads.ts`'s
+ * attachment rendering), this screen shows the same contact details
+ * `routes/account.ts` lets the customer maintain about themselves: phone, cc
+ * emails, address.
+ */
+export async function getClientProfileById(env: Env, id: string): Promise<Client | null> {
+  const row = await env.DB.prepare(`SELECT * FROM clients WHERE id = ?`).bind(id).first<ClientRow>()
+  return row ? fromRow(row) : null
+}
+
 export async function saveClientProfile(
   env: Env,
   email: string,
