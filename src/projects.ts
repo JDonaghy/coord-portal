@@ -1,3 +1,4 @@
+import { chunkForBinding } from "./d1"
 import { generateProjectId } from "./ids"
 import type { Env } from "./types"
 
@@ -100,6 +101,45 @@ function normalizeProjectName(raw: string | null | undefined): string | null {
 export async function getProject(env: Env, id: string): Promise<Project | null> {
   const row = await env.DB.prepare(`SELECT * FROM projects WHERE id = ?`).bind(id).first<ProjectRow>()
   return row ? fromRow(row) : null
+}
+
+/**
+ * Many projects by id, in as few queries as D1 allows — the customer's own
+ * `/submissions` (`routes/dashboard.ts`'s `groupByProject`/`projectRow`,
+ * issue #149) groups their submissions by project and needs each group's
+ * `name` to title its row through `projectTitleFromNewest`
+ * (`routes/leads.ts`) the same way every other screen does; a per-row
+ * `getProject` would spend one D1 subrequest per project row on a page that
+ * can list many. Same `chunkForBinding` split `loadSignoffStates`
+ * (`src/rounds.ts`) already uses, and for the identical reason — a caller
+ * with more than `D1_MAX_BOUND_PARAMS` projects on one page must not become
+ * `D1_ERROR: too many SQL variables` (see #104's own fix for the sibling
+ * case of this on `/requests`).
+ *
+ * Returns a map keyed by id; an id with no matching row (should not happen
+ * for a `projectId` read off a submission, but this is a caller-supplied
+ * list) is simply absent from the result rather than an error, the same
+ * "missing means absent" convention `loadSignoffStates` and
+ * `loadStartWorkStates` already use for their own maps.
+ */
+export async function getProjectsByIds(env: Env, ids: string[]): Promise<Map<string, Project>> {
+  const projects = new Map<string, Project>()
+  if (ids.length === 0) return projects
+
+  const batches = await Promise.all(
+    chunkForBinding(ids).map(async (chunk) => {
+      const placeholders = chunk.map(() => "?").join(", ")
+      const { results } = await env.DB.prepare(`SELECT * FROM projects WHERE id IN (${placeholders})`)
+        .bind(...chunk)
+        .all<ProjectRow>()
+      return results ?? []
+    }),
+  )
+
+  for (const row of batches.flat()) {
+    projects.set(row.id, fromRow(row))
+  }
+  return projects
 }
 
 /**

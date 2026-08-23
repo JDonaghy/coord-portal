@@ -1,6 +1,7 @@
 import { isBehindCloudflareEdge } from "../deployment"
 import { accessRefused, resolveSiteIdentity } from "../identity"
 import { isOperatorEmail } from "../operators"
+import { getProjectsByIds, type Project } from "../projects"
 import { escapeHtml, html, page, topbar } from "../render"
 import { derivedStatus, loadSignoffStates } from "../rounds"
 import { derivedStartWorkStatus, loadStartWorkStates } from "../startWork"
@@ -13,6 +14,7 @@ import {
   type SubmissionStatus,
 } from "../submissions"
 import type { Env } from "../types"
+import { projectTitleFromNewest } from "./leads"
 
 /**
  * GET /submissions
@@ -67,6 +69,19 @@ export async function submissionsDashboard(request: Request, env: Env): Promise<
 
   const rows = groupByProject(submissions, displayOf)
 
+  // Issue #149: every grouped project row needs its own `project.name` to
+  // title itself the same way `/clients/:id` and `/projects/:id` already do
+  // — `DashboardRow`'s `"project"` variant only ever carried a bare
+  // `projectId`, so without this a name set by an operator would read
+  // correctly everywhere except the customer's own `/submissions`, the exact
+  // "one project, two titles" instability #149 exists to close. One batched
+  // `getProjectsByIds` for every distinct project id on this page, not one
+  // `getProject` per row — same reasoning as `loadSignoffStates` just above.
+  const projects = await getProjectsByIds(
+    env,
+    rows.filter((row): row is DashboardRow & { kind: "project" } => row.kind === "project").map((row) => row.projectId),
+  )
+
   // Additive to the ownership scoping above, never a substitute for it: this
   // decides only whether the nav's operator section (Leads, Deliveries)
   // appears, checked against the identity already resolved above rather than
@@ -75,7 +90,7 @@ export async function submissionsDashboard(request: Request, env: Env): Promise<
   // finding on double JWT verification).
   const isOperator = isOperatorEmail(email, request, env)
 
-  return html(page("My requests — coord-portal", dashboard(email, isOperator, rows)))
+  return html(page("My requests — coord-portal", dashboard(email, isOperator, rows, projects)))
 }
 
 /**
@@ -169,20 +184,27 @@ function groupByProject(
   )
 }
 
-function dashboard(email: string | null, isOperator: boolean, rows: DashboardRow[]): string {
+function dashboard(
+  email: string | null,
+  isOperator: boolean,
+  rows: DashboardRow[],
+  projects: Map<string, Project>,
+): string {
   return `${topbar(email, "dashboard", isOperator)}
 <main>
   <div class="page-head">
     <h1>My requests</h1>
     <a class="button primary" href="/intake" data-testid="nav-new-cta">New request</a>
   </div>
-  ${rows.length > 0 ? list(rows) : empty()}
+  ${rows.length > 0 ? list(rows, projects) : empty()}
 </main>`
 }
 
-function list(rows: DashboardRow[]): string {
+function list(rows: DashboardRow[], projects: Map<string, Project>): string {
   return `<ul class="submission-list" data-testid="submission-list">
-${rows.map((entry) => (entry.kind === "project" ? projectRow(entry) : submissionRow(entry))).join("\n")}
+${rows
+    .map((entry) => (entry.kind === "project" ? projectRow(entry, projects) : submissionRow(entry)))
+    .join("\n")}
   </ul>`
 }
 
@@ -211,17 +233,26 @@ function submissionRow({
  * is that the customer should not have to know which submission covers which
  * round.
  *
- * `submissions[0]` is the newest member — `groupByProject` guarantees that —
- * so its title stands in for the project's ("what this is currently about")
- * and its reference anchors the meta line the same way a standalone row's
- * does. The count makes the grouping itself legible instead of a customer
- * wondering why one row's reference does not match what they remember
- * submitting.
+ * Titled with issue #149's `project.name` when an operator has set one
+ * (looked up from `projects`, batched by `getProjectsByIds` in the caller),
+ * otherwise the pre-#149 derivation: `submissions[0]` is the newest member
+ * (`groupByProject` guarantees that), so its own `titleOf` stands in for the
+ * project's ("what this is currently about"). Without the `projects` lookup
+ * this row would read the old derived title forever, even after an operator
+ * names the project — the exact "one project, two titles" gap #149's own
+ * review caught, since every *other* screen (`/clients/:id`, `/projects/:id`,
+ * the lead detail) already prefers the name. `newest.reference` anchors the
+ * meta line the same way a standalone row's does, and the count makes the
+ * grouping itself legible instead of a customer wondering why one row's
+ * reference does not match what they remember submitting.
  */
-function projectRow({ projectId, submissions, display }: DashboardRow & { kind: "project" }): string {
+function projectRow(
+  { projectId, submissions, display }: DashboardRow & { kind: "project" },
+  projects: Map<string, Project>,
+): string {
   const newest = submissions[0]
   if (!newest) return ""
-  const title = titleOf(newest)
+  const title = projectTitleFromNewest(projects.get(projectId) ?? null, newest)
   const requestCount = submissions.length
   const countLabel = requestCount === 1 ? "1 request" : `${requestCount} requests`
   return `    <li>

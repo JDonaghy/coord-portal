@@ -484,30 +484,53 @@ async function attachmentInfo(
 }
 
 /**
- * A project's display title — issue #149's `project.name` when an operator
- * has set one, otherwise the pre-#149 derivation this contract's own "Project
- * 1" section describes: the first line of the newest submission's own
- * `titleOf`, same convention the dashboard and `/projects/:id` already use.
- * A project offered here always has at least one submission (the one it was
- * created to hold — see the "create a new project" branch of
- * `applyReassignmentChoice` below, which attaches a submission in the same
- * breath it creates the project), so the empty-project "Untitled project"
- * fallback is not reachable through this screen; it exists only as a
- * defensive backstop, not a rendering this contract pins.
+ * A project's display title given a newest submission the caller already has
+ * in hand — issue #149's `project.name` when an operator has set one,
+ * otherwise the pre-#149 derivation this contract's own "Project 1" section
+ * describes: the first line of the newest submission's own `titleOf`, same
+ * convention the dashboard and `/projects/:id` already use.
  *
  * This is the one function every screen that shows a project's title reads
- * through — the lead detail's reassignment panel, the client-match card, and
- * (via `routes/project.ts`'s own import of this function) the customer's own
- * `/projects/:id` — so an operator-set name reads identically everywhere, not
- * just here. That last point is deliberate, not incidental: a name is
- * customer-visible copy the moment it is set, never operator-only shorthand
- * — see `Project.name`'s own doc comment in `src/projects.ts` for the full
- * reasoning.
+ * through, directly or via `projectTitle` below — the lead detail's
+ * reassignment panel, the client-match card, the operator's own
+ * `/clients/:id` (`routes/clients.ts`'s `projectBlock`), the customer's own
+ * `/submissions` project row (`routes/dashboard.ts`'s `projectRow`) and
+ * `/projects/:id` (`routes/project.ts`) — so an operator-set name reads
+ * identically everywhere, not just here. That last point is deliberate, not
+ * incidental: a name is customer-visible copy the moment it is set, never
+ * operator-only shorthand — see `Project.name`'s own doc comment in
+ * `src/projects.ts` for the full reasoning.
+ *
+ * Split out from `projectTitle` so a caller that already fetched its
+ * project's newest submission (every screen above except the reassignment
+ * panel, which offers a project with no submissions loaded) can reuse it
+ * instead of `projectTitle` re-querying for the same row.
+ *
+ * `project` accepts `null` for one caller only — `routes/dashboard.ts`'s
+ * `projectRow`, whose batched `getProjectsByIds` lookup is keyed by a
+ * caller-supplied `projectId` and so cannot statically guarantee a hit — and
+ * treats a missing project exactly like one with no name: fall back to the
+ * derivation, rather than the row losing a title entirely.
+ */
+export function projectTitleFromNewest(project: Project | null, newest: Submission | null): string {
+  if (project?.name) return project.name
+  return newest ? titleOf(newest) : "Untitled project"
+}
+
+/**
+ * `projectTitleFromNewest` for a caller that has not already fetched a
+ * newest submission — the lead detail's reassignment panel and client-match
+ * card, where a project is offered by id alone. A project offered here
+ * always has at least one submission (the one it was created to hold — see
+ * the "create a new project" branch of `applyReassignmentChoice` below,
+ * which attaches a submission in the same breath it creates the project), so
+ * the empty-project "Untitled project" fallback is not reachable through
+ * this screen; it exists only as a defensive backstop, not a rendering this
+ * contract pins.
  */
 export async function projectTitle(env: Env, project: Project): Promise<string> {
-  if (project.name) return project.name
   const newest = await getNewestSubmissionForProject(env, project.id)
-  return newest ? titleOf(newest) : "Untitled project"
+  return projectTitleFromNewest(project, newest)
 }
 
 /**

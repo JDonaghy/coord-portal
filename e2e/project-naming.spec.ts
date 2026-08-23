@@ -20,6 +20,21 @@ import { expect, test, type APIRequestContext, type Browser, type Page } from "@
  * on `/requests/:id`'s own reassign panel (`routes/requests.ts` never reads
  * it), and the usual access-control refusal.
  *
+ * Also covers the two screens a first review round of this issue found still
+ * reading the pre-#149 derived title instead of `project.name`: the
+ * operator's own client detail screen (`/clients/:id`'s `client-project`
+ * card, `routes/clients.ts`) — the primary motivating case #149 names by
+ * issue number (#144) — and the customer's own `/submissions` grouped
+ * project row (`routes/dashboard.ts`'s `projectRow`), whose `DashboardRow`
+ * shape did not even carry a fetched `Project` to read a name from until
+ * this fix. Both need a project with *two* submissions grouped under it —
+ * one submission alone never renders as a `project-row` (see
+ * `routes/dashboard.ts`'s own carve-out for issue #129) and a title that
+ * happened to equal the derived one would not prove anything — so both tests
+ * below promote two leads sharing one email and let #129's own client match
+ * join the second to the first's project, the same shape
+ * `e2e/clients.spec.ts` already uses for its own multi-submission project.
+ *
  * Every string below is invented — see CLAUDE.md rule 1.
  */
 
@@ -263,4 +278,87 @@ test("a stranger and a non-operator cannot rename a project", async ({ browser, 
     failOnStatusCode: false,
   })
   expect(unknownLead.status()).toBe(404)
+})
+
+test("a renamed project's chosen name appears on the operator's own /clients/:id, not the derived title", async ({
+  browser,
+  baseURL,
+}) => {
+  const tag = nonce()
+  const email = `naming-clients-${tag}@example.test`
+  const firstSummary = `A synthetic first booking for the client-detail naming check (${tag}).`
+  const secondSummary = `A synthetic follow-up for the client-detail naming check (${tag}).`
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+
+  // Two leads, same email — #129's own client match joins the second to the
+  // first lead's project (`e2e/clients.spec.ts` exercises this identical
+  // shape), so this project's derived title (had it stayed derived) would
+  // read as the *second* lead's own summary, not the first's — proof this
+  // assertion is actually reading `project.name`, not coincidentally
+  // agreeing with the derivation.
+  await seedPromotedLead(browser, baseURL, operator, firstSummary, email)
+  const { path: secondPath } = await seedPromotedLead(browser, baseURL, operator, secondSummary, email)
+
+  await operator.goto(secondPath)
+  await expect(operator.getByTestId("rename-project-card")).toBeVisible()
+  const chosenName = `Client detail naming check (${tag})`
+  await operator.getByTestId("rename-project-input").fill(chosenName)
+  await operator.getByTestId("rename-project-submit").click()
+  await expect(operator.getByTestId("rename-project-input")).toHaveValue(chosenName)
+
+  await operator.goto("/clients")
+  const clientRow = operator.getByTestId("client-row").filter({ hasText: email })
+  await clientRow.getByTestId("view-client").click()
+
+  // One shared project (the two leads joined the same one), one
+  // `client-project` card, and its title reads the operator-chosen name
+  // outright rather than deriving from either submission's own outcome —
+  // the primary motivating screen #149 names by issue number (#144).
+  const projectTitleEl = operator.getByTestId("client-project-title")
+  await expect(projectTitleEl).toHaveCount(1)
+  await expect(projectTitleEl).toHaveText(chosenName)
+
+  await operatorContext.close()
+})
+
+test("a renamed project's chosen name appears on the customer's own /submissions project row, not just /projects/:id", async ({
+  browser,
+  baseURL,
+}) => {
+  const tag = nonce()
+  const email = `naming-dashboard-${tag}@example.test`
+  const firstSummary = `A synthetic first booking for the dashboard naming check (${tag}).`
+  const secondSummary = `A synthetic follow-up for the dashboard naming check (${tag}).`
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+
+  await seedPromotedLead(browser, baseURL, operator, firstSummary, email)
+  const { path: secondPath } = await seedPromotedLead(browser, baseURL, operator, secondSummary, email)
+
+  await operator.goto(secondPath)
+  await expect(operator.getByTestId("rename-project-card")).toBeVisible()
+  const chosenName = `Dashboard naming check (${tag})`
+  await operator.getByTestId("rename-project-input").fill(chosenName)
+  await operator.getByTestId("rename-project-submit").click()
+  await expect(operator.getByTestId("rename-project-input")).toHaveValue(chosenName)
+  await operatorContext.close()
+
+  const customerContext = await contextFor(browser, baseURL, email)
+  const customer = await customerContext.newPage()
+  await customer.goto("/submissions")
+
+  // Two submissions sharing one project collapse into a single `project-row`
+  // (`groupByProject`, `routes/dashboard.ts`) — before this fix that row's
+  // title came straight from `titleOf(newest)`, ignoring `project.name`
+  // entirely, so the customer's own request list still showed the old
+  // unstable, derived title for a project the operator had just named.
+  const projectRow = customer.getByTestId("project-row")
+  await expect(projectRow).toHaveCount(1)
+  await expect(projectRow).toContainText(chosenName)
+  await expect(projectRow).not.toContainText(secondSummary)
+
+  await customerContext.close()
 })
