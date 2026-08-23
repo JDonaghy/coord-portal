@@ -22,12 +22,35 @@ issues:
     - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › a submission is a durable record, not a live session"
     - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › a fresh submission shows the customer no design round"
     - "[chromium] ms-1/09-intake.spec.ts › ms-1 issue 9 async intake › no engineer-side identifier reaches the intake surface"
+  # #10's slice was EXTENDED 2026-08-22 against contract.md as amended by note 2
+  # (issue #107, 2026-08-18): `quality-check` is promoted from
+  # not-customer-actionable to customer-actionable in the pinned vocabulary
+  # table. The original sealed slice (94bef08) predates that amendment and
+  # still treated `quality-check` as one of "the four" read-only rollup states.
+  # Same convention as #14's analogous extension a few lines below: two ids are
+  # RENAMED in place to match the amended counts (old ids are gone on purpose
+  # and must not be restored):
+  #
+  #   "only the two customer-actionable states ask the customer for anything"
+  #     → "only the three customer-actionable states ask the customer for anything"
+  #   "the four rollup states share one read-only template"
+  #     → "the three rollup states share one read-only template"
+  #
+  # ...and two ids are ADDED, asserting the amendment's consequences directly:
+  #
+  #   "quality-check now asks the customer to act, per the #107 amendment"
+  #   "quality-check's actionable screen still hides internal churn"
+  #
+  # All other ids are unchanged from the original slice and were re-verified
+  # green against the current suite as part of this extension.
   10:
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › every customer status renders its pinned wording on the detail screen"
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › no status outside the fixed vocabulary ever reaches the customer"
-    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › only the two customer-actionable states ask the customer for anything"
-    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › the four rollup states share one read-only template"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › only the three customer-actionable states ask the customer for anything"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › the three rollup states share one read-only template"
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › internal churn stays hidden inside the rollup states"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › quality-check now asks the customer to act, per the #107 amendment"
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › quality-check's actionable screen still hides internal churn"
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › the dashboard renders each status with the same wording as its detail"
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › a submission shows exactly one status at a time"
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › the portal renders the status it is given and derives none of its own"
@@ -236,7 +259,21 @@ issues:
 #   - "the pipeline breathing never reaches the customer's inbox" is the same
 #     ratchet for the churn path — its cycle no longer bounces through
 #     `quality-check`, so it stays green and must.
+#
+# #10's one entry below was measured red 2026-08-22 (`npm run test:acceptance
+# -- 10-up-mapping`: 10 passed, 1 failed) against contract.md as amended by
+# note 2 (issue #107) — the daemon-side render for `quality-check` has not yet
+# been updated to show an approve/request-changes affordance:
+#
+#   quality-check now asks the customer to act, per the #107 amendment
+#
+# Every other id in #10's block above, including the two renamed ones and the
+# other new one ("quality-check's actionable screen still hides internal
+# churn"), was measured GREEN in the same run and is deliberately NOT listed
+# here — they are the regression net for this extension, not casualties of it.
 expected_red:
+  10:
+    - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › quality-check now asks the customer to act, per the #107 amendment"
   14:
     - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › a preview ready for approval sends the customer exactly one email"
     - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › shipped work sends the customer exactly one final email"
