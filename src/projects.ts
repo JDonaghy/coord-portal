@@ -7,14 +7,32 @@ import type { Env } from "./types"
  * project with a combined history" was the gap; this is the table that
  * closes it.
  *
- * A project is deliberately thin: who it belongs to and when it started.
- * Everything else a screen shows about it — its title, its current status,
- * its timeline — is derived from the submissions under it, the same way a
- * submission's customer-visible status is derived rather than duplicated
- * (`src/rounds.ts`'s `derivedStatus`). See `migrations/0012_projects.sql` for
- * the rest of the schema reasoning, and `NewSubmissionInput.followUpFrom` in
- * `src/submissions.ts` for the one deliberate way a submission ever joins
- * one — never an inferred match on `customer_email` alone.
+ * `id`, who it belongs to, and when it started are the only facts this row
+ * has ever stored on its own — everything else a screen shows about it, its
+ * current status and its timeline, is still derived from the submissions
+ * under it, the same way a submission's customer-visible status is derived
+ * rather than duplicated (`src/rounds.ts`'s `derivedStatus`). See
+ * `migrations/0012_projects.sql` for the rest of that reasoning, and
+ * `NewSubmissionInput.followUpFrom` in `src/submissions.ts` for the one
+ * deliberate way a submission ever joins one — never an inferred match on
+ * `customer_email` alone.
+ *
+ * `name` (issue #149, `migrations/0018_project_name.sql`) is the one
+ * exception to "thin": a project's title used to be *only* ever derived — the
+ * first line of whichever submission under it happens to be newest — and
+ * that title silently changed every time the customer filed a follow-up,
+ * with no stable handle an operator holding many clients' many projects
+ * could build a mental index against. `name` is nullable and defaults to
+ * `null` ("not named") for every project that predates this column, and for
+ * every one a customer's own follow-up still mints today
+ * (`projectAssignmentForFollowUp` below never sets it — naming is an
+ * operator act on a customer relationship, not something inferred from a
+ * customer's own words); `null` still renders exactly as before, via the
+ * same derivation. A name is also not "state" in the sense the paragraph
+ * above guards against — there is no derived truth for it to disagree with,
+ * it is a customer-relationship fact with no other representation anywhere,
+ * exactly the kind of fact this repo's single-writer-per-fact rule
+ * (`CLAUDE.md`) makes the portal the sole owner of.
  */
 export interface Project {
   id: string
@@ -31,6 +49,21 @@ export interface Project {
    * promotion (`src/clients.ts`) ever does.
    */
   clientId: string | null
+  /**
+   * An operator-chosen label, or `null` — "not named", the state of every
+   * project before issue #149 and of every one a customer's own follow-up
+   * still mints. `projectTitle` (`routes/leads.ts`) is the one place this is
+   * ever turned into a display string: it wins outright over the derived
+   * title when set, and falls back to the pre-#149 derivation when `null`.
+   *
+   * Deliberately not operator-only internal shorthand: it is read back by
+   * that same `projectTitle` on the customer's own `/projects/:id`
+   * (`routes/project.ts`), so it is customer-visible copy the moment it is
+   * set — an operator naming a project should pick something they are fine
+   * with the client seeing, not a code word. See `routes/project.ts`'s own
+   * doc comment for the fuller reasoning behind that choice.
+   */
+  name: string | null
 }
 
 interface ProjectRow {
@@ -38,6 +71,7 @@ interface ProjectRow {
   customer_email: string | null
   created_at: string
   client_id: string | null
+  name: string | null
 }
 
 function fromRow(row: ProjectRow): Project {
@@ -46,7 +80,20 @@ function fromRow(row: ProjectRow): Project {
     customerEmail: row.customer_email,
     createdAt: row.created_at,
     clientId: row.client_id,
+    name: row.name,
   }
+}
+
+/**
+ * Blank and whitespace-only collapse to `null` — "not named" — the same
+ * convention `routes/account.ts`'s own `optionalField` uses for a client's
+ * optional profile fields. Shared by `createClientProject` (naming a project
+ * at the moment it is minted) and `renameProject` below (naming or clearing
+ * one afterward), so the two never drift on what counts as blank.
+ */
+function normalizeProjectName(raw: string | null | undefined): string | null {
+  const trimmed = typeof raw === "string" ? raw.trim() : ""
+  return trimmed === "" ? null : trimmed
 }
 
 /** A durable lookup by row id — same shape as `getSubmission`. */
@@ -78,22 +125,51 @@ export async function listProjectsForClient(env: Env, clientId: string): Promise
  * "create a new project instead" half of issue #130's reassignment panel,
  * and (unlike `projectAssignmentForFollowUp`) not conditional on anything:
  * the caller already knows a submission is about to move into it.
+ *
+ * `name` (issue #149) is optional and defaults to `null` — the caller (the
+ * "start a new project instead" branch of `applyReassignmentChoice`,
+ * `routes/leads.ts`) offers the operator a field to name it inline, but a
+ * blank submit is not an error, it just leaves the project deriving its
+ * title the way every project before this issue always has.
  */
 export async function createClientProject(
   env: Env,
   clientId: string,
   customerEmail: string | null,
+  name: string | null = null,
 ): Promise<Project> {
   const id = generateProjectId()
   const createdAt = new Date().toISOString()
+  const normalizedName = normalizeProjectName(name)
 
   await env.DB.prepare(
-    `INSERT INTO projects (id, customer_email, client_id, created_at) VALUES (?, ?, ?, ?)`,
+    `INSERT INTO projects (id, customer_email, client_id, created_at, name) VALUES (?, ?, ?, ?, ?)`,
   )
-    .bind(id, customerEmail, clientId, createdAt)
+    .bind(id, customerEmail, clientId, createdAt, normalizedName)
     .run()
 
-  return { id, customerEmail, clientId, createdAt }
+  return { id, customerEmail, clientId, createdAt, name: normalizedName }
+}
+
+/**
+ * Sets, changes or clears a project's own name — issue #149's "an operator
+ * can rename an existing one." A blank `rawName` is not an error: it clears
+ * the name back to `null`, which is exactly "go back to deriving the title
+ * from the newest submission" (`projectTitle`, `routes/leads.ts`), not a
+ * failure mode — same convention `normalizeProjectName` already gives
+ * `createClientProject`.
+ *
+ * A plain, unconditional `UPDATE`, not a returned-for-batching statement like
+ * the guarded writes below: renaming has no doubled-submit race to protect
+ * against the way promoting a lead or filing a first follow-up does — an
+ * operator typing into one field on one screen and a customer's concurrent
+ * follow-up landing on the very same project are independent facts, and the
+ * worst a genuine double-click here does is write the same value twice.
+ */
+export async function renameProject(env: Env, id: string, rawName: string | null): Promise<void> {
+  await env.DB.prepare(`UPDATE projects SET name = ? WHERE id = ?`)
+    .bind(normalizeProjectName(rawName), id)
+    .run()
 }
 
 /**
@@ -124,6 +200,10 @@ export async function createClientProject(
  * directly — `projectIdExpr` below reads it back live, inside the same
  * transaction, from whatever the origin row's `project_id` actually is by the
  * time the submission itself is inserted.
+ *
+ * This `INSERT` never sets `name` (issue #149) — naming is an operator act on
+ * a customer relationship, and a customer's own "Start a follow-up" is the
+ * one path in this codebase that is explicitly not that.
  */
 export function projectAssignmentForFollowUp(
   env: Env,
@@ -168,6 +248,13 @@ export function projectAssignmentForFollowUp(
  * this one, matches zero rows. Neither takes `src/submissions.ts`'s
  * `CreateGuard` shape; there is exactly one caller and exactly one condition,
  * so a `leadId` parameter says the same thing with less indirection.
+ *
+ * Neither statement below takes a `name` (issue #149): letting an operator
+ * name a project at the moment promotion itself mints it is issue #124's own
+ * "default-create" scope, not this one's — every project either of these
+ * statements creates keeps minting with `name IS NULL`, deriving its title
+ * exactly as it always has, until #124 adds its own path. `createClientProject`
+ * above, and `renameProject`, are #149's own writers.
  */
 
 /**

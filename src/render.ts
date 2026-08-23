@@ -235,7 +235,7 @@ const APP_STYLES = `
   header.topbar .signout:hover { color: var(--accent); }
   main { max-width: 44rem; margin: 0 auto; padding: 0 1rem 3rem; }
 
-  form.intake, form.lead, form.account { display: grid; gap: 1.25rem; }
+  form.intake, form.lead, form.account, form.rename-project { display: grid; gap: 1.25rem; }
   .field { display: grid; gap: 0.4rem; }
   .field label { font-weight: 600; font-size: var(--step--1); color: var(--text); }
   .field .hint { color: var(--text-faint); font-size: var(--step--1); font-weight: 400; }
@@ -550,6 +550,18 @@ const APP_STYLES = `
     padding: 0.6rem 0.85rem; cursor: pointer;
   }
   .reassign-form .actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem; }
+  /* The optional inline name field (issue #149) on "Start a new project
+     instead" — indented under the radio it belongs to, rather than reading
+     as its own unrelated field in the fieldset's grid. */
+  .reassign-new-project-name { margin: 0.25rem 0 0 1.75rem; }
+
+  /* ── Naming a project after the fact (issue #149) ─────────────────────────
+     src/routes/leads.ts's renameProjectSection, on every promoted lead with
+     a project. Reuses form.rename-project's shared grid layout above and the
+     generic .field/.hint/.actions rules every other form on this sheet
+     already defines — this block only carries what is unique to the card
+     wrapping it. */
+  .rename-project-card { margin-top: 1.5rem; }
 
   /* ── The combined project view (issue #109) ───────────────────────────────
      routes/project.ts. No dedicated mock — this screen postdates the Gate-A
