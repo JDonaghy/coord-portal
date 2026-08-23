@@ -235,7 +235,7 @@ const APP_STYLES = `
   header.topbar .signout:hover { color: var(--accent); }
   main { max-width: 44rem; margin: 0 auto; padding: 0 1rem 3rem; }
 
-  form.intake, form.lead, form.account, form.rename-project { display: grid; gap: 1.25rem; }
+  form.intake, form.lead, form.account, form.rename-project, form.client-merge { display: grid; gap: 1.25rem; }
   .field { display: grid; gap: 0.4rem; }
   .field label { font-weight: 600; font-size: var(--step--1); color: var(--text); }
   .field .hint { color: var(--text-faint); font-size: var(--step--1); font-weight: 400; }
@@ -269,6 +269,14 @@ const APP_STYLES = `
     border-radius: var(--r-md); padding: 0.85rem 1rem; font-size: var(--step--1);
     margin-bottom: 1.5rem; font-weight: 600;
   }
+  /* Issue #150's merge form (routes/clients.ts) — same shape as .lead-error
+     above, its own class only so it never fights that one's margin for a
+     different layout context. */
+  .client-merge-error {
+    background: var(--fail-wash); color: var(--fail); border: 1px solid var(--fail);
+    border-radius: var(--r-md); padding: 0.75rem 1rem; font-size: var(--step--1);
+    font-weight: 600; margin-bottom: 1rem;
+  }
 
   .status-pill {
     display: inline-flex; align-items: center; gap: 0.4em;
@@ -276,6 +284,11 @@ const APP_STYLES = `
     font-size: var(--step--1); font-weight: 600;
   }
   .status-pill[data-status="describing"] { background: var(--idle-wash); color: var(--idle); }
+  /* Issue #150 — a merged-away client's badge on /clients (mergedIntoBadge,
+     routes/clients.ts). Neutral, same treatment "describing" gets above —
+     a merge is an ordinary, expected outcome of an operator's own action,
+     not a failure state to flag in red. */
+  .status-pill[data-status="merged"] { background: var(--idle-wash); color: var(--idle); }
 
   .receipt { text-align: center; padding: 2rem 1rem; }
   .receipt .ref {

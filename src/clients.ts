@@ -8,7 +8,7 @@ import type { Env } from "./types"
  * deferred: "Lead promotion linking, project reassignment and the client
  * profile page are the other issues under epic #122 that build on this."
  *
- * Three callers, deliberately kept as separate entry points:
+ * Four callers, deliberately kept as separate entry points:
  *
  *  - `leads.ts` (#129, lead promotion) needs the match decision
  *    (`getClientRecordByEmail`) and the one guarded, batchable `INSERT`
@@ -20,6 +20,11 @@ import type { Env } from "./types"
  *  - `routes/account.ts` (#131, the client's own self-service profile) is the
  *    only caller that reads or writes the profile columns —
  *    `getClientByEmail` / `saveClientProfile`.
+ *  - `routes/clients.ts` (#150, "merge client B into client A") is the only
+ *    caller of `mergeClients` / `listMergedClients` — see `mergeClients`'
+ *    own doc comment below for why this is operator-side grouping only, and
+ *    deliberately never touches `submissions.customer_email` or
+ *    `projects.customer_email`.
  *
  * `phone`, `ccEmails` and `address` are the only writable columns — `email`
  * is the row's identity (`clients.email UNIQUE`) and is never written by this
@@ -98,6 +103,15 @@ export interface Client {
   ccEmails: string | null
   address: string | null
   createdAt: string
+  /**
+   * The surviving `clients.id` this row was merged into (issue #150,
+   * `migrations/0019_client_merge.sql`), or `null` for every row that was
+   * never merged away — which is every row before that migration, and most
+   * rows after it. See `mergeClients` below for the only writer.
+   */
+  mergedInto: string | null
+  /** The companion timestamp to `mergedInto` — `null` exactly when it is. */
+  mergedAt: string | null
 }
 
 interface ClientRow {
@@ -107,6 +121,8 @@ interface ClientRow {
   cc_emails: string | null
   address: string | null
   created_at: string
+  merged_into: string | null
+  merged_at: string | null
 }
 
 function fromRow(row: ClientRow): Client {
@@ -117,6 +133,8 @@ function fromRow(row: ClientRow): Client {
     ccEmails: row.cc_emails,
     address: row.address,
     createdAt: row.created_at,
+    mergedInto: row.merged_into,
+    mergedAt: row.merged_at,
   }
 }
 
@@ -305,6 +323,16 @@ export interface ClientSummary {
    * "Most recent activity", per #144's own column list.
    */
   lastActivityAt: string
+  /**
+   * The email of the client this row was merged into (issue #150), or `null`
+   * for every row that was never merged away. `clientRow` (`routes/clients
+   * .ts`) uses this to badge a merged-away row instead of hiding it — see
+   * #150's own "the merge is visible after the fact" requirement. Note this
+   * is already the *email*, not the id: `listClients` joins `clients` to
+   * itself on `merged_into` so this screen never has to look the survivor up
+   * a second time just to name it.
+   */
+  mergedIntoEmail: string | null
 }
 
 interface ClientSummaryRow {
@@ -314,6 +342,7 @@ interface ClientSummaryRow {
   project_count: number
   submission_count: number
   last_activity_at: string
+  merged_into_email: string | null
 }
 
 /**
@@ -334,10 +363,12 @@ export async function listClients(env: Env): Promise<ClientSummary[]> {
        c.id, c.email, c.created_at,
        COUNT(DISTINCT p.id) AS project_count,
        COUNT(DISTINCT s.id) AS submission_count,
-       MAX(COALESCE(s.created_at, p.created_at, c.created_at)) AS last_activity_at
+       MAX(COALESCE(s.created_at, p.created_at, c.created_at)) AS last_activity_at,
+       survivor.email AS merged_into_email
      FROM clients c
      LEFT JOIN projects p ON p.client_id = c.id
      LEFT JOIN submissions s ON s.project_id = p.id
+     LEFT JOIN clients survivor ON survivor.id = c.merged_into
      GROUP BY c.id
      ORDER BY c.created_at DESC, c.rowid DESC`,
   ).all<ClientSummaryRow>()
@@ -350,6 +381,7 @@ export async function listClients(env: Env): Promise<ClientSummary[]> {
     projectCount: row.project_count,
     submissionCount: row.submission_count,
     lastActivityAt: row.last_activity_at,
+    mergedIntoEmail: row.merged_into_email,
   }))
 }
 
@@ -389,4 +421,148 @@ export async function saveClientProfile(
   const client = await getClientByEmail(env, email)
   if (!client) throw new Error("saveClientProfile: upsert did not produce a readable row")
   return client
+}
+
+/**
+ * Every distinct failure `mergeClients` refuses on — self-merge, an id that
+ * does not name a `clients` row, or a merge that would chain (see the
+ * function's own doc comment). `routes/clients.ts` catches this and renders
+ * `error.message` back on the merge form, the same "malformed input gets a
+ * message, not a 500" posture `postLeadMessage` already takes for a blank
+ * message body.
+ */
+export class ClientMergeError extends Error {}
+
+/** One row `listMergedClients` returns — just enough for `routes/clients.ts`'
+ * "merged clients" section on the surviving client's own detail page. */
+export interface MergedClient {
+  id: string
+  email: string
+  mergedAt: string
+}
+
+interface MergedClientRow {
+  id: string
+  email: string
+  merged_at: string
+}
+
+/**
+ * The reverse of `mergeClients`' own write — every client folded into
+ * `survivingId`, oldest merge first. This is how #150's "the merge is
+ * visible after the fact" requirement is met on the surviving client's own
+ * page: not by inferring it from `cc_emails` (which also carries addresses a
+ * customer entered themselves via `saveClientProfile`, #131, and cannot be
+ * told apart from a merge-sourced one once both are joined into one string),
+ * but from `merged_into`, which only `mergeClients` ever writes.
+ */
+export async function listMergedClients(env: Env, survivingId: string): Promise<MergedClient[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT id, email, merged_at FROM clients WHERE merged_into = ? ORDER BY merged_at ASC, rowid ASC`,
+  )
+    .bind(survivingId)
+    .all<MergedClientRow>()
+  return (results ?? []).map((row) => ({ id: row.id, email: row.email, mergedAt: row.merged_at }))
+}
+
+/**
+ * Issue #150 — "an operator can merge client B into client A, after the fact
+ * ... every `projects.client_id` pointing at B is repointed to A in the same
+ * batch as B's removal ... B's address is preserved on A ... `submissions
+ * .customer_email` and `projects.customer_email` are NOT rewritten."
+ *
+ * This is deliberately operator-side grouping ONLY — the issue is explicit
+ * that widening customer-side visibility (`isOwnedBy`, `src/routes/submission
+ * .ts`) is a separate, dangerous decision this function must not make by
+ * accident: it never touches `submissions.customer_email` or
+ * `projects.customer_email`, so `isOwnedBy`'s exact-match check keeps working
+ * exactly as it did before this issue, for every submission either client
+ * ever filed.
+ *
+ * ── WHY `cc_emails`, AND WHY IT NEEDS SAYING HERE ───────────────────────────
+ * `cc_emails` (0016) has meant "addresses to copy on mail" to every reader
+ * since #131 — a comma-separated TEXT column the customer's own profile form
+ * writes and nothing yet read. This function is the second writer, and gives
+ * it a second meaning: an address a merge folded in is also appended here, so
+ * the relationship is not lost the moment B's own row stops being the place
+ * anyone looks. `listMergedClients` above is the structured way to tell the
+ * two apart later (only `merged_into` is proof of an actual merge); this
+ * column is just where the address itself ends up.
+ *
+ * ── SELF-MERGE AND CHAINS ────────────────────────────────────────────────────
+ * Refuses `survivingId === mergedId` outright (#150's own "refuses to merge a
+ * client into itself"). Also refuses merging *into* a client that has itself
+ * already been merged away, and refuses re-merging a client that has already
+ * been merged into a *different* survivor — both would otherwise let a chain
+ * form (B into A, then A into C), which `listMergedClients(env, A)` cannot
+ * represent: it only ever looks one level down, by design, because a merge
+ * chain is not a case this issue's contract describes.
+ *
+ * ── IDEMPOTENT ────────────────────────────────────────────────────────────
+ * Calling this again with the exact same `(survivingId, mergedId)` pair after
+ * it already succeeded is a silent no-op — a retried or doubled form submit
+ * must not re-append B's address to `cc_emails` a second time, and the
+ * `merged_into IS NULL` guard on the final `UPDATE` below is what makes that
+ * true even under a genuine race, not just the early-return above (which only
+ * protects a *sequential* retry that reads the already-merged state).
+ *
+ * ── ONE BATCH, EXACTLY LIKE `promoteLead` ────────────────────────────────────
+ * All three writes — the `cc_emails` append, the project repoint, and the
+ * `merged_into`/`merged_at` stamp — land in one `DB.batch()`, so a project is
+ * never left pointing at a `client_id` that no longer has any other record of
+ * having owned it. There is no FK (0016 says so deliberately) — this
+ * transaction is the only thing that keeps a merge from orphaning a project.
+ */
+export async function mergeClients(env: Env, survivingId: string, mergedId: string): Promise<void> {
+  if (survivingId === mergedId) {
+    throw new ClientMergeError("A client cannot be merged into itself.")
+  }
+
+  const [surviving, merged] = await Promise.all([
+    getClientProfileById(env, survivingId),
+    getClientProfileById(env, mergedId),
+  ])
+  if (!surviving) throw new ClientMergeError(`No such client: ${survivingId}.`)
+  if (!merged) throw new ClientMergeError(`No such client: ${mergedId}.`)
+
+  // Idempotent: this exact merge already happened. A genuine race past this
+  // point is still safe — see the `merged_into IS NULL` guard below.
+  if (merged.mergedInto === survivingId) return
+
+  if (merged.mergedInto) {
+    throw new ClientMergeError("This client has already been merged into a different client.")
+  }
+  if (surviving.mergedInto) {
+    throw new ClientMergeError("Cannot merge into a client that has itself been merged away.")
+  }
+
+  const mergedAt = new Date().toISOString()
+
+  await env.DB.batch([
+    // Preserve B's address on A — see this function's own doc comment for
+    // why `cc_emails` is the column and what that means for anyone reading
+    // #131's own comment on it. The `LIKE` branch keeps a retried call (or a
+    // genuine race with the guarded stamp below) from appending twice.
+    env.DB.prepare(
+      `UPDATE clients SET cc_emails =
+         CASE
+           WHEN cc_emails IS NULL OR cc_emails = '' THEN ?
+           WHEN ',' || cc_emails || ',' LIKE '%,' || ? || ',%' THEN cc_emails
+           ELSE cc_emails || ',' || ?
+         END
+       WHERE id = ?`,
+    ).bind(merged.email, merged.email, merged.email, survivingId),
+
+    // Every project B still owns, repointed to A — in the same batch as B's
+    // own removal below, which is the entire point: there is no FK to stop
+    // an orphaned `client_id`, so this transaction is what does.
+    env.DB.prepare(`UPDATE projects SET client_id = ? WHERE client_id = ?`).bind(survivingId, mergedId),
+
+    // Mark B as merged away. Guarded on `merged_into IS NULL` so a retried or
+    // genuinely racing duplicate call is a no-op here too, not a clobbered
+    // `merged_at`.
+    env.DB.prepare(
+      `UPDATE clients SET merged_into = ?, merged_at = ? WHERE id = ? AND merged_into IS NULL`,
+    ).bind(survivingId, mergedAt, mergedId),
+  ])
 }
