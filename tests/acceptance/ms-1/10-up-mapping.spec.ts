@@ -21,13 +21,43 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
  *  1. **The vocabulary is closed and its wording is pinned.** Nine slugs, nine
  *     exact strings, rendered on `status-pill` / `submission-detail` /
  *     `submission-row`. Anything else reaching the customer is a wall breach.
- *  2. **Only `Awaiting your sign-off` and `Needs your input` demand the
- *     customer; only `Shipped` is terminal.** The other states are read-only —
- *     "request-changes reviews, merge conflicts and CI churn stay hidden inside
- *     In progress / Quality check".
+ *  2. **Only `Awaiting your sign-off`, `Quality check`, and `Needs your input`
+ *     demand the customer; only `Shipped` is terminal.** The other states are
+ *     read-only — "request-changes reviews, merge conflicts and CI churn stay
+ *     hidden inside In progress / Quality check" (issue #10's original text,
+ *     predating the amendment below — CI churn still stays hidden, but
+ *     `Quality check` itself is no longer a read-only rollup state).
  *  3. **The portal renders and does not derive.** A status arrives as a
  *     coord-owned `status` field over the bridge; no other fact the daemon
  *     pushes may move it.
+ *
+ * AMENDED 2026-08-19 against contract.md § "Customer status vocabulary", note
+ * 2 (issue #107, 2026-08-18): `quality-check` is promoted from
+ * not-customer-actionable to customer-actionable — "the customer approves the
+ * preview or requests changes from the submission page, exactly the same
+ * shape as a design-round sign-off". This slice previously treated
+ * `quality-check` as one of the four read-only rollup states sharing
+ * `04-submission-in-design.html`'s template; it no longer does. Two things
+ * follow, both asserted below: `quality-check` drops out of the "no demand
+ * hooks" negative check, and it drops out of the rollup-template group
+ * (now three states, not four).
+ *
+ * TODO(test-author): the contract has NOT been fully reconciled with itself
+ * here. The "Mock inventory" section (`04-submission-in-design.html`'s row)
+ * still reads "is the template for **all four** non-actionable rollup states
+ * … In design, Planned, In progress, Quality check" — unrevised prose that
+ * predates note 2 and now contradicts the pinned vocabulary table + note 2's
+ * explicit "promoted … to customer-actionable". The pinned table and note 2
+ * are the more specific and more recent statements, so this slice follows
+ * them: `quality-check` is actionable, is out of the rollup-template group,
+ * and the older "four" language is stale. What is NOT pinned by either
+ * section is quality-check's exact DOM shape — no mock exists for a
+ * "preview ready to approve" screen, and the `data-testid` hooks section pins
+ * `approve-button` / `request-changes-button` only under "Awaiting-sign-off
+ * (`05`)". This slice takes note 2's "exactly the same shape as a
+ * design-round sign-off" at its word and asserts that pair specifically; if a
+ * worker's implementation reasonably chooses different hooks, that is a
+ * contract gap to raise, not a bug in this slice.
  *
  * NOT COVERED HERE, deliberately:
  *  - **The precedence rule for mixed-state submissions.** It is computed
@@ -79,7 +109,9 @@ const VOCABULARY: Vocab[] = [
   },
   { slug: "planned", text: "Planned", actionable: false, terminal: false },
   { slug: "in-progress", text: "In progress", actionable: false, terminal: false },
-  { slug: "quality-check", text: "Quality check", actionable: false, terminal: false },
+  // Promoted to actionable 2026-08-18 (issue #107 / contract note 2). See the
+  // "AMENDED" block in this file's header comment.
+  { slug: "quality-check", text: "Quality check", actionable: true, terminal: false },
   { slug: "needs-input", text: "Needs your input", actionable: true, terminal: false },
   { slug: "on-hold", text: "On hold", actionable: false, terminal: false },
   { slug: "shipped", text: "Shipped", actionable: false, terminal: true },
@@ -110,9 +142,14 @@ const SETTLED = VOCABULARY.filter((v) => v.slug !== "on-hold")
  * Contract: `04-submission-in-design.html` "is the template for **all four**
  * non-actionable rollup states … Implementers render the identical read-only
  * template for all four; only `data-status`, the pill text, and the highlighted
- * `timeline-step` change."
+ * `timeline-step` change." — that "four" is the mock-inventory section's
+ * unrevised wording; per note 2 (issue #107, see this file's header comment),
+ * `quality-check` is no longer one of them, so this list now has three.
  */
-const ROLLUP_SLUGS = ["in-design", "planned", "in-progress", "quality-check"]
+const ROLLUP_SLUGS = ["in-design", "planned", "in-progress"]
+
+/** Contract § "Awaiting-sign-off (`05`)" — the pinned "act on this" pair. */
+const SIGNOFF_SHAPE_TESTIDS = ["approve-button", "request-changes-button"]
 
 /** Every affordance the contract pins as a *demand* on the customer. */
 const DEMAND_TESTIDS = [
@@ -400,14 +437,15 @@ test.describe("ms-1 issue 10 up-mapping read model", () => {
     }
   })
 
-  test("only the two customer-actionable states ask the customer for anything", async ({
+  test("only the three customer-actionable states ask the customer for anything", async ({
     page,
     request,
   }) => {
     await asCustomer(page, "actionable@example.test")
 
-    // Contract: "Only `Awaiting your sign-off` and `Needs your input` are
-    // customer-actionable; only `Shipped` is terminal." Every other state is a
+    // Contract (as amended by note 2 / issue #107): "Only `Awaiting your
+    // sign-off`, `Needs your input`, and `Quality check` are customer-
+    // actionable; only `Shipped` is terminal." Every other state is a
     // read-only status report — nothing on it may ask the customer to decide,
     // approve, or answer.
     //
@@ -445,7 +483,7 @@ test.describe("ms-1 issue 10 up-mapping read model", () => {
     }
   })
 
-  test("the four rollup states share one read-only template", async ({
+  test("the three rollup states share one read-only template", async ({
     page,
     request,
   }) => {
@@ -566,6 +604,105 @@ test.describe("ms-1 issue 10 up-mapping read model", () => {
       for (const [pattern, why] of FORBIDDEN) {
         expect(body, `\`${slug}\`: ${why}`).not.toMatch(pattern)
       }
+    }
+  })
+
+  test("quality-check now asks the customer to act, per the #107 amendment", async ({
+    page,
+    request,
+  }) => {
+    await asCustomer(page, "quality-check-actionable@example.test")
+
+    // Contract note 2 (issue #107, 2026-08-18): "`Quality check` is also
+    // promoted from not-customer-actionable to customer-actionable … the
+    // customer approves the preview or requests changes from the submission
+    // page, exactly the same shape as a design-round sign-off." The vocabulary
+    // table now marks `quality-check` "yes" under "customer-actionable?",
+    // alongside `awaiting-signoff` and `needs-input`.
+    //
+    // This is the positive half of that promotion — that *something* asks the
+    // customer to act reaches this slice, because it is a direct consequence
+    // of the vocabulary classification issue #10 owns. The exact contents of
+    // that affordance (a design round? a bare preview link?) stay #13's,
+    // consistent with this slice's SCOPE note — but "no affordance at all" is
+    // no longer a legal rendering of `quality-check`, and that much is
+    // squarely this slice's to assert.
+    const seeded = await seedSubmission(page, 3)
+    expect(
+      (await setStatus(request, seeded.reference, "quality-check", 1000)).outcome,
+    ).toBe("applied")
+
+    const shown = await readDetailStatus(page, seeded.url)
+    expect(shown.pill).toBe("quality-check")
+    expect(shown.pillText).toBe("Quality check")
+
+    // "Exactly the same shape as a design-round sign-off" — the only pinned
+    // hooks for "approve this or ask for changes" anywhere in the contract are
+    // `approve-button` / `request-changes-button` (§ "Awaiting-sign-off
+    // (`05`)"). See the TODO(test-author) in this file's header comment: this
+    // is the most textually-supported reading, not a hook the contract
+    // re-pins verbatim for `quality-check` specifically.
+    for (const testid of SIGNOFF_SHAPE_TESTIDS) {
+      await expect(
+        page.getByTestId(testid),
+        `\`quality-check\` is customer-actionable — expected a \`${testid}\``,
+      ).toBeVisible()
+    }
+
+    // And the negative this replaces: `quality-check` is no longer silent.
+    const anyDemandVisible = await page
+      .getByRole("button", { name: /approve|request changes/i })
+      .count()
+    expect(
+      anyDemandVisible,
+      "`quality-check` asks the customer for something, unlike the read-only rollup states",
+    ).toBeGreaterThan(0)
+  })
+
+  test("quality-check's actionable screen still hides internal churn", async ({
+    page,
+    request,
+  }) => {
+    await asCustomer(page, "quality-check-opaque@example.test")
+
+    // The churn-hiding invariant ("request-changes reviews, merge conflicts
+    // and CI churn stay hidden") does not depend on whether the state is
+    // read-only or actionable — only on which words may reach the customer.
+    // Unlike "internal churn stays hidden inside the rollup states" above,
+    // this does NOT assert `status-timeline` / `rollup-copy`: per the header
+    // TODO, `quality-check`'s exact DOM shape is no longer pinned to the
+    // rollup template, so only the globally-pinned hooks (`submission-detail`,
+    // `status-pill`) and the whole-body text scan are used.
+    const FORBIDDEN: Array<[RegExp, string]> = [
+      [/\bmerge[ -]?conflict/i, "a merge conflict is engineer-side churn"],
+      [/\brebase/i, "rebases are engineer-side churn"],
+      [/\bCI\b/, "CI churn never crosses the wall"],
+      [/\bbuild (failed|failure|broke)/i, "build churn never crosses the wall"],
+      [/\bpull request\b/i, "no PR ever crosses the wall"],
+      [/\bPR\b/, "no PR ever crosses the wall"],
+      [/\bbranch(es)?\b/i, "customers never see a branch"],
+      [/\bcommit(s|ted)?\b/i, "customers never see a commit"],
+      [/\bworktree\b/i, "customers never see a worktree"],
+      [/\bagent\b/i, "customers never see a live agent"],
+      [/\bissue\s*#?\d+/i, "customers never see an issue number"],
+      [/#\d+/, "customers never see a GitHub number"],
+      [/\breview requested\b/i, "review rounds stay hidden inside the rollup states"],
+    ]
+
+    const seeded = await seedSubmission(page, 4)
+    expect(
+      (await setStatus(request, seeded.reference, "quality-check", 1100)).outcome,
+    ).toBe("applied")
+
+    const shown = await readDetailStatus(page, seeded.url)
+    expect(shown.pill, "the quality-check screen really rendered").toBe("quality-check")
+
+    const body = await page.locator("body").innerText()
+    expect(body, "the screen really rendered").toContain(seeded.reference)
+    expect(body).toContain("Quality check")
+
+    for (const [pattern, why] of FORBIDDEN) {
+      expect(body, `\`quality-check\`: ${why}`).not.toMatch(pattern)
     }
   })
 
