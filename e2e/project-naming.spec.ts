@@ -35,6 +35,17 @@ import { expect, test, type APIRequestContext, type Browser, type Page } from "@
  * join the second to the first's project, the same shape
  * `e2e/clients.spec.ts` already uses for its own multi-submission project.
  *
+ * ── ISSUE #156 ────────────────────────────────────────────────────────────
+ * #149 only ever gave the rename form to `/leads/:id`, so a project with no
+ * promoted lead behind it — the `/intake`-only case #145 already carved a
+ * reassignment path for — had no reachable rename control anywhere. The
+ * tests below cover the project-keyed entry point that closes that gap,
+ * `POST /clients/:clientId/projects/:projectId/rename`
+ * (`routes/clients.ts`'s `postClientProjectRename`): reachable for a project
+ * that never had a lead, reading back identically to #149's own form
+ * everywhere a name is shown, and refusing a `projectId`/`clientId` pairing
+ * that does not actually belong together.
+ *
  * Every string below is invented — see CLAUDE.md rule 1.
  */
 
@@ -112,6 +123,25 @@ async function openReassign(page: Page) {
   await expect(page.getByTestId("reassign-open-button")).toBeVisible()
   await page.getByTestId("reassign-open-button").click()
   await expect(page.getByTestId("reassign-form")).toBeVisible()
+}
+
+/**
+ * Files a standalone request through `POST /intake` — no `?from=`, so it gets
+ * no lead, no project, no client link of any kind (`e2e/requests-
+ * reassign.spec.ts`'s own helper, for issue #145's identical motivating
+ * case). This is #156's own motivating case too: a project later minted for
+ * this submission never has a `/leads/:id` behind it to rename it from.
+ */
+async function fileStandaloneRequest(page: Page, email: string, tag: string): Promise<{ id: string }> {
+  await page.setExtraHTTPHeaders({ [ACCESS_HEADER]: email })
+  await page.goto("/intake")
+  await page.getByTestId("field-outcome").fill(`A synthetic intake-only outcome (${tag}).`)
+  await page.getByTestId("field-audience").fill("synthetic e2e readers")
+  await page.getByTestId("field-done-definition").fill("The #156 e2e suite goes green.")
+  await page.getByTestId("submit-intake").click()
+  await expect(page.getByTestId("intake-receipt")).toBeVisible()
+  const id = new URL(page.url()).pathname.replace(/^\/submissions\//, "")
+  return { id }
 }
 
 /** Every bridge event for `reference` — the only black-box way to learn a project's id without a dedicated screen for it. */
@@ -361,4 +391,164 @@ test("a renamed project's chosen name appears on the customer's own /submissions
   await expect(projectRow).not.toContainText(secondSummary)
 
   await customerContext.close()
+})
+
+test("an /intake-only project with no promoted lead has no rename control on /leads, but can be named from /clients/:id, and the name reads back on /projects/:id", async ({
+  browser,
+  baseURL,
+}) => {
+  const tag = nonce()
+  const email = `naming-intake-only-${tag}@example.test`
+
+  const customerContext = await contextFor(browser, baseURL, email)
+  const customer = await customerContext.newPage()
+  const { id: submissionId } = await fileStandaloneRequest(customer, email, tag)
+  await customerContext.close()
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+
+  // `/intake` never mints a lead (only `/start` does — #145's own framing),
+  // so there is no `/leads/:id` for this address anywhere, and therefore no
+  // way to reach #149's own rename form for whatever project this
+  // submission ends up in.
+  await operator.goto("/leads")
+  await expect(operator.getByTestId("lead-row").filter({ hasText: email })).toHaveCount(0)
+
+  // Give it a client-linked project the only way a lead-less submission can
+  // get one: `/requests`' own second reassignment entry point (#145).
+  await operator.goto(`/requests/${submissionId}`)
+  await openReassign(operator)
+  await operator.getByTestId("reassign-project-option-new").click()
+  await operator.getByTestId("reassign-submit").click()
+  await expect(new URL(operator.url()).pathname).toBe(`/requests/${submissionId}`)
+
+  await operator.goto("/clients")
+  const clientRow = operator.getByTestId("client-row").filter({ hasText: email })
+  await expect(clientRow).toHaveCount(1)
+  await clientRow.getByTestId("view-client").click()
+  await expect(operator.getByTestId("client-detail")).toBeVisible()
+
+  // The rename form is right here, keyed by the project's own id — issue
+  // #156's whole point: no lead needed anywhere in this flow.
+  const projectCard = operator.getByTestId("client-project")
+  await expect(projectCard).toHaveCount(1)
+  await expect(projectCard.getByTestId("rename-project-card")).toBeVisible()
+  await expect(projectCard.getByTestId("rename-project-input")).toHaveValue("")
+
+  const renameAction = await projectCard.getByTestId("rename-project-form").getAttribute("action")
+  const match = renameAction?.match(/^\/clients\/([^/]+)\/projects\/([^/]+)\/rename$/)
+  expect(match, `rename form posts to the project-keyed route, got ${renameAction}`).toBeTruthy()
+  const [, clientId, projectId] = match as RegExpMatchArray
+
+  const chosenName = `Intake-only project, named at last (${tag})`
+  await projectCard.getByTestId("rename-project-input").fill(chosenName)
+  await projectCard.getByTestId("rename-project-submit").click()
+
+  await expect(operator.getByTestId("client-project-title")).toHaveText(chosenName)
+  await expect(operator.getByTestId("client-project").getByTestId("rename-project-input")).toHaveValue(
+    chosenName,
+  )
+
+  // Not operator-only shorthand here either — reads back verbatim on the
+  // customer's own combined project view, same #149 guarantee this route
+  // reuses `renameProject` to keep.
+  const customerReadBackContext = await contextFor(browser, baseURL, email)
+  const customerReadBack = await customerReadBackContext.newPage()
+  await customerReadBack.goto(`/projects/${projectId}`)
+  await expect(customerReadBack.getByTestId("project-detail")).toBeVisible()
+  await expect(customerReadBack.getByRole("heading", { level: 1 })).toHaveText(chosenName)
+  await customerReadBackContext.close()
+
+  // Clearing it is not an error — falls back to the derived title, exactly
+  // like `POST /leads/:id/project/rename` already does.
+  await operator.goto(`/clients/${clientId}`)
+  await operator.getByTestId("rename-project-input").fill("")
+  await operator.getByTestId("rename-project-submit").click()
+  await expect(operator.getByTestId("rename-project-input")).toHaveValue("")
+  await expect(operator.getByTestId("client-project-title")).not.toHaveText(chosenName)
+
+  await operatorContext.close()
+})
+
+test("the project-keyed rename route refuses a stranger, a non-operator, an unknown project, and a projectId that does not belong to the clientId in its own URL", async ({
+  browser,
+  baseURL,
+  request,
+}) => {
+  const tag = nonce()
+  const firstEmail = `naming-ownership-a-${tag}@example.test`
+  const secondEmail = `naming-ownership-b-${tag}@example.test`
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+
+  // Two independent, already-named projects belonging to two different
+  // clients — the second is what the mismatched-ownership case below tries
+  // (and must fail) to rename through the first client's URL.
+  const first = await seedPromotedLead(
+    browser,
+    baseURL,
+    operator,
+    `A synthetic first ownership check (${tag}).`,
+    firstEmail,
+  )
+  const second = await seedPromotedLead(
+    browser,
+    baseURL,
+    operator,
+    `A synthetic second ownership check (${tag}).`,
+    secondEmail,
+  )
+
+  const bridgeEventsForBoth = await Promise.all(
+    [first, second].map(async ({ reference }) =>
+      (await bridgeEventsFor(request, reference)).find(
+        (event) => event.type === "submission.created",
+      ),
+    ),
+  )
+  const [firstProjectId, secondProjectId] = bridgeEventsForBoth.map((event) => event?.payload["project_id"])
+  expect(typeof firstProjectId).toBe("string")
+  expect(typeof secondProjectId).toBe("string")
+
+  await operator.goto("/clients")
+  const firstClientId = new URL(
+    (await operator
+      .getByTestId("client-row")
+      .filter({ hasText: firstEmail })
+      .getByTestId("view-client")
+      .getAttribute("href")) ?? "",
+    baseURL,
+  ).pathname.replace(/^\/clients\//, "")
+  await operatorContext.close()
+
+  // A `projectId` that is real, but belongs to a *different* client than the
+  // one named in the URL — the ownership check `postClientProjectRename`
+  // exists for.
+  const mismatchedContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const mismatched = await mismatchedContext.request.post(
+    `/clients/${firstClientId}/projects/${secondProjectId}/rename`,
+    { form: { name: "should never land" }, maxRedirects: 0, failOnStatusCode: false },
+  )
+  expect(mismatched.status()).toBe(404)
+  await mismatchedContext.close()
+
+  for (const identity of [firstEmail, null]) {
+    const context = await contextFor(browser, baseURL, identity)
+    const response = await context.request.post(
+      `/clients/${firstClientId}/projects/${firstProjectId}/rename`,
+      { form: { name: "should never land" }, maxRedirects: 0, failOnStatusCode: false },
+    )
+    expect(response.status(), `POST as ${identity ?? "nobody"}`).toBe(404)
+    await context.close()
+  }
+
+  const unknownProjectContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const unknownProject = await unknownProjectContext.request.post(
+    `/clients/${firstClientId}/projects/proj_does_not_exist_e2e/rename`,
+    { form: { name: "should never land" }, maxRedirects: 0, failOnStatusCode: false },
+  )
+  expect(unknownProject.status()).toBe(404)
+  await unknownProjectContext.close()
 })
