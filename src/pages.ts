@@ -1,5 +1,5 @@
 import { accountProfile, submitAccountProfile } from "./routes/account"
-import { clientDetail, clientsIndex, matchClientsPath } from "./routes/clients"
+import { clientDetail, clientsIndex, matchClientsPath, postClientMerge } from "./routes/clients"
 import { submissionsDashboard } from "./routes/dashboard"
 import { deliveries } from "./routes/deliveries"
 import { frontDoor } from "./routes/home"
@@ -149,6 +149,12 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
     }
     if (clientsMatch.kind === "detail" && request.method === "GET") {
       return clientDetail(request, env, clientsMatch.id)
+    }
+    // Issue #150 — "merge client B into client A after the fact". See
+    // `routes/clients.ts`'s module comment for why this is the one write
+    // this surface owns.
+    if (clientsMatch.kind === "merge" && request.method === "POST") {
+      return postClientMerge(request, env, clientsMatch.id)
     }
     return leadsNotFound()
   }

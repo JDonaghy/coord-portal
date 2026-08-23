@@ -1,4 +1,17 @@
-import { getClientProfileById, listClients, type Client, type ClientSummary } from "../clients"
+import {
+  ClientMergeError,
+  getClientById,
+  getClientProfileById,
+  getClientRecordByEmail,
+  listClients,
+  listMergedClients,
+  mergeClients,
+  type Client,
+  type ClientRecord,
+  type ClientSummary,
+  type MergedClient,
+} from "../clients"
+import { parseFormData } from "../formData"
 import { readOperator, type Operator } from "../operators"
 import { listProjectsForClient, type Project } from "../projects"
 import { escapeHtml, html, operatorTopbar, page } from "../render"
@@ -11,6 +24,7 @@ import {
 } from "../submissions"
 import type { Env } from "../types"
 import { leadsNotFound, projectTitleFromNewest } from "./leads"
+import { isFormContentType } from "./submission"
 
 /**
  * `GET /clients` and `GET /clients/:id` — issue #144. The portal has had
@@ -37,20 +51,31 @@ import { leadsNotFound, projectTitleFromNewest } from "./leads"
  * (`src/clients.ts`) is always `email`. That is a schema gap for a future
  * issue to close, not something this route can invent a value for.
  *
- * ── READ-ONLY ─────────────────────────────────────────────────────────────
- * Both routes are GET only, same as `/projects/:id`: a client and a project
- * are both facts derived from the submissions and lead promotions that
- * created them, with nothing on this screen for an operator to write.
+ * ── READ-ONLY, EXCEPT ONE WRITE (issue #150) ─────────────────────────────────
+ * `/clients` and `GET /clients/:id` are still pure reads, same as
+ * `/projects/:id` — a client and a project are both facts derived from the
+ * submissions and lead promotions that created them. `POST /clients/:id
+ * /merge` is the one write this file owns: "two addresses, one person" (#150)
+ * — an operator's only way, until this issue, to say two `clients` rows are
+ * the same relationship was to edit D1 by hand. See `mergeClients`
+ * (`src/clients.ts`) for the actual write and everything it deliberately does
+ * *not* touch (`submissions.customer_email`, `projects.customer_email`,
+ * `isOwnedBy` — this is operator-side grouping only, never customer-side
+ * visibility).
  */
 
 const CLIENTS_PATH = "/clients"
 const CLIENT_PATH = /^\/clients\/([^/?#]+)$/
+const CLIENT_MERGE_PATH = /^\/clients\/([^/?#]+)\/merge$/
 
 /** What `handlePages` needs to know about a `/clients…` URL, or `null`. */
 export function matchClientsPath(
   pathname: string,
-): { kind: "index" } | { kind: "detail"; id: string } | null {
+): { kind: "index" } | { kind: "detail"; id: string } | { kind: "merge"; id: string } | null {
   if (pathname === CLIENTS_PATH) return { kind: "index" }
+
+  const merge = pathname.match(CLIENT_MERGE_PATH)
+  if (merge?.[1]) return { kind: "merge", id: merge[1] }
 
   const detail = pathname.match(CLIENT_PATH)
   if (detail?.[1]) return { kind: "detail", id: detail[1] }
@@ -98,6 +123,7 @@ function clientRow(client: ClientSummary): string {
             &middot; <span data-testid="client-project-count">${escapeHtml(projectLabel)}</span>
             &middot; <span data-testid="client-submission-count">${escapeHtml(submissionLabel)}</span>
           </span>
+          ${mergedIntoBadge(client.mergedIntoEmail)}
         </div>
         <div class="row-side">
           <span class="meta" data-testid="client-last-activity">last activity ${escapeHtml(client.lastActivityAt)}</span>
@@ -105,6 +131,18 @@ function clientRow(client: ClientSummary): string {
         </div>
       </div>
     </li>`
+}
+
+/**
+ * Issue #150 — "the merge is visible after the fact": a merged-away client
+ * stays on `/clients` (its counts fall to zero on their own, since the join
+ * this list already runs no longer finds any project pointing at it — see
+ * `listClients`'s own doc comment), badged rather than hidden, so an operator
+ * scanning the list is not left wondering where a row went.
+ */
+function mergedIntoBadge(mergedIntoEmail: string | null): string {
+  if (!mergedIntoEmail) return ""
+  return `<span class="status-pill" data-testid="client-merged-badge" data-status="merged">Merged into ${escapeHtml(mergedIntoEmail)}</span>`
 }
 
 /**
@@ -119,15 +157,30 @@ function emptyClients(): string {
   </p>`
 }
 
-/** GET /clients/:id — one client, every project they have, and each project's submissions. */
-export async function clientDetail(request: Request, env: Env, id: string): Promise<Response> {
-  const operator = await readOperator(request, env)
-  if (!operator) return leadsNotFound()
+/**
+ * Everything `clientDetailPage` needs, gathered once so both the plain `GET`
+ * and the merge form's failure re-render (`postClientMerge` below) build the
+ * identical page from the identical read — never a stale copy of `client`
+ * left over from before a merge that just changed it.
+ */
+interface ClientDetailContext {
+  client: Client
+  projectBlocks: string[]
+  /** Issue #150 — every client folded into this one, for the "merged
+   * clients" section on a surviving client's own page. Always empty for a
+   * client that was itself merged away — a merge chain is not a case this
+   * issue's contract describes (see `mergeClients`'s own doc comment). */
+  mergedAway: MergedClient[]
+  /** The row `client.mergedInto` names, or `null` — only set when `client`
+   * was itself merged away, for `mergedBanner`'s link back to the survivor. */
+  survivor: ClientRecord | null
+}
 
+async function loadClientDetailContext(env: Env, id: string): Promise<ClientDetailContext | null> {
   const client = await getClientProfileById(env, id)
   // Same indistinguishable-404 posture as everywhere else on this surface —
   // an id that does not exist and a non-operator caller read identically.
-  if (!client) return leadsNotFound()
+  if (!client) return null
 
   const projects = await listProjectsForClient(env, id)
   const projectBlocks: string[] = []
@@ -142,18 +195,39 @@ export async function clientDetail(request: Request, env: Env, id: string): Prom
     projectBlocks.push(projectBlock(project, submissions, rows))
   }
 
-  return html(
-    page(`${client.email} — coord-portal`, clientDetailPage(operator, client, projectBlocks)),
-  )
+  const [mergedAway, survivor] = await Promise.all([
+    listMergedClients(env, id),
+    client.mergedInto ? getClientById(env, client.mergedInto) : Promise.resolve(null),
+  ])
+
+  return { client, projectBlocks, mergedAway, survivor }
 }
 
-function clientDetailPage(operator: Operator, client: Client, projectBlocks: string[]): string {
+/** GET /clients/:id — one client, every project they have, and each project's submissions. */
+export async function clientDetail(request: Request, env: Env, id: string): Promise<Response> {
+  const operator = await readOperator(request, env)
+  if (!operator) return leadsNotFound()
+
+  const context = await loadClientDetailContext(env, id)
+  if (!context) return leadsNotFound()
+
+  return html(page(`${context.client.email} — coord-portal`, clientDetailPage(operator, context, null)))
+}
+
+function clientDetailPage(
+  operator: Operator,
+  context: ClientDetailContext,
+  mergeError: string | null,
+): string {
+  const { client, projectBlocks, mergedAway, survivor } = context
   return `${operatorTopbar(operator.email, "clients")}
 <main data-testid="client-detail">
   <a class="back-link" href="/clients" data-testid="back-to-clients">&larr; Clients</a>
 
   <h1 data-testid="client-detail-email">${escapeHtml(client.email)}</h1>
   <p class="meta">client since ${escapeHtml(client.createdAt)}</p>
+
+  ${client.mergedInto ? mergedBanner(survivor) : ""}
 
   <dl class="card">
     <dt>Contact email</dt>
@@ -163,9 +237,81 @@ function clientDetailPage(operator: Operator, client: Client, projectBlocks: str
     ${optionalField("Address", "client-detail-address", client.address)}
   </dl>
 
+  ${mergedAway.length > 0 ? mergedFromSection(mergedAway) : ""}
+  ${client.mergedInto ? "" : mergeForm(client, mergeError)}
+
   <h2>Projects</h2>
   ${projectBlocks.length > 0 ? projectBlocks.join("\n") : emptyProjects()}
 </main>`
+}
+
+/**
+ * Issue #150 — shown on a merged-away client's own page instead of the merge
+ * form (there is nothing left here to merge again — see `mergeClients`'s
+ * "chains" reasoning), pointing an operator who lands here straight at the
+ * row that now actually owns everything.
+ */
+function mergedBanner(survivor: ClientRecord | null): string {
+  if (!survivor) {
+    // Defensive only: `merged_into` is stamped in the same batch that
+    // creates the survivor's own row link, and neither is ever deleted — see
+    // `mergeClients` in `src/clients.ts`.
+    return `<p class="lede" data-testid="client-merged-banner">This client was merged into another client.</p>`
+  }
+  return `<p class="lede" data-testid="client-merged-banner">
+    This client was merged into
+    <a href="/clients/${encodeURIComponent(survivor.id)}" data-testid="client-merged-into-link">${escapeHtml(survivor.email)}</a>.
+  </p>`
+}
+
+/**
+ * Issue #150's "an operator should be able to tell a merged client from one
+ * that was always a single row" — the structured list, built from
+ * `merged_into` (only `mergeClients` ever writes it), not from `cc_emails`
+ * (which a customer can also write themselves via `saveClientProfile`, #131,
+ * and which cannot be told apart from a merge-sourced address once both are
+ * joined into one string).
+ */
+function mergedFromSection(mergedAway: MergedClient[]): string {
+  return `<section class="card" data-testid="client-merged-from">
+    <h2>Merged clients</h2>
+    <ul>
+      ${mergedAway
+        .map(
+          (row) =>
+            `<li data-testid="client-merged-from-row"><span data-testid="client-merged-from-email">${escapeHtml(row.email)}</span> &middot; merged ${escapeHtml(row.mergedAt)}</li>`,
+        )
+        .join("\n      ")}
+    </ul>
+  </section>`
+}
+
+/**
+ * Issue #150's actual write, offered from the client being merged *away* —
+ * an operator looking at the duplicate address types the surviving client's
+ * email and this client folds into it. `mergeClients` (`src/clients.ts`)
+ * resolves that email the same case-insensitive way lead promotion's own
+ * match does (`getClientRecordByEmail`), so casing is never the reason a
+ * merge fails to find its target.
+ */
+function mergeForm(client: Client, error: string | null): string {
+  return `<section class="card" data-testid="client-merge-card">
+    <h2>Merge into another client</h2>
+    <p class="hint">
+      Same person under a different address? Merging moves every project onto the other client and
+      keeps this address on record there — nothing here is deleted.
+    </p>
+    ${error ? `<p class="client-merge-error" data-testid="client-merge-error" role="alert">${escapeHtml(error)}</p>` : ""}
+    <form class="client-merge" method="POST" action="/clients/${encodeURIComponent(client.id)}/merge" data-testid="client-merge-form">
+      <div class="field">
+        <label for="into-email">Merge into (their email)</label>
+        <input type="email" id="into-email" name="intoEmail" data-testid="client-merge-email-input" required>
+      </div>
+      <div class="actions">
+        <button type="submit" class="primary" data-testid="client-merge-submit">Merge</button>
+      </div>
+    </form>
+  </section>`
 }
 
 /** One `<dt>`/`<dd>` pair, or nothing — mirrors `routes/account.ts`'s own
@@ -234,4 +380,63 @@ async function submissionRow(env: Env, submission: Submission): Promise<string> 
             <span class="status-pill" data-testid="client-submission-status" data-status="${escapeHtml(display)}">${escapeHtml(statusText(display))}</span>
           </div>
         </li>`
+}
+
+/**
+ * POST /clients/:id/merge — issue #150. `:id` is the client being merged
+ * *away*; the form's `intoEmail` names the surviving client. See `mergeForm`'s
+ * own doc comment for why the form lives on the duplicate's own page rather
+ * than the survivor's, and `mergeClients` (`src/clients.ts`) for the actual
+ * write, its idempotency, and everything it refuses.
+ *
+ * Any refusal — a blank email, an email matching no client, self-merge, or a
+ * merge `mergeClients` rejects as a would-be chain — re-renders this same
+ * page with `error.message` in the merge form, the same "malformed input
+ * gets a message, not a 500 or a silent no-op" posture `postLeadMessage`
+ * already takes for a blank message body. An operator who mistypes an
+ * address should be told why nothing moved, not left guessing.
+ */
+export async function postClientMerge(request: Request, env: Env, id: string): Promise<Response> {
+  const operator = await readOperator(request, env)
+  if (!operator) return leadsNotFound()
+
+  const context = await loadClientDetailContext(env, id)
+  if (!context) return leadsNotFound()
+
+  const contentType = request.headers.get("content-type") ?? ""
+  if (!isFormContentType(contentType)) return leadsNotFound()
+
+  const form = await parseFormData(request)
+  if (!form) return leadsNotFound()
+
+  const rawEmail = form.get("intoEmail")
+  const intoEmail = typeof rawEmail === "string" ? rawEmail.trim() : ""
+
+  const renderError = async (message: string): Promise<Response> => {
+    // Re-read rather than reusing `context`: on the "already merged into a
+    // different client" refusal, the caller's own prior attempt may have
+    // partly raced with another request — reading fresh means the error
+    // page always reflects what is actually stored, not a stale guess.
+    const fresh = (await loadClientDetailContext(env, id)) ?? context
+    return html(page(`${fresh.client.email} — coord-portal`, clientDetailPage(operator, fresh, message)), {
+      status: 400,
+    })
+  }
+
+  if (!intoEmail) return renderError("Enter the other client's email to merge into.")
+
+  const target = await getClientRecordByEmail(env, intoEmail)
+  if (!target) return renderError(`No client found for ${intoEmail}.`)
+
+  try {
+    await mergeClients(env, target.id, id)
+  } catch (err) {
+    if (err instanceof ClientMergeError) return renderError(err.message)
+    throw err
+  }
+
+  return new Response(null, {
+    status: 303,
+    headers: { location: `/clients/${encodeURIComponent(target.id)}` },
+  })
 }
