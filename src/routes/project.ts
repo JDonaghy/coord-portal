@@ -12,7 +12,7 @@ import {
   type SubmissionStatus,
 } from "../submissions"
 import type { Env } from "../types"
-import { projectTitle } from "./leads"
+import { projectTitleFromNewest } from "./leads"
 import { roundEntry } from "./submission"
 
 /**
@@ -26,9 +26,10 @@ import { roundEntry } from "./submission"
  * (`migrations/0018_project_name.sql`), but that is written only from the
  * operator surface (`routes/leads.ts`'s `postLeadProjectRename`, and the
  * "start a new project instead" branch of `postLeadReassign`), never from
- * here — this route only reads it back, through the same `projectTitle`
- * (`routes/leads.ts`) the operator's own screens use, so a named project
- * reads identically for the operator and the customer who owns it.
+ * here — this route only reads it back, through the same
+ * `projectTitleFromNewest` derivation (`routes/leads.ts`) the operator's own
+ * screens use, so a named project reads identically for the operator and the
+ * customer who owns it.
  * Everything else on this screen is read from the submissions under it, the
  * same submissions already reachable one at a time at `/submissions/:id`;
  * this page is a different arrangement of the same data, not a new source of
@@ -91,11 +92,16 @@ export async function projectDetail(request: Request, env: Env, id: string): Pro
   // `src/operators.ts`, for the full rationale (issue #103).
   const isOperator = isOperatorEmail(email, request, env)
 
-  // Issue #149: the same `projectTitle` the operator's own screens read
-  // through (`routes/leads.ts`) — an operator-set `project.name` wins
-  // outright, and a project with none falls back to the pre-#149 derivation
-  // from the newest submission, exactly as this screen always rendered.
-  const title = await projectTitle(env, project)
+  // Issue #149: the same `projectTitleFromNewest` derivation the operator's
+  // own screens read through (`routes/leads.ts`) — an operator-set
+  // `project.name` wins outright, and a project with none falls back to the
+  // pre-#149 derivation from the newest submission, exactly as this screen
+  // always rendered. `submissions` above is already newest-first
+  // (`listSubmissionsForProject`'s own `ORDER BY created_at DESC`), so this
+  // reuses `submissions[0]` rather than `projectTitle`'s own
+  // `getNewestSubmissionForProject` — the same newest-submission row, without
+  // a second, independent D1 round-trip to fetch it again.
+  const title = projectTitleFromNewest(project, submissions[0] ?? null)
 
   return html(
     page("Project history — coord-portal", projectPage(title, email, isOperator, submissions, blocks)),

@@ -7,11 +7,10 @@ import {
   customerFacingStatus,
   listSubmissionsForProjectUnscoped,
   statusText,
-  titleOf,
   type Submission,
 } from "../submissions"
 import type { Env } from "../types"
-import { leadsNotFound } from "./leads"
+import { leadsNotFound, projectTitleFromNewest } from "./leads"
 
 /**
  * `GET /clients` and `GET /clients/:id` — issue #144. The portal has had
@@ -182,14 +181,19 @@ function emptyProjects(): string {
 }
 
 /**
- * One `client-project` card — title derived from its newest submission, the
- * same rule `projectTitle()` in `routes/leads.ts` uses for the reassignment
- * panel (`getNewestSubmissionForProject` there; here the newest submission is
- * already in hand from `submissions[0]`, since `listSubmissionsForProjectUnscoped`
- * orders newest-first, so there is nothing to fetch twice).
+ * One `client-project` card — titled with issue #149's `project.name` when
+ * an operator has set one, otherwise the pre-#149 derivation from its
+ * newest submission, the same rule `projectTitle()` in `routes/leads.ts`
+ * uses for the reassignment panel. This is the primary screen #149 exists
+ * for: an operator holding many clients' many projects needs the stable,
+ * chosen name here first, not just on `/projects/:id`. Uses
+ * `projectTitleFromNewest` rather than `projectTitle` itself because the
+ * newest submission is already in hand from `submissions[0]`, since
+ * `listSubmissionsForProjectUnscoped` orders newest-first, so there is
+ * nothing to fetch twice.
  */
 function projectBlock(project: Project, submissions: Submission[], rows: string[]): string {
-  const title = submissions[0] ? titleOf(submissions[0]) : "Untitled project"
+  const title = projectTitleFromNewest(project, submissions[0] ?? null)
   const list =
     rows.length > 0
       ? `<ul class="submission-list">\n${rows.join("\n")}\n      </ul>`
