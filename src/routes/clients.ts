@@ -13,7 +13,7 @@ import {
 } from "../clients"
 import { parseFormData } from "../formData"
 import { readOperator, type Operator } from "../operators"
-import { listProjectsForClient, type Project } from "../projects"
+import { getProject, listProjectsForClient, renameProject, type Project } from "../projects"
 import { escapeHtml, html, operatorTopbar, page } from "../render"
 import { derivedStatus, getCurrentRound, type DesignRound } from "../rounds"
 import {
@@ -23,7 +23,7 @@ import {
   type Submission,
 } from "../submissions"
 import type { Env } from "../types"
-import { leadsNotFound, projectTitleFromNewest } from "./leads"
+import { leadsNotFound, projectTitleFromNewest, renameProjectPanel } from "./leads"
 import { isFormContentType } from "./submission"
 
 /**
@@ -51,31 +51,61 @@ import { isFormContentType } from "./submission"
  * (`src/clients.ts`) is always `email`. That is a schema gap for a future
  * issue to close, not something this route can invent a value for.
  *
- * ── READ-ONLY, EXCEPT ONE WRITE (issue #150) ─────────────────────────────────
+ * ── READ-ONLY, EXCEPT TWO WRITES (issues #150, #156) ─────────────────────────
  * `/clients` and `GET /clients/:id` are still pure reads, same as
  * `/projects/:id` — a client and a project are both facts derived from the
  * submissions and lead promotions that created them. `POST /clients/:id
- * /merge` is the one write this file owns: "two addresses, one person" (#150)
+ * /merge` is one write this file owns: "two addresses, one person" (#150)
  * — an operator's only way, until this issue, to say two `clients` rows are
  * the same relationship was to edit D1 by hand. See `mergeClients`
  * (`src/clients.ts`) for the actual write and everything it deliberately does
  * *not* touch (`submissions.customer_email`, `projects.customer_email`,
  * `isOwnedBy` — this is operator-side grouping only, never customer-side
  * visibility).
+ *
+ * ── THE SECOND WRITE, AND WHY IT LIVES HERE TOO (issue #156) ────────────────
+ * `POST /clients/:clientId/projects/:projectId/rename` names or renames one
+ * of this client's projects directly, by the project's own id — the
+ * project-keyed counterpart to `routes/leads.ts`'s lead-keyed
+ * `POST /leads/:id/project/rename` (#149). It exists because that route is
+ * unreachable for two cases this screen is the only way to fix: a project
+ * behind a submission that came straight through `/intake` and never passed
+ * through lead promotion at all (no `/leads/:id` for it, ever), and simply
+ * the operator already looking at this project's own card and wanting to
+ * rename it without first finding which lead, if any, minted it. Same
+ * `renameProjectPanel` markup #149 already shipped (`routes/leads.ts`,
+ * `rename-project-*` `data-testid` hooks unchanged), same `renameProject`
+ * write (`src/projects.ts`) — only the action URL and the lookup that finds
+ * the project are new. See `postClientProjectRename` below for the ownership
+ * check that keeps a `projectId` scoped to the `clientId` in its own URL.
  */
 
 const CLIENTS_PATH = "/clients"
 const CLIENT_PATH = /^\/clients\/([^/?#]+)$/
 const CLIENT_MERGE_PATH = /^\/clients\/([^/?#]+)\/merge$/
+const CLIENT_PROJECT_RENAME_PATH = /^\/clients\/([^/?#]+)\/projects\/([^/?#]+)\/rename$/
 
 /** What `handlePages` needs to know about a `/clients…` URL, or `null`. */
 export function matchClientsPath(
   pathname: string,
-): { kind: "index" } | { kind: "detail"; id: string } | { kind: "merge"; id: string } | null {
+):
+  | { kind: "index" }
+  | { kind: "detail"; id: string }
+  | { kind: "merge"; id: string }
+  | { kind: "rename-project"; clientId: string; projectId: string }
+  | null {
   if (pathname === CLIENTS_PATH) return { kind: "index" }
 
   const merge = pathname.match(CLIENT_MERGE_PATH)
   if (merge?.[1]) return { kind: "merge", id: merge[1] }
+
+  // Anchored end and no `/` inside either capture group, so this never
+  // shadows the bare `CLIENT_PATH` below — a plain `/clients/:id` has
+  // nowhere for a second segment to hide.
+  const renameProjectMatch = pathname.match(CLIENT_PROJECT_RENAME_PATH)
+  if (renameProjectMatch?.[1] && renameProjectMatch?.[2]) {
+    return { kind: "rename-project", clientId: renameProjectMatch[1], projectId: renameProjectMatch[2] }
+  }
 
   const detail = pathname.match(CLIENT_PATH)
   if (detail?.[1]) return { kind: "detail", id: detail[1] }
@@ -192,7 +222,7 @@ async function loadClientDetailContext(env: Env, id: string): Promise<ClientDeta
     // human-initiated follow-up, that this never scales with the whole table.
     const submissions = await listSubmissionsForProjectUnscoped(env, project.id)
     const rows = await Promise.all(submissions.map((submission) => submissionRow(env, submission)))
-    projectBlocks.push(projectBlock(project, submissions, rows))
+    projectBlocks.push(projectBlock(id, project, submissions, rows))
   }
 
   const [mergedAway, survivor] = await Promise.all([
@@ -337,19 +367,37 @@ function emptyProjects(): string {
  * newest submission is already in hand from `submissions[0]`, since
  * `listSubmissionsForProjectUnscoped` orders newest-first, so there is
  * nothing to fetch twice.
+ *
+ * Issue #156 — every card also gets its own `renameProjectPanel`
+ * (`routes/leads.ts`), posting to this project's own
+ * `/clients/:clientId/projects/:projectId/rename`. This is, deliberately,
+ * the *only* reachable rename form for a project with no promoted lead
+ * behind it (an `/intake`-only submission) — see this file's module comment.
+ * A page with several `client-project` cards therefore renders several
+ * `rename-project-card`s, one per project, each scoped to its own project by
+ * the surrounding `<section>` — a black-box test picking one must scope
+ * through `client-project` the same way, not assume a single match the way
+ * `/leads/:id` (one project at a time) safely could.
  */
-function projectBlock(project: Project, submissions: Submission[], rows: string[]): string {
+function projectBlock(
+  clientId: string,
+  project: Project,
+  submissions: Submission[],
+  rows: string[],
+): string {
   const title = projectTitleFromNewest(project, submissions[0] ?? null)
   const list =
     rows.length > 0
       ? `<ul class="submission-list">\n${rows.join("\n")}\n      </ul>`
       : `<p class="lede">No submissions under this project yet.</p>`
+  const renameAction = `/clients/${encodeURIComponent(clientId)}/projects/${encodeURIComponent(project.id)}/rename`
 
   return `    <section class="card" data-testid="client-project">
       <div class="round-entry-head">
         <h3 data-testid="client-project-title">${escapeHtml(title)}</h3>
         <span class="round-date" data-testid="client-project-created-at">started ${escapeHtml(project.createdAt)}</span>
       </div>
+      ${renameProjectPanel(renameAction, project)}
       ${list}
     </section>`
 }
@@ -438,5 +486,50 @@ export async function postClientMerge(request: Request, env: Env, id: string): P
   return new Response(null, {
     status: 303,
     headers: { location: `/clients/${encodeURIComponent(target.id)}` },
+  })
+}
+
+/**
+ * POST /clients/:clientId/projects/:projectId/rename — issue #156. The
+ * project-keyed counterpart to `routes/leads.ts`'s
+ * `POST /leads/:id/project/rename` (#149): calls the identical
+ * `renameProject` (`src/projects.ts`), which already normalizes a blank
+ * `name` to `null` — "go back to the automatic title" — the same way that
+ * route's own refusal-free blank submit does.
+ *
+ * The ownership check is `project.clientId === clientId`, not merely
+ * "does a project with this id exist": `:projectId` and `:clientId` both
+ * come from the same `/clients/:id` page (`projectBlock`'s own `renameAction`
+ * above always pairs a project with the client it was loaded under), so a
+ * `projectId` copied onto a *different* `clientId` in the URL must not rename
+ * a project that page never showed for that client — same posture as every
+ * other refusal on this operator surface: the caller gets the one
+ * indistinguishable 404 (`leadsNotFound()`), never a hint about which of
+ * "wrong client", "unknown project" or "not an operator" was true.
+ */
+export async function postClientProjectRename(
+  request: Request,
+  env: Env,
+  clientId: string,
+  projectId: string,
+): Promise<Response> {
+  const operator = await readOperator(request, env)
+  if (!operator) return leadsNotFound()
+
+  const project = await getProject(env, projectId)
+  if (!project || project.clientId !== clientId) return leadsNotFound()
+
+  const contentType = request.headers.get("content-type") ?? ""
+  if (!isFormContentType(contentType)) return leadsNotFound()
+
+  const form = await parseFormData(request)
+  if (!form) return leadsNotFound()
+
+  const rawName = form.get("name")
+  await renameProject(env, project.id, typeof rawName === "string" ? rawName : null)
+
+  return new Response(null, {
+    status: 303,
+    headers: { location: `/clients/${encodeURIComponent(clientId)}` },
   })
 }

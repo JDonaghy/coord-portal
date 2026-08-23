@@ -1,5 +1,11 @@
 import { accountProfile, submitAccountProfile } from "./routes/account"
-import { clientDetail, clientsIndex, matchClientsPath, postClientMerge } from "./routes/clients"
+import {
+  clientDetail,
+  clientsIndex,
+  matchClientsPath,
+  postClientMerge,
+  postClientProjectRename,
+} from "./routes/clients"
 import { submissionsDashboard } from "./routes/dashboard"
 import { deliveries } from "./routes/deliveries"
 import { frontDoor } from "./routes/home"
@@ -155,6 +161,14 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
     // this surface owns.
     if (clientsMatch.kind === "merge" && request.method === "POST") {
       return postClientMerge(request, env, clientsMatch.id)
+    }
+    // Issue #156 — name or rename one of this client's projects directly, by
+    // project id, from the screen that lists them. The project-keyed
+    // counterpart to `/leads/:id/project/rename` (#149) — see
+    // `routes/clients.ts`'s module comment for why this route exists
+    // alongside that one rather than instead of it.
+    if (clientsMatch.kind === "rename-project" && request.method === "POST") {
+      return postClientProjectRename(request, env, clientsMatch.clientId, clientsMatch.projectId)
     }
     return leadsNotFound()
   }

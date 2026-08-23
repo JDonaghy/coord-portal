@@ -969,11 +969,16 @@ function startWorkSection(lead: Lead): string {
 }
 
 /**
- * `rename-project-card` — issue #149's "an operator can rename an existing
- * one," from the one screen currently wired to host it. Rendered whenever the
- * promoted lead's submission already sits in a project (`reassignment.project`
- * — a lead not yet promoted, or one whose submission has no project at all,
- * defensive only, never gets this card).
+ * `rename-project-card` markup, generic in its `action` — issue #149's "an
+ * operator can rename an existing one." Issue #156's second entry point
+ * (`routes/clients.ts`'s `projectBlock`) renders the identical card per
+ * project block on `/clients/:id`, keyed by the project's own id rather than
+ * by a lead — the only way to reach a project that was never promoted from a
+ * lead at all (an `/intake`-only submission has no `/leads/:id` to visit; see
+ * `routes/clients.ts`'s own doc comment on `postClientProjectRename`).
+ * `renameProjectSection` below is the one existing caller, unchanged; only
+ * the parameter that used to be a hardcoded
+ * `/leads/${lead.id}/project/rename` moved to the caller.
  *
  * The value posted back is exactly what `renameProject` (`src/projects.ts`)
  * stores: blank clears the name (falls back to the derived title), anything
@@ -982,9 +987,9 @@ function startWorkSection(lead: Lead): string {
  * customer's own `/projects/:id` too, which is also why the hint below says
  * so plainly rather than letting an operator assume this stays internal.
  */
-function renameProjectSection(lead: Lead, project: Project): string {
+export function renameProjectPanel(action: string, project: Project): string {
   return `<div class="card rename-project-card" data-testid="rename-project-card">
-    <form class="rename-project" method="POST" action="/leads/${encodeURIComponent(lead.id)}/project/rename" data-testid="rename-project-form">
+    <form class="rename-project" method="POST" action="${action}" data-testid="rename-project-form">
       <div class="field">
         <label for="project-name">Project name <span class="optional-tag">Optional</span></label>
         <span class="hint">Shown everywhere this project appears, including to the client. Leave blank to use the automatic title.</span>
@@ -995,6 +1000,18 @@ function renameProjectSection(lead: Lead, project: Project): string {
       </div>
     </form>
   </div>`
+}
+
+/**
+ * `renameProjectSection`'s own, unchanged since #149: renders `rename-
+ * project-card` for the promoted lead's *current* project, posting to
+ * `/leads/:id/project/rename` (`postLeadProjectRename` above). Rendered
+ * whenever the promoted lead's submission already sits in a project
+ * (`reassignment.project` — a lead not yet promoted, or one whose submission
+ * has no project at all, defensive only, never gets this card).
+ */
+function renameProjectSection(lead: Lead, project: Project): string {
+  return renameProjectPanel(`/leads/${encodeURIComponent(lead.id)}/project/rename`, project)
 }
 
 /**

@@ -24,8 +24,10 @@ import { roundEntry } from "./submission"
  * One route, GET only — nothing on this screen is itself customer-writable.
  * A project can carry an operator-set `name` since issue #149
  * (`migrations/0018_project_name.sql`), but that is written only from the
- * operator surface (`routes/leads.ts`'s `postLeadProjectRename`, and the
- * "start a new project instead" branch of `postLeadReassign`), never from
+ * operator surface (`routes/leads.ts`'s `postLeadProjectRename`, the
+ * "start a new project instead" branch of `postLeadReassign`, and — issue
+ * #156's project-keyed entry point for a project with no lead behind it at
+ * all — `routes/clients.ts`'s `postClientProjectRename`), never from
  * here — this route only reads it back, through the same
  * `projectTitleFromNewest` derivation (`routes/leads.ts`) the operator's own
  * screens use, so a named project reads identically for the operator and the
