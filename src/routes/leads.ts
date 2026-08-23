@@ -988,12 +988,13 @@ function startWorkSection(lead: Lead): string {
  * so plainly rather than letting an operator assume this stays internal.
  */
 export function renameProjectPanel(action: string, project: Project): string {
+  const inputId = `project-name-${encodeURIComponent(project.id)}`
   return `<div class="card rename-project-card" data-testid="rename-project-card">
     <form class="rename-project" method="POST" action="${action}" data-testid="rename-project-form">
       <div class="field">
-        <label for="project-name">Project name <span class="optional-tag">Optional</span></label>
+        <label for="${inputId}">Project name <span class="optional-tag">Optional</span></label>
         <span class="hint">Shown everywhere this project appears, including to the client. Leave blank to use the automatic title.</span>
-        <input type="text" id="project-name" name="name" value="${escapeHtml(project.name ?? "")}" data-testid="rename-project-input">
+        <input type="text" id="${inputId}" name="name" value="${escapeHtml(project.name ?? "")}" data-testid="rename-project-input">
       </div>
       <div class="actions">
         <button type="submit" class="primary" data-testid="rename-project-submit">Save name</button>
