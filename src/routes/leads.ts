@@ -18,7 +18,13 @@ import {
 import { listMessages, postMessage } from "../messages"
 import { readOperator, type Operator } from "../operators"
 import { derivedQualityCheckStatus, getCurrentPreviewReview } from "../previewReviews"
-import { createClientProject, getProject, listProjectsForClient, type Project } from "../projects"
+import {
+  createClientProject,
+  getProject,
+  listProjectsForClient,
+  renameProject,
+  type Project,
+} from "../projects"
 import { escapeHtml, html, operatorTopbar, page } from "../render"
 import { derivedStatus, getCurrentRound } from "../rounds"
 import { derivedStartWorkStatus, getStartWork, recordStartWork } from "../startWork"
@@ -40,14 +46,15 @@ import { isFormContentType, messageThreadSection, type ThreadContext } from "./s
  * stranger into a customer. This is the human gate the whole design leans on:
  * nothing crosses from the public surface into the pipeline without it."
  *
- * Five routes:
+ * Six routes:
  *
- *   GET  /leads               every lead, newest first
- *   GET  /leads/:id           one lead, pre- or post-promotion
- *   POST /leads/:id/promote   the gate itself; idempotent; 303 back to the lead
- *   POST /leads/:id/message   the operator's half of issue #110's chat thread
- *   POST /leads/:id/reassign  issue #130 — move the promoted submission to a
- *                             different (or new) project of the same client
+ *   GET  /leads                     every lead, newest first
+ *   GET  /leads/:id                 one lead, pre- or post-promotion
+ *   POST /leads/:id/promote         the gate itself; idempotent; 303 back to the lead
+ *   POST /leads/:id/message         the operator's half of issue #110's chat thread
+ *   POST /leads/:id/reassign        issue #130 — move the promoted submission to a
+ *                                   different (or new) project of the same client
+ *   POST /leads/:id/project/rename  issue #149 — name or rename that project
  *
  * No decline, dismiss or archive route: issue #33 puts them out of scope, and
  * "a lead that was not promoted stays inert forever" is a property of doing
@@ -97,6 +104,20 @@ import { isFormContentType, messageThreadSection, type ThreadContext } from "./s
  * has to live. Reassignment is scoped to "the same client's own projects"
  * (#130's own wording) — see `src/clients.ts` for where a promoted
  * submission's client-linked project comes from in the first place.
+ *
+ * ── THE SIXTH ROUTE (issue #149) ─────────────────────────────────────────────
+ * A project could not be named at all before this issue — its display title
+ * was purely derived from whichever submission happened to be newest, and
+ * silently changed every time the customer filed a follow-up (see
+ * `Project.name`'s doc comment in `src/projects.ts` for the full case against
+ * that). `POST /leads/:id/project/rename` names or renames the *current*
+ * project of a promoted lead's own submission — the same project
+ * `reassignSection`'s "Currently in X" line already shows — and the "start a
+ * new project instead" branch of `/leads/:id/reassign` above also grew an
+ * inline name field for the same reason. Naming a project at the moment lead
+ * promotion itself mints one is deliberately not here; that is issue #124's
+ * own scope, not #149's — see `projectCreationForKnownClient`'s doc comment
+ * in `src/projects.ts`.
  */
 
 const LEADS_PATH = "/leads"
@@ -105,6 +126,7 @@ const LEAD_PROMOTE_PATH = /^\/leads\/([^/?#]+)\/promote$/
 const LEAD_MESSAGE_PATH = /^\/leads\/([^/?#]+)\/message$/
 const LEAD_REASSIGN_PATH = /^\/leads\/([^/?#]+)\/reassign$/
 const LEAD_START_WORK_PATH = /^\/leads\/([^/?#]+)\/start-work$/
+const LEAD_PROJECT_RENAME_PATH = /^\/leads\/([^/?#]+)\/project\/rename$/
 
 /** What `handlePages` needs to know about a `/leads…` URL, or `null`. */
 export function matchLeadsPath(
@@ -116,6 +138,7 @@ export function matchLeadsPath(
   | { kind: "message"; id: string }
   | { kind: "reassign"; id: string }
   | { kind: "start-work"; id: string }
+  | { kind: "rename-project"; id: string }
   | null {
   if (pathname === LEADS_PATH) return { kind: "index" }
 
@@ -130,6 +153,9 @@ export function matchLeadsPath(
 
   const startWork = pathname.match(LEAD_START_WORK_PATH)
   if (startWork?.[1]) return { kind: "start-work", id: startWork[1] }
+
+  const renameProjectMatch = pathname.match(LEAD_PROJECT_RENAME_PATH)
+  if (renameProjectMatch?.[1]) return { kind: "rename-project", id: renameProjectMatch[1] }
 
   const detail = pathname.match(LEAD_PATH)
   if (detail?.[1]) return { kind: "detail", id: detail[1] }
@@ -458,17 +484,28 @@ async function attachmentInfo(
 }
 
 /**
- * A project's display name, per the contract's "Project 1" section: derived
- * from its newest submission's own `titleOf` — same convention the dashboard
- * and `/projects/:id` already use. A project offered here always has at
- * least one submission (the one it was created to hold — see the "create a
- * new project" branch of `postLeadReassign` below, which attaches a
- * submission in the same breath it creates the project), so the
- * empty-project placeholder that section describes is not reachable through
- * this screen; the fallback below exists only as a defensive backstop, not a
- * rendering this contract pins.
+ * A project's display title — issue #149's `project.name` when an operator
+ * has set one, otherwise the pre-#149 derivation this contract's own "Project
+ * 1" section describes: the first line of the newest submission's own
+ * `titleOf`, same convention the dashboard and `/projects/:id` already use.
+ * A project offered here always has at least one submission (the one it was
+ * created to hold — see the "create a new project" branch of
+ * `applyReassignmentChoice` below, which attaches a submission in the same
+ * breath it creates the project), so the empty-project "Untitled project"
+ * fallback is not reachable through this screen; it exists only as a
+ * defensive backstop, not a rendering this contract pins.
+ *
+ * This is the one function every screen that shows a project's title reads
+ * through — the lead detail's reassignment panel, the client-match card, and
+ * (via `routes/project.ts`'s own import of this function) the customer's own
+ * `/projects/:id` — so an operator-set name reads identically everywhere, not
+ * just here. That last point is deliberate, not incidental: a name is
+ * customer-visible copy the moment it is set, never operator-only shorthand
+ * — see `Project.name`'s own doc comment in `src/projects.ts` for the full
+ * reasoning.
  */
 export async function projectTitle(env: Env, project: Project): Promise<string> {
+  if (project.name) return project.name
   const newest = await getNewestSubmissionForProject(env, project.id)
   return newest ? titleOf(newest) : "Untitled project"
 }
@@ -567,8 +604,10 @@ export async function postLeadReassign(request: Request, env: Env, id: string): 
 
   const rawChoice = form.get("projectChoice")
   const choice = typeof rawChoice === "string" ? rawChoice.trim() : ""
+  const rawName = form.get("newProjectName")
+  const newProjectName = typeof rawName === "string" ? rawName : null
 
-  await applyReassignmentChoice(env, context.submission, context, choice, lead.email)
+  await applyReassignmentChoice(env, context.submission, context, choice, lead.email, newProjectName)
 
   return new Response(null, {
     status: 303,
@@ -598,6 +637,12 @@ export async function postLeadReassign(request: Request, env: Env, id: string): 
  * `options.clientId` is not already known; a caller with no email to offer
  * (defensive only — see `ReassignmentOptions`' own doc comment) simply gets
  * a no-op for `choice === "new"`, the same as any other unmatched choice.
+ *
+ * `newProjectName` (issue #149) rides along only for `choice === "new"` — an
+ * operator naming the project inline as they create it, rather than a
+ * separate rename afterward. `null`/blank is not an error: `createClientProject`
+ * (`src/projects.ts`) normalizes it straight to `null`, which just leaves the
+ * new project deriving its title the way every project has always done.
  */
 export async function applyReassignmentChoice(
   env: Env,
@@ -605,6 +650,7 @@ export async function applyReassignmentChoice(
   options: Pick<ReassignmentOptions, "clientId" | "siblings">,
   choice: string,
   fallbackEmail: string | null,
+  newProjectName: string | null = null,
 ): Promise<void> {
   if (choice === "new") {
     // `findOrCreateClientId` always hands back the id of whichever row won,
@@ -615,11 +661,11 @@ export async function applyReassignmentChoice(
     // client's *address* here: `submission.project_assigned` carries ids only
     // (see `setSubmissionProject` in `src/submissions.ts`).
     if (options.clientId) {
-      const project = await createClientProject(env, options.clientId, fallbackEmail)
+      const project = await createClientProject(env, options.clientId, fallbackEmail, newProjectName)
       await setSubmissionProject(env, submission, project.id, options.clientId)
     } else if (fallbackEmail) {
       const clientId = await findOrCreateClientId(env, fallbackEmail)
-      const project = await createClientProject(env, clientId, fallbackEmail)
+      const project = await createClientProject(env, clientId, fallbackEmail, newProjectName)
       await setSubmissionProject(env, submission, project.id, clientId)
     }
   } else if (choice) {
@@ -628,6 +674,47 @@ export async function applyReassignmentChoice(
       await setSubmissionProject(env, submission, target.project.id, options.clientId)
     }
   }
+}
+
+/**
+ * POST /leads/:id/project/rename — issue #149. Renames the promoted lead's
+ * *current* project — the same one `reassignSection`'s "Currently in X" line
+ * and `renameProjectSection` below both already name — never a project
+ * chosen from a list, so there is no `projectChoice`-shaped validation to do
+ * here the way `postLeadReassign` needs.
+ *
+ * A lead that has not been promoted, or one whose attached submission has no
+ * project yet (defensive only — promotion always attaches one, see
+ * `src/leads.ts`'s `promoteLead`), gets the same 404 every other refusal on
+ * this operator surface gets.
+ *
+ * A blank `name` is not an error: `renameProject` (`src/projects.ts`)
+ * normalizes it straight to `null`, which is "go back to the automatic
+ * title", not a failure this route needs to reject.
+ */
+export async function postLeadProjectRename(request: Request, env: Env, id: string): Promise<Response> {
+  const operator = await readOperator(request, env)
+  if (!operator) return leadsNotFound()
+
+  const lead = await getLead(env, id)
+  if (!lead) return leadsNotFound()
+
+  const context = await reassignmentContext(env, lead)
+  if (!context?.project) return leadsNotFound()
+
+  const contentType = request.headers.get("content-type") ?? ""
+  if (!isFormContentType(contentType)) return leadsNotFound()
+
+  const form = await parseFormData(request)
+  if (!form) return leadsNotFound()
+
+  const rawName = form.get("name")
+  await renameProject(env, context.project.id, typeof rawName === "string" ? rawName : null)
+
+  return new Response(null, {
+    status: 303,
+    headers: { location: `/leads/${lead.id}` },
+  })
 }
 
 /**
@@ -815,6 +902,7 @@ function detail(
 
   ${promoted ? "" : promoteForm(lead, match)}
   ${attached && attached.submission.status === "describing" && !attached.startWorkUsed ? startWorkSection(lead) : ""}
+  ${promoted && reassignment?.project ? renameProjectSection(lead, reassignment.project) : ""}
   ${promoted && reassignment ? reassignSection(lead, reassignment) : ""}
 
   ${thread ? messageThreadSection(`/leads/${encodeURIComponent(lead.id)}/message`, thread, "operator", operator.email) : ""}
@@ -853,6 +941,35 @@ function startWorkSection(lead: Lead): string {
     </p>
     <form method="POST" action="/leads/${encodeURIComponent(lead.id)}/start-work" data-testid="start-work-form">
       <button type="submit" class="primary" data-testid="start-work-button">Start work</button>
+    </form>
+  </div>`
+}
+
+/**
+ * `rename-project-card` — issue #149's "an operator can rename an existing
+ * one," from the one screen currently wired to host it. Rendered whenever the
+ * promoted lead's submission already sits in a project (`reassignment.project`
+ * — a lead not yet promoted, or one whose submission has no project at all,
+ * defensive only, never gets this card).
+ *
+ * The value posted back is exactly what `renameProject` (`src/projects.ts`)
+ * stores: blank clears the name (falls back to the derived title), anything
+ * else replaces it outright. This is not operator-only shorthand — see
+ * `projectTitle`'s own doc comment for why it is read back verbatim on the
+ * customer's own `/projects/:id` too, which is also why the hint below says
+ * so plainly rather than letting an operator assume this stays internal.
+ */
+function renameProjectSection(lead: Lead, project: Project): string {
+  return `<div class="card rename-project-card" data-testid="rename-project-card">
+    <form class="rename-project" method="POST" action="/leads/${encodeURIComponent(lead.id)}/project/rename" data-testid="rename-project-form">
+      <div class="field">
+        <label for="project-name">Project name <span class="optional-tag">Optional</span></label>
+        <span class="hint">Shown everywhere this project appears, including to the client. Leave blank to use the automatic title.</span>
+        <input type="text" id="project-name" name="name" value="${escapeHtml(project.name ?? "")}" data-testid="rename-project-input">
+      </div>
+      <div class="actions">
+        <button type="submit" class="primary" data-testid="rename-project-submit">Save name</button>
+      </div>
     </form>
   </div>`
 }
@@ -1010,7 +1127,9 @@ function clientProjectOption(entry: { project: Project; title: string }, selecte
  * to any already-promoted submission, not just at promotion time").
  */
 function reassignSection(lead: Lead, reassignment: ReassignmentContext): string {
-  return reassignPanel(`/leads/${encodeURIComponent(lead.id)}/reassign`, reassignment)
+  return reassignPanel(`/leads/${encodeURIComponent(lead.id)}/reassign`, reassignment, {
+    allowNaming: true,
+  })
 }
 
 /**
@@ -1020,10 +1139,19 @@ function reassignSection(lead: Lead, reassignment: ReassignmentContext): string 
  * submission that may have no lead at all. Everything below this line is
  * unchanged from #130's own markup; only the parameter that used to be a
  * hardcoded `/leads/${lead.id}/reassign` moved to the caller.
+ *
+ * `opts.allowNaming` (issue #149) is off by default so `routes/requests.ts`'s
+ * existing call site (which does not read a `newProjectName` field —
+ * `postRequestReassign` calls `applyReassignmentChoice` with its own
+ * five-argument form) renders exactly as it always has: a field that posted
+ * data nothing on that route reads would be a worse experience than no field
+ * at all. `reassignSection` above is the one caller that opts in, because
+ * `postLeadReassign` reads and forwards it.
  */
 export function reassignPanel(
   action: string,
   reassignment: Pick<ReassignmentOptions, "project" | "currentTitle" | "siblings">,
+  opts: { allowNaming?: boolean } = {},
 ): string {
   const currentProjectLine = reassignment.project
     ? `Currently in <strong>${escapeHtml(reassignment.currentTitle)}</strong>`
@@ -1043,6 +1171,7 @@ export function reassignPanel(
           <input type="radio" name="projectChoice" value="new"${reassignment.siblings.length === 0 ? " checked" : ""}>
           Start a new project instead
         </label>
+        ${opts.allowNaming ? newProjectNameField() : ""}
       </fieldset>
 
       <div class="actions">
@@ -1051,6 +1180,23 @@ export function reassignPanel(
       </div>
     </form>
   </div>`
+}
+
+/**
+ * The optional name field for the "start a new project instead" radio,
+ * issue #149 — lets an operator name the project inline, in the same POST as
+ * the reassignment itself, rather than creating it blank and having to find
+ * their way to a separate rename step immediately after. Posted as
+ * `newProjectName` and read only by `postLeadReassign`; see `reassignPanel`'s
+ * own doc comment for why this is gated behind `opts.allowNaming` rather than
+ * always rendered.
+ */
+function newProjectNameField(): string {
+  return `<div class="field reassign-new-project-name">
+          <label for="newProjectName">Name it <span class="optional-tag">Optional</span></label>
+          <input type="text" id="newProjectName" name="newProjectName"
+            placeholder="Leave blank to use the automatic title" data-testid="reassign-new-project-name">
+        </div>`
 }
 
 function reassignOption(sibling: { project: Project; title: string }, selected: boolean): string {

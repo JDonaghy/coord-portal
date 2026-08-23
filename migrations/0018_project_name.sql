@@ -1,0 +1,65 @@
+-- 0018_project_name — issue #149: a project cannot be named, so its display
+-- title tracks whichever submission happens to be newest and silently
+-- renames itself every time the customer files a follow-up. One real
+-- client's project is currently titled after the first line of her latest
+-- request; it read differently last week and will again after her next one.
+-- An operator holding N clients x M projects has no stable handle to build a
+-- mental index against, and #144's client list/detail screens (a column of
+-- these titles) make that instability visible rather than incidental.
+--
+-- ── WHY 0012 LEFT THIS OUT, AND WHY THAT DOES NOT SURVIVE AN OPERATOR ───────
+-- 0012's own comment: "`projects` is deliberately thin: an id, the customer
+-- relationship it belongs to, and when it started. No status, no title
+-- column — a project has no state of its own to store; everything it shows
+-- is derived from the submissions under it." That reasoning holds for the
+-- surface it was written against — one customer looking at their own
+-- project, which has exactly one meaning to them — and does not survive
+-- contact with an operator holding many clients' many projects, where the
+-- project itself is the unit of navigation and needs a stable handle.
+--
+-- A name is also not "state" in the sense 0012 guarded against: it is not a
+-- status that can disagree with a derived truth (there is nothing to
+-- reconcile it against), it is a customer-relationship fact with no other
+-- representation anywhere — exactly the kind of thing this repo's own
+-- single-writer-per-fact rule (CLAUDE.md) makes the portal the sole owner of.
+--
+-- ── NULLABLE, NO BACKFILL ────────────────────────────────────────────────────
+-- `name` is nullable and every existing project gets `NULL` on this
+-- migration — nothing here retroactively invents a title for a project that
+-- has never had one, same posture 0012 and 0016 both already took for their
+-- own additive columns. `NULL` means "not named"; every reader that shows a
+-- project's title (`projectTitle()` in `src/routes/leads.ts`) falls back to
+-- today's derivation-from-newest-submission exactly as before, so nothing
+-- regresses and no existing project changes what it renders as until an
+-- operator explicitly sets a name. A blank name is also not an error going
+-- forward — `renameProject` (`src/projects.ts`) normalizes it straight back
+-- to `NULL`.
+--
+-- ── CUSTOMER-VISIBLE, ON PURPOSE — NOT OPERATOR-ONLY SHORTHAND ──────────────
+-- A name set here is read back by the exact same `projectTitle()` derivation
+-- the customer's own `/projects/:id` uses (`src/routes/project.ts`), so a
+-- named project reads identically for the operator and the customer who owns
+-- it — "one name, one place to learn it" (issue #149). That is a deliberate
+-- choice, not an accident: an operator naming a project should pick
+-- something they are fine with the client seeing, the same way any other
+-- copy this portal writes on a customer's behalf already has to be. See
+-- `src/routes/project.ts`'s own doc comment for the fuller reasoning.
+--
+-- ── WHO CAN SET IT, AND WHO DELIBERATELY CANNOT YET ─────────────────────────
+-- Two operator-only writers land with this migration: the "start a new
+-- project instead" branch of `POST /leads/:id/reassign`
+-- (`applyReassignmentChoice`, `src/routes/leads.ts`) and a dedicated
+-- `POST /leads/:id/project/rename` for renaming an existing one. Naming a
+-- project at the moment lead promotion itself mints one (issue #124's own
+-- "default-create") is deliberately not wired here — that is #124's own
+-- scope to decide, not this issue's to reach into `src/leads.ts` for. Every
+-- project promotion creates today keeps minting with `name IS NULL`, exactly
+-- as before, until #124 adds its own path. A customer's own "Start a
+-- follow-up" project (`projectAssignmentForFollowUp`, `src/projects.ts`)
+-- never gets a name either — naming is an operator act on a customer
+-- relationship, not something inferred from a customer's own words.
+
+ALTER TABLE projects ADD COLUMN name TEXT;
+
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '0018')
+  ON CONFLICT(key) DO UPDATE SET value = excluded.value;

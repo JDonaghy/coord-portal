@@ -1,0 +1,266 @@
+import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test"
+
+/**
+ * Black-box coverage for issue #149 ([portal] a project cannot be named — its
+ * title is derived from the newest submission, so it silently renames
+ * itself), driving the real Worker under `wrangler dev` — see
+ * `playwright.config.ts`. This is the project's own `e2e/` tier, not the
+ * sealed acceptance suite under `tests/acceptance/`; per CLAUDE.md this repo
+ * still ships its own coverage for behaviour-changing work.
+ *
+ * SCOPE. `projects.name` (`migrations/0018_project_name.sql`) is nullable and
+ * optional everywhere — this file covers naming a brand-new project inline
+ * from the "start a new project instead" branch of `POST /leads/:id/reassign`
+ * (`e2e/reassign.spec.ts` already covers that flow without a name; this file
+ * is additive, not a duplicate), renaming an already-existing project from
+ * `/leads/:id`'s own rename card, a blank name falling back to the pre-#149
+ * derivation rather than failing, the name reading identically on the
+ * operator's own screen and the customer's `/projects/:id` (issue #149's
+ * explicit "not operator-only shorthand" decision), the field being withheld
+ * on `/requests/:id`'s own reassign panel (`routes/requests.ts` never reads
+ * it), and the usual access-control refusal.
+ *
+ * Every string below is invented — see CLAUDE.md rule 1.
+ */
+
+const ACCESS_HEADER = "Cf-Access-Authenticated-User-Email"
+
+/** See `DEV_OPERATOR_EMAIL` in `src/operators.ts` — honoured only off Cloudflare's edge. */
+const DEV_OPERATOR = "ops@example.test"
+
+const TURNSTILE_FIELD = "cf-turnstile-response"
+
+const SERVICE_TOKEN = {
+  "CF-Access-Client-Id": "b4e1a9d073cf4826bf05e3a91c68407d.access",
+  "CF-Access-Client-Secret":
+    "3f6d8b1ac97e42509fa1c6e0b8d2749fca6712dbe0f4589aa1c3e6d0f9b8c27",
+}
+
+function nonce(): string {
+  return Math.random().toString(36).slice(2, 10)
+}
+
+async function contextFor(browser: Browser, baseURL: string | undefined, email: string | null) {
+  return browser.newContext({
+    baseURL,
+    extraHTTPHeaders: email ? { [ACCESS_HEADER]: email } : {},
+  })
+}
+
+async function settleBotGate(page: Page) {
+  await page.waitForFunction(
+    (field) => {
+      const input = document.querySelector(`input[name="${field}"]`) as HTMLInputElement | null
+      return !!input && input.value.length > 0
+    },
+    TURNSTILE_FIELD,
+    { timeout: 15_000 },
+  )
+}
+
+/**
+ * Sends one lead through the public form, then promotes it as the operator —
+ * same shape as `e2e/reassign.spec.ts`'s own helper, plus the promoted
+ * submission's `SUB-XXXXXX` reference this file's naming assertions need.
+ */
+async function seedPromotedLead(
+  browser: Browser,
+  baseURL: string | undefined,
+  operator: Page,
+  summary: string,
+  email: string,
+): Promise<{ path: string; reference: string }> {
+  const strangerContext = await contextFor(browser, baseURL, null)
+  const stranger = await strangerContext.newPage()
+  await stranger.goto("/start")
+  await stranger.getByTestId("field-lead-summary").fill(summary)
+  await stranger.getByTestId("field-lead-email").fill(email)
+  await settleBotGate(stranger)
+  await stranger.getByTestId("submit-lead").click()
+  await expect(stranger.getByTestId("lead-receipt")).toBeVisible()
+  await strangerContext.close()
+
+  await operator.goto("/leads")
+  const row = operator.getByTestId("lead-row").filter({ hasText: summary })
+  await row.getByTestId("review-lead").click()
+  const path = new URL(operator.url()).pathname
+  await operator.getByTestId("promote-button").click()
+  await expect(operator.getByTestId("lead-detail")).toHaveAttribute("data-status", "promoted")
+  const reference = (await operator.getByTestId("promoted-submission-reference").innerText())
+    .trim()
+    .replace(/^Promoted to submission\s+/, "")
+  return { path, reference }
+}
+
+/** Open the no-JS disclosure the way an operator does — shared by `/leads/:id` and `/requests/:id`. */
+async function openReassign(page: Page) {
+  await expect(page.getByTestId("reassign-open-button")).toBeVisible()
+  await page.getByTestId("reassign-open-button").click()
+  await expect(page.getByTestId("reassign-form")).toBeVisible()
+}
+
+/** Every bridge event for `reference` — the only black-box way to learn a project's id without a dedicated screen for it. */
+async function bridgeEventsFor(
+  request: APIRequestContext,
+  reference: string,
+): Promise<Array<{ type: string; payload: Record<string, unknown> }>> {
+  const matches: Array<{ type: string; payload: Record<string, unknown> }> = []
+  let cursor: string | undefined
+  for (let page = 0; page < 50; page++) {
+    const res = await request.get("/api/bridge/pull", {
+      params: { limit: "200", ...(cursor ? { cursor } : {}) },
+      headers: SERVICE_TOKEN,
+    })
+    expect(res.status()).toBe(200)
+    const body = (await res.json()) as {
+      events: Array<{ type: string; submission_id: string; payload: Record<string, unknown> }>
+      cursor: string
+      has_more: boolean
+    }
+    matches.push(
+      ...body.events
+        .filter((event) => event.submission_id === reference)
+        .map((event) => ({ type: event.type, payload: event.payload })),
+    )
+    cursor = body.cursor
+    if (!body.has_more) return matches
+  }
+  throw new Error("the stream never drained — the cursor is not advancing")
+}
+
+test("renaming an existing project updates the title everywhere, including the customer's own /projects/:id, and a blank name falls back to the derived title", async ({
+  browser,
+  baseURL,
+  request,
+}) => {
+  const tag = nonce()
+  const summary = `A synthetic rename-existing-project check (${tag}).`
+  const email = `naming-rename-${tag}@example.test`
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+  const { reference } = await seedPromotedLead(browser, baseURL, operator, summary, email)
+
+  // #129 already gave this client its first project the moment it promoted —
+  // the rename card is present from that instant, no reassignment needed
+  // first, and it starts blank (`project.name IS NULL`).
+  await expect(operator.getByTestId("rename-project-card")).toBeVisible()
+  await expect(operator.getByTestId("rename-project-input")).toHaveValue("")
+
+  const chosenName = `Kitchen remodel, phase two (${tag})`
+  await operator.getByTestId("rename-project-input").fill(chosenName)
+  await operator.getByTestId("rename-project-submit").click()
+
+  await expect(operator.getByTestId("rename-project-input")).toHaveValue(chosenName)
+  await openReassign(operator)
+  await expect(operator.getByTestId("reassign-current-project")).toContainText(chosenName)
+
+  // The project this promotion minted — `submission.created`'s own event
+  // payload already knows its id synchronously (#129/#146, same reasoning
+  // `e2e/reassign.spec.ts` documents), so there is no need to reassign
+  // anything just to learn it.
+  const created = (await bridgeEventsFor(request, reference)).find(
+    (event) => event.type === "submission.created",
+  )
+  const projectId = created?.payload["project_id"]
+  expect(typeof projectId).toBe("string")
+
+  // Issue #149's explicit customer-visibility decision: the name is not
+  // operator-only shorthand, it reads back verbatim on the customer's own
+  // combined project view.
+  const customerContext = await contextFor(browser, baseURL, email)
+  const customer = await customerContext.newPage()
+  await customer.goto(`/projects/${projectId}`)
+  await expect(customer.getByTestId("project-detail")).toBeVisible()
+  await expect(customer.getByRole("heading", { level: 1 })).toHaveText(chosenName)
+  await customerContext.close()
+
+  // Clearing the name is not an error — it falls back to the pre-#149
+  // derivation from the newest (only) submission's own outcome, which for a
+  // promoted lead is exactly what they originally sent in.
+  await operator.getByTestId("rename-project-input").fill("")
+  await operator.getByTestId("rename-project-submit").click()
+  await expect(operator.getByTestId("rename-project-input")).toHaveValue("")
+  await openReassign(operator)
+  await expect(operator.getByTestId("reassign-current-project")).toContainText(summary)
+  await expect(operator.getByTestId("reassign-current-project")).not.toContainText(chosenName)
+
+  await operatorContext.close()
+})
+
+test("naming a new project inline while reassigning names it everywhere, but the field is withheld on /requests' own reassign panel", async ({
+  browser,
+  baseURL,
+}) => {
+  const tag = nonce()
+  const summary = `A synthetic inline-name reassignment check (${tag}).`
+  const email = `naming-inline-${tag}@example.test`
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+  const { path, reference } = await seedPromotedLead(browser, baseURL, operator, summary, email)
+
+  await openReassign(operator)
+  await expect(operator.getByTestId("reassign-new-project-name")).toBeVisible()
+  const chosenName = `A fresh engagement, named up front (${tag})`
+  await operator.getByTestId("reassign-project-option-new").click()
+  await operator.getByTestId("reassign-new-project-name").fill(chosenName)
+  await operator.getByTestId("reassign-submit").click()
+  await expect(operator.getByTestId("reassign-form")).toBeHidden()
+  expect(new URL(operator.url()).pathname, "reassignment stays on the same screen").toBe(path)
+
+  // The freshly created (and named) project now reads back both as "the
+  // project this submission currently sits in" and pre-fills the rename
+  // card with the exact name just given it — one name, learned two ways.
+  await openReassign(operator)
+  await expect(operator.getByTestId("reassign-current-project")).toContainText(chosenName)
+  await expect(operator.getByTestId("rename-project-input")).toHaveValue(chosenName)
+
+  // `routes/requests.ts`'s own second entry point onto the identical
+  // reassignment mechanic (#145) never reads a `newProjectName` field, so
+  // `reassignPanel` withholds it there by default (`opts.allowNaming`) rather
+  // than rendering a field that would silently swallow whatever an operator
+  // typed into it.
+  await operator.goto("/requests")
+  const requestRow = operator.getByTestId("request-row").filter({ hasText: reference })
+  await requestRow.getByTestId("request-reassign-link").click()
+  await expect(operator.getByTestId("request-detail")).toBeVisible()
+  await openReassign(operator)
+  await expect(operator.getByTestId("reassign-new-project-name")).toHaveCount(0)
+
+  await operatorContext.close()
+})
+
+test("a stranger and a non-operator cannot rename a project", async ({ browser, baseURL, request }) => {
+  const tag = nonce()
+  const summary = `A synthetic rename access-control check (${tag}).`
+  const email = `naming-guard-${tag}@example.test`
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+  const { path } = await seedPromotedLead(browser, baseURL, operator, summary, email)
+  await operatorContext.close()
+
+  const anonymous = await request.post(`${path}/project/rename`, {
+    form: { name: "should never land" },
+    maxRedirects: 0,
+    failOnStatusCode: false,
+  })
+  expect(anonymous.status()).toBe(404)
+
+  const nonOperator = await request.post(`${path}/project/rename`, {
+    headers: { [ACCESS_HEADER]: `curious-${tag}@example.test` },
+    form: { name: "should never land" },
+    maxRedirects: 0,
+    failOnStatusCode: false,
+  })
+  expect(nonOperator.status()).toBe(404)
+
+  const unknownLead = await request.post("/leads/lead_does_not_exist_e2e/project/rename", {
+    headers: { [ACCESS_HEADER]: DEV_OPERATOR },
+    form: { name: "should never land" },
+    maxRedirects: 0,
+    failOnStatusCode: false,
+  })
+  expect(unknownLead.status()).toBe(404)
+})

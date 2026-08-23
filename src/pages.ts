@@ -10,6 +10,7 @@ import {
   leadsNotFound,
   matchLeadsPath,
   postLeadMessage,
+  postLeadProjectRename,
   postLeadReassign,
   postLeadStartWork,
   promoteLeadAction,
@@ -186,6 +187,12 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
     // same reason #130's reassignment does — see `routes/leads.ts`.
     if (leadsMatch.kind === "start-work" && request.method === "POST") {
       return postLeadStartWork(request, env, leadsMatch.id)
+    }
+    // Issue #149 — name or rename the promoted lead's current project. Same
+    // operator gate, same route file, for the same reason #130's
+    // reassignment does — see `routes/leads.ts`.
+    if (leadsMatch.kind === "rename-project" && request.method === "POST") {
+      return postLeadProjectRename(request, env, leadsMatch.id)
     }
     // Any other method on a `/leads…` path gets the same 404 a non-operator
     // gets — see `src/operators.ts`. A 405 would confirm the path exists.

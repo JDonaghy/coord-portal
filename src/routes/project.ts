@@ -12,6 +12,7 @@ import {
   type SubmissionStatus,
 } from "../submissions"
 import type { Env } from "../types"
+import { projectTitle } from "./leads"
 import { roundEntry } from "./submission"
 
 /**
@@ -20,12 +21,29 @@ import { roundEntry } from "./submission"
  * timeline, rather than requiring the customer to know which submission ID
  * covers which round."
  *
- * One route, GET only — a project has nothing a customer writes to directly
- * (see `migrations/0012_projects.sql`: no status, no title, nothing owned
- * here). Everything on this screen is read from the submissions under it, the
+ * One route, GET only — nothing on this screen is itself customer-writable.
+ * A project can carry an operator-set `name` since issue #149
+ * (`migrations/0018_project_name.sql`), but that is written only from the
+ * operator surface (`routes/leads.ts`'s `postLeadProjectRename`, and the
+ * "start a new project instead" branch of `postLeadReassign`), never from
+ * here — this route only reads it back, through the same `projectTitle`
+ * (`routes/leads.ts`) the operator's own screens use, so a named project
+ * reads identically for the operator and the customer who owns it.
+ * Everything else on this screen is read from the submissions under it, the
  * same submissions already reachable one at a time at `/submissions/:id`;
  * this page is a different arrangement of the same data, not a new source of
  * it.
+ *
+ * ── WHY AN OPERATOR'S NAME SHOWS UP HERE TOO (issue #149) ──────────────────
+ * A project's name is deliberately not kept as operator-only internal
+ * shorthand. Whoever sets it is naming something the customer already sees
+ * the shape of — their own combined request history — and rendering two
+ * different titles for the one project, an internal one here and a derived
+ * one there, would be a second thing to keep in sync for no benefit. An
+ * operator naming a project should pick copy they are fine with the client
+ * reading, the same as any other text this portal writes on a customer's
+ * behalf already has to be. See `Project.name`'s own doc comment in
+ * `src/projects.ts` for the fuller reasoning.
  *
  * Ownership is `project.customerEmail === the caller's verified identity` —
  * the project-level version of the exact check `isOwnedBy` makes for one
@@ -73,22 +91,24 @@ export async function projectDetail(request: Request, env: Env, id: string): Pro
   // `src/operators.ts`, for the full rationale (issue #103).
   const isOperator = isOperatorEmail(email, request, env)
 
+  // Issue #149: the same `projectTitle` the operator's own screens read
+  // through (`routes/leads.ts`) — an operator-set `project.name` wins
+  // outright, and a project with none falls back to the pre-#149 derivation
+  // from the newest submission, exactly as this screen always rendered.
+  const title = await projectTitle(env, project)
+
   return html(
-    page("Project history — coord-portal", projectPage(email, isOperator, submissions, blocks)),
+    page("Project history — coord-portal", projectPage(title, email, isOperator, submissions, blocks)),
   )
 }
 
 function projectPage(
+  title: string,
   email: string | null,
   isOperator: boolean,
   submissions: Submission[],
   blocks: string[],
 ): string {
-  // Newest first — `listSubmissionsForProject` already orders it that way,
-  // and its first entry is the current state of the relationship, the same
-  // way the dashboard's grouped row picks its title and status from it.
-  const newest = submissions[0]
-  const title = newest ? titleOf(newest) : "Project history"
   const count = submissions.length
   const countLabel = count === 1 ? "1 request" : `${count} requests`
 
