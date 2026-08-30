@@ -1,0 +1,58 @@
+# ms-5 issue #161 — sealed acceptance manifest fragment.
+#
+# Per #2543, this file belongs exclusively to issue #161 — no other slice's
+# test-author dispatch writes here, and this dispatch writes nowhere else
+# under manifest.d/.
+#
+# Ids are the `web-playwright` driver's node ids, exactly as
+# `coord.acceptance_drivers.parse_playwright_json_report` builds them:
+#
+#   [{project}] {file relative to testDir} › {describe path} › {test title}
+#
+# `testDir` is `./tests/acceptance` (see `playwright.acceptance.config.ts`), so
+# the file component is `ms-5/161-inbound-seam.spec.ts`. Ids must match
+# character-for-character, including the `›` separators and the em-dashes
+# inside a few titles.
+
+issues:
+  161:
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › the migration lands, and the running Worker reports the newer schema"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › inbound_emails carries the columns issue 161's own schema section names, with the nullability it pins"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › message_id + to_email is unique, and no foreign key constraint is introduced"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › a plain message produces exactly one inbound_emails row with the parsed fields, and touches no routing, lead, or outbox row"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › auth_result records the DMARC verdict from Authentication-Results — pass"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › auth_result records the DMARC verdict from Authentication-Results — fail"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › auth_result records the DMARC verdict from Authentication-Results — none (header absent)"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — Auto-Submitted: auto-replied — never earns a reply"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — Precedence: bulk — never earns a reply"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — List-Unsubscribe present — never earns a reply"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — empty envelope sender (a bounce) — never earns a reply"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — sender is one of this portal's own sending domains — never earns a reply"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › a redelivery of the same Message-ID produces no second row"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › an oversized body is stored truncated and flagged, never dropped silently"
+
+# Tests OBSERVED failing against the unimplemented state, recorded at the
+# moment this slice was authored: `npm run test:acceptance -- ms-5/161`
+# (after `npm ci` + `npx playwright install chromium`), against a checkout at
+# schema head 0019 (`0019_client_merge.sql` — nothing in ms-5 had landed yet):
+# 14 failed, 0 passed, 0 skipped. The fourteen below are exactly the fourteen
+# ids that were watched to fail — there is no control or ratchet clause in
+# this slice (every test depends on `POST /__email` and/or
+# `migrations/0020_inbound_emails.sql` existing, and #161 is the issue that
+# creates both), so nothing is excluded.
+expected_red:
+  161:
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › the migration lands, and the running Worker reports the newer schema"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › inbound_emails carries the columns issue 161's own schema section names, with the nullability it pins"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › message_id + to_email is unique, and no foreign key constraint is introduced"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › a plain message produces exactly one inbound_emails row with the parsed fields, and touches no routing, lead, or outbox row"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › auth_result records the DMARC verdict from Authentication-Results — pass"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › auth_result records the DMARC verdict from Authentication-Results — fail"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › auth_result records the DMARC verdict from Authentication-Results — none (header absent)"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — Auto-Submitted: auto-replied — never earns a reply"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — Precedence: bulk — never earns a reply"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — List-Unsubscribe present — never earns a reply"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — empty envelope sender (a bounce) — never earns a reply"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — sender is one of this portal's own sending domains — never earns a reply"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › a redelivery of the same Message-ID produces no second row"
+    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › an oversized body is stored truncated and flagged, never dropped silently"
