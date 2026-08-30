@@ -96,6 +96,19 @@ export function generateMessageId(): string {
   return `msg_${randomHex(24)}`
 }
 
+/**
+ * `inb_` + 24 lowercase hex chars — one row in `inbound_emails` (issue #161).
+ * Same shape as `generateEventId` / `generateOutboxId` / `generateMessageId`,
+ * and portal-internal for the same reason: it is the handle `/replies/:id`
+ * (EM-6) reads a draft back by, never a reference a sender quotes. The
+ * sender's own `Message-ID` is recorded alongside it and is deliberately NOT
+ * used as the primary key — it is attacker-controlled text that may be absent,
+ * duplicated across recipients, or absurdly long.
+ */
+export function generateInboundEmailId(): string {
+  return `inb_${randomHex(24)}`
+}
+
 function randomHex(length: number): string {
   const bytes = crypto.getRandomValues(new Uint8Array(Math.ceil(length / 2)))
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0"))
