@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reply — coord-portal</title>
+<!-- MOCK — Gate-A screen state for ms-5, issue #166 (EM-6).
+     Route: GET /replies/:id — rung 6, ambiguous case (issue #165's own
+     phrase): a known client with two projects the router could not score
+     apart. `data-routed-kind="unrouted"`. Both candidates are offered as
+     equal radio options — NEITHER pre-selected, per #163's own "guessing
+     never" — contrast mock 03's single-project match, which has nothing to
+     disambiguate at all. One attachment was dropped (issue #169); the
+     drafted body's own text says so. The routing panel is OPEN by default
+     here, per contract.md's own reasoning: an ambiguous row is exactly the
+     case an operator needs to resolve before approving. -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1.25rem;
+    max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  header.topbar .signout { color: var(--text-faint); text-decoration: none; font-size: var(--step--1); }
+
+  body { max-width: 44rem; margin: 0 auto; padding: 1.5rem; font-family: var(--font-ui); color: var(--text); background: var(--ground); }
+  .back-link { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); display: inline-block; margin-bottom: 1rem; }
+
+  .route-badge {
+    display: inline-flex; align-items: center; padding: 0.2em 0.75em; border-radius: 999px;
+    font-size: var(--step--1); font-weight: 600;
+  }
+  .route-badge[data-routed-kind="unrouted"] { background: var(--attn-wash); color: var(--attn); }
+
+  h1 { margin: 0.5rem 0 0.25rem; }
+  .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); margin: 0 0 0.5rem; }
+  .attachments-note {
+    display: inline-flex; align-items: center; gap: 0.35em; font-size: var(--step--1); color: var(--attn); margin: 0 0 1.5rem;
+  }
+
+  section.card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1.1rem 1.3rem; margin-bottom: 1.25rem;
+  }
+  section.card h2 { margin: 0 0 0.75rem; font-size: var(--step-0); }
+  dl.received dt { font-weight: 600; font-size: var(--step--1); color: var(--text-dim); margin-top: 0.6rem; }
+  dl.received dt:first-child { margin-top: 0; }
+  dl.received dd { margin: 0.15rem 0 0; white-space: pre-wrap; }
+
+  .route-reason { color: var(--text-dim); margin: 0.5rem 0 0; }
+  .route-target { font-weight: 600; }
+  .runner-up { color: var(--text-faint); font-size: var(--step--1); margin: 0.5rem 0 0; }
+
+  fieldset.routing-project-list { border: 0; padding: 0; margin: 0.75rem 0 1rem; display: grid; gap: 0.5rem; }
+  .routing-project-option {
+    display: flex; align-items: center; gap: 0.5rem; border: 1px solid var(--line); border-radius: var(--r-md);
+    padding: 0.5rem 0.75rem; cursor: pointer;
+  }
+
+  .field { display: grid; gap: 0.4rem; margin-bottom: 1rem; }
+  .field label { font-weight: 600; font-size: var(--step--1); }
+  .field input[type="text"], .field textarea {
+    font: inherit; padding: 0.6rem 0.7rem; border-radius: var(--r-md);
+    border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); resize: vertical;
+  }
+  .field textarea { min-height: 8rem; }
+
+  .actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.75rem; }
+  button.primary {
+    background: var(--accent); color: white; border: none; border-radius: var(--r-md);
+    padding: 0.6rem 1.1rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.ghost {
+    background: transparent; color: var(--fail); border: 1px solid var(--line-strong); border-radius: var(--r-md);
+    padding: 0.6rem 1.1rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.secondary {
+    background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--r-md);
+    padding: 0.6rem 1.1rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+
+  .routing-toggle { position: absolute; opacity: 0; pointer-events: none; }
+  label.routing-open-button { display: inline-block; border: 1px solid var(--line-strong); border-radius: var(--r-md);
+    padding: 0.45rem 0.9rem; font-size: var(--step--1); font-weight: 600; cursor: pointer; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/leads" data-testid="nav-leads">Leads</a>
+    <a href="/deliveries" data-testid="nav-deliveries">Deliveries</a>
+    <a href="/replies" aria-current="page" data-testid="nav-replies">Replies</a>
+    <a href="/requests" data-testid="nav-requests">Requests</a>
+    <a href="/clients" data-testid="nav-clients">Clients</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ops@example.test</span>
+  <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>
+</header>
+<main data-testid="reply-detail" data-rung="6" data-routed-kind="unrouted">
+  <a class="back-link" href="/replies" data-testid="back-to-replies">&larr; Replies</a>
+
+  <span class="route-badge" data-testid="reply-route-badge" data-routed-kind="unrouted">Unrouted — 2 candidates</span>
+  <h1>One more thing</h1>
+  <p class="meta">from <span data-testid="reply-sender-email">morgan@example.test</span> &middot;
+    <span data-testid="reply-received-at">2026-08-29T09:47:03Z</span></p>
+  <p class="attachments-note" data-testid="reply-attachments-dropped">📎 1 attachment — not saved</p>
+
+  <section class="card">
+    <h2>The message as received</h2>
+    <dl class="received">
+      <dt>Authenticated</dt>
+      <dd data-testid="reply-auth-result">pass</dd>
+      <dt>Message</dt>
+      <dd data-testid="reply-original-body">One more thing while I have you — I attached a screenshot of the layout issue on mobile. Can you take a look when you get a chance?</dd>
+    </dl>
+  </section>
+
+  <section class="card">
+    <h2>Why it landed here</h2>
+    <p class="route-reason" data-testid="reply-route-decision" data-routed-kind="unrouted">
+      Rung 6 — known client, two projects, neither scored ahead of the other. Not attached to
+      anything yet.
+    </p>
+    <p class="route-reason" data-testid="reply-route-reason">morgan@example.test matches an existing client with two active projects, and neither is currently waiting on this customer, so the router would not guess.</p>
+    <p class="runner-up" data-testid="reply-route-runner-up">Runner-up: Mobile app redesign (equally plausible — not picked)</p>
+
+    <input class="routing-toggle" type="checkbox" id="routing-toggle" data-testid="reply-routing-toggle" checked aria-label="Change routing">
+    <div class="routing-panel">
+      <label class="routing-open-button" role="button" for="routing-toggle" data-testid="reply-routing-open-button">Change routing</label>
+      <form class="routing-form" method="POST" action="/replies/rpl_b2c3d4e5f6a1/route" data-testid="reply-routing-form">
+        <fieldset class="routing-project-list">
+          <legend class="visually-hidden">Attach this to</legend>
+          <label class="routing-project-option" data-testid="reply-routing-option" data-target-id="proj_9f8e7d6c5b4a">
+            <input type="radio" name="target" value="proj_9f8e7d6c5b4a">
+            Brand refresh
+          </label>
+          <label class="routing-project-option" data-testid="reply-routing-option" data-target-id="proj_1a2b3c4d5e6f">
+            <input type="radio" name="target" value="proj_1a2b3c4d5e6f">
+            Mobile app redesign
+          </label>
+          <label class="routing-project-option" data-testid="reply-routing-option-lead">
+            <input type="radio" name="target" value="lead">
+            Not either of these — create a lead instead
+          </label>
+        </fieldset>
+        <div class="actions">
+          <label class="secondary" role="button" for="routing-toggle" data-testid="reply-routing-cancel">Cancel</label>
+          <button type="submit" class="primary" data-testid="reply-routing-submit">Route here</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Drafted reply</h2>
+    <form method="POST" action="/replies/rpl_b2c3d4e5f6a1/approve" data-testid="reply-approve-form">
+      <div class="field">
+        <label for="reply-subject">Subject</label>
+        <input type="text" id="reply-subject" name="subject" value="Re: One more thing" data-testid="reply-subject-field">
+      </div>
+      <div class="field">
+        <label for="reply-body">Body</label>
+        <textarea id="reply-body" name="body" data-testid="reply-body-field">Thanks for reaching out — I've got your message. One thing to flag: the attachment you sent doesn't come through this mailbox, so I don't have it yet. Feel free to send it a different way if it's useful.
+
+— John, Heuron Technology</textarea>
+      </div>
+      <div class="actions">
+        <button type="submit" class="primary" data-testid="reply-approve-button">Approve &amp; send</button>
+      </div>
+    </form>
+    <form method="POST" action="/replies/rpl_b2c3d4e5f6a1/discard" data-testid="reply-discard-form">
+      <div class="actions">
+        <button type="submit" class="ghost" data-testid="reply-discard-button">Discard</button>
+      </div>
+    </form>
+    <form method="POST" action="/replies/rpl_b2c3d4e5f6a1/promote" data-testid="reply-promote-form">
+      <div class="actions">
+        <button type="submit" class="secondary" data-testid="reply-promote-button">Promote to a submission</button>
+      </div>
+    </form>
+  </section>
+</main>
+</body>
+</html>

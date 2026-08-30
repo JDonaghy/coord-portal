@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replies — coord-portal</title>
+<!-- MOCK — Gate-A screen state for ms-5, issue #166 (EM-6).
+     Route: GET /replies with zero pending drafts anywhere — the
+     `replies-list-empty` hook renders INSTEAD of `replies-list`, never
+     alongside it, same convention /leads' `leads-list-empty` already uses. -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1.25rem;
+    max-width: 52rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  header.topbar .signout { color: var(--text-faint); text-decoration: none; font-size: var(--step--1); }
+
+  body { max-width: 52rem; margin: 0 auto; padding: 1.5rem; font-family: var(--font-ui); color: var(--text); background: var(--ground); }
+  .page-head h1 { margin: 0 0 0.25rem; }
+  .lede { color: var(--text-dim); max-width: 40rem; margin: 0 0 1.5rem; }
+  .empty-note { color: var(--text-faint); }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/leads" data-testid="nav-leads">Leads</a>
+    <a href="/deliveries" data-testid="nav-deliveries">Deliveries</a>
+    <a href="/replies" aria-current="page" data-testid="nav-replies">Replies</a>
+    <a href="/requests" data-testid="nav-requests">Requests</a>
+    <a href="/clients" data-testid="nav-clients">Clients</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ops@example.test</span>
+  <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>
+</header>
+<main>
+  <div class="page-head">
+    <h1>Replies</h1>
+  </div>
+  <p class="lede">
+    Every drafted reply the inbound mailbox has produced, waiting on you before it sends. Nothing
+    here goes out until you approve it.
+  </p>
+
+  <p class="empty-note" data-testid="replies-list-empty">Nothing waiting on you right now.</p>
+</main>
+</body>
+</html>

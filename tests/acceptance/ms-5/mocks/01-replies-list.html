@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replies — coord-portal</title>
+<!-- MOCK — Gate-A screen state for ms-5 (Email intake), issue #166 (EM-6).
+     Route: GET /replies, operator-only, gated the same way /leads and
+     /deliveries are (readOperator + leadsNotFound()'s indistinguishable 404).
+     Three pending drafts, one of each `data-routed-kind`:
+       - dana@example.test  — rung 3, known client with one project (message)
+       - morgan@example.test — rung 6 ambiguous, two candidate projects (unrouted)
+       - priya@example.test  — rung 6 stranger, became LEAD-9B21F4 (lead)
+     See tests/acceptance/ms-5/contract.md for every hook's presence rule —
+     several of these hooks (routing-panel actions, the router ladder past
+     rung 4) are this contract's own flagged inventions, not confirmed
+     against the milestone's own issue text, which this mock-author agent
+     received truncated. -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1.25rem;
+    max-width: 52rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  header.topbar .signout { color: var(--text-faint); text-decoration: none; font-size: var(--step--1); }
+
+  body { max-width: 52rem; margin: 0 auto; padding: 1.5rem; font-family: var(--font-ui); color: var(--text); background: var(--ground); }
+  .page-head h1 { margin: 0 0 0.25rem; }
+  .lede { color: var(--text-dim); max-width: 40rem; margin: 0 0 1.5rem; }
+
+  ul.replies-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+  .reply-row {
+    display: flex; flex-direction: column; gap: 0.6rem;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1rem 1.25rem;
+  }
+  .reply-row .row-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+  .reply-row .row-main { display: grid; gap: 0.3rem; min-width: 0; max-width: 30rem; }
+  .reply-row .subject { font-weight: 600; }
+  .reply-row .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  .reply-row .row-side { display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0; flex-wrap: wrap; }
+
+  .route-badge {
+    display: inline-flex; align-items: center; padding: 0.2em 0.75em; border-radius: 999px;
+    font-size: var(--step--1); font-weight: 600; white-space: nowrap;
+  }
+  .route-badge[data-routed-kind="message"]  { background: var(--pass-wash); color: var(--pass); }
+  .route-badge[data-routed-kind="unrouted"] { background: var(--attn-wash); color: var(--attn); }
+  .route-badge[data-routed-kind="lead"]     { background: var(--accent-wash); color: var(--accent-dim); }
+
+  .attachments-note {
+    display: inline-flex; align-items: center; gap: 0.35em; font-size: var(--step--1); color: var(--attn);
+  }
+
+  .auth-result { font-size: var(--step--1); color: var(--text-faint); font-family: var(--font-mono); }
+
+  .button.secondary {
+    display: inline-block; border: 1px solid var(--line-strong); border-radius: var(--r-md);
+    padding: 0.45rem 0.9rem; color: var(--text); text-decoration: none; font-size: var(--step--1); font-weight: 600;
+    background: var(--surface);
+  }
+  .button.secondary:hover { border-color: var(--accent); color: var(--accent-dim); }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/leads" data-testid="nav-leads">Leads</a>
+    <a href="/deliveries" data-testid="nav-deliveries">Deliveries</a>
+    <a href="/replies" aria-current="page" data-testid="nav-replies">Replies</a>
+    <a href="/requests" data-testid="nav-requests">Requests</a>
+    <a href="/clients" data-testid="nav-clients">Clients</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ops@example.test</span>
+  <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>
+</header>
+<main>
+  <div class="page-head">
+    <h1>Replies</h1>
+  </div>
+  <p class="lede">
+    Every drafted reply the inbound mailbox has produced, waiting on you before it sends. Nothing
+    here goes out until you approve it.
+  </p>
+
+  <ul class="replies-list" data-testid="replies-list">
+    <li>
+      <div class="reply-row" data-testid="reply-row" data-rung="3" data-routed-kind="message">
+        <div class="row-top">
+          <div class="row-main">
+            <span class="subject" data-testid="reply-subject">Quick update on the homepage copy</span>
+            <span class="meta">
+              <span data-testid="reply-sender-email">dana@example.test</span> &middot;
+              <span data-testid="reply-sender-name">Dana Ruiz</span> &middot;
+              <span data-testid="reply-received-at">2026-08-29T14:02:11Z</span>
+            </span>
+          </div>
+          <div class="row-side">
+            <span class="route-badge" data-testid="reply-route-badge" data-routed-kind="message">Matched: Website refresh</span>
+            <span class="auth-result" data-testid="reply-auth-result">pass</span>
+            <a class="button secondary" href="/replies/rpl_a1b2c3d4e5f6" data-testid="review-reply">Review</a>
+          </div>
+        </div>
+      </div>
+    </li>
+
+    <li>
+      <div class="reply-row" data-testid="reply-row" data-rung="6" data-routed-kind="unrouted">
+        <div class="row-top">
+          <div class="row-main">
+            <span class="subject" data-testid="reply-subject">One more thing</span>
+            <span class="meta">
+              <span data-testid="reply-sender-email">morgan@example.test</span> &middot;
+              <span data-testid="reply-received-at">2026-08-29T09:47:03Z</span>
+            </span>
+            <span class="attachments-note" data-testid="reply-attachments-dropped">📎 1 attachment — not saved</span>
+          </div>
+          <div class="row-side">
+            <span class="route-badge" data-testid="reply-route-badge" data-routed-kind="unrouted">Unrouted — 2 candidates</span>
+            <span class="auth-result" data-testid="reply-auth-result">pass</span>
+            <a class="button secondary" href="/replies/rpl_b2c3d4e5f6a1" data-testid="review-reply">Review</a>
+          </div>
+        </div>
+      </div>
+    </li>
+
+    <li>
+      <div class="reply-row" data-testid="reply-row" data-rung="6" data-routed-kind="lead">
+        <div class="row-top">
+          <div class="row-main">
+            <span class="subject" data-testid="reply-subject">Interested in a small project</span>
+            <span class="meta">
+              <span data-testid="reply-sender-email">priya@example.test</span> &middot;
+              <span data-testid="reply-received-at">2026-08-28T22:15:40Z</span>
+            </span>
+          </div>
+          <div class="row-side">
+            <span class="route-badge" data-testid="reply-route-badge" data-routed-kind="lead">New lead LEAD-9B21F4</span>
+            <span class="auth-result" data-testid="reply-auth-result">none</span>
+            <a class="button secondary" href="/replies/rpl_c3d4e5f6a1b2" data-testid="review-reply">Review</a>
+          </div>
+        </div>
+      </div>
+    </li>
+  </ul>
+</main>
+</body>
+</html>
