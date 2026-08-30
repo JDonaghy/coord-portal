@@ -8,10 +8,15 @@
      Route: GET /replies/:id — rung 3 (known client, exactly one project),
      `data-routed-kind="message"`. No runner-up (exact match, nothing to be
      a runner-up to), no attachments. The "Change routing" panel is present
-     but closed, and — because a single-project client has no sibling to
-     re-target to — its open state shows no radio options, only a note; see
-     contract.md's own flagged uncertainty about what this action does on an
-     unambiguous match. -->
+     but closed. UPDATED BY AMENDMENT: EM-6's own text confirms "Change
+     route" re-targets to an operator-chosen client/project/lead on ANY row,
+     not only an ambiguous one — so even this exact rung-3 match still
+     offers a way out (redirect to a lead, if this match turns out to be
+     wrong) rather than a dead-end note with nothing to submit. There is no
+     *sibling project* to move to (dana@example.test has only the one), so
+     `reply-routing-option` is absent here and only
+     `reply-routing-option-lead` plus the explanatory note remain — see
+     contract.md's `/replies/:id/route` section for the full reasoning. -->
 <link rel="stylesheet" href="../../../../public/tokens.css">
 <style>
   header.topbar {
@@ -49,6 +54,12 @@
 
   .route-reason { color: var(--text-dim); margin: 0.5rem 0 0; }
   .route-target { font-weight: 600; }
+
+  fieldset.routing-project-list { border: 0; padding: 0; margin: 0.75rem 0 1rem; display: grid; gap: 0.5rem; }
+  .routing-project-option {
+    display: flex; align-items: center; gap: 0.5rem; border: 1px solid var(--line); border-radius: var(--r-md);
+    padding: 0.5rem 0.75rem; cursor: pointer;
+  }
 
   .field { display: grid; gap: 0.4rem; margin-bottom: 1rem; }
   .field label { font-weight: 600; font-size: var(--step--1); }
@@ -123,9 +134,17 @@
     <div class="routing-panel">
       <label class="routing-open-button" role="button" for="routing-toggle" data-testid="reply-routing-open-button">Change routing</label>
       <form class="routing-form" method="POST" action="/replies/rpl_a1b2c3d4e5f6/route" data-testid="reply-routing-form">
-        <p class="routing-note">dana@example.test has no other project on file to move this to.</p>
+        <p class="routing-note">dana@example.test has no other project on file to move this to — but if this match is wrong, you can still park it as a lead instead.</p>
+        <fieldset class="routing-project-list">
+          <legend class="visually-hidden">Attach this to</legend>
+          <label class="routing-project-option" data-testid="reply-routing-option-lead">
+            <input type="radio" name="target" value="lead">
+            Not this client — create a lead instead
+          </label>
+        </fieldset>
         <div class="actions">
           <label class="secondary" role="button" for="routing-toggle" data-testid="reply-routing-cancel">Cancel</label>
+          <button type="submit" class="primary" data-testid="reply-routing-submit">Route here</button>
         </div>
       </form>
     </div>
