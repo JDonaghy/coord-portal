@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reply — coord-portal</title>
+<!-- MOCK — Gate-A screen state for ms-5, issue #166 (EM-6).
+     Route: GET /replies/:id — rung 6, stranger case (issue #164/EM-4): no
+     `clients` match at all, so `createLead()` ran — the SAME function and
+     row `POST /start` produces, per EM-4's own text. `data-routed-kind="lead"`.
+     No "Change routing" disclosure (nothing to route — there is no known
+     sender to disambiguate) and no "Promote to a submission" button — that
+     escape hatch already exists on the lead's own /leads/:id screen
+     (ms-4's mocks), and this contract deliberately does not duplicate it
+     here. `reply-route-target` names the lead's own LEAD-XXXXXX reference,
+     plain text, never a link — same reasoning `promotedReference` already
+     gives in src/routes/leads.ts for its own cross-boundary reference. -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  header.topbar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1.25rem;
+    max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
+  header.topbar nav { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-right: auto; }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  header.topbar .signout { color: var(--text-faint); text-decoration: none; font-size: var(--step--1); }
+
+  body { max-width: 44rem; margin: 0 auto; padding: 1.5rem; font-family: var(--font-ui); color: var(--text); background: var(--ground); }
+  .back-link { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); display: inline-block; margin-bottom: 1rem; }
+
+  .route-badge {
+    display: inline-flex; align-items: center; padding: 0.2em 0.75em; border-radius: 999px;
+    font-size: var(--step--1); font-weight: 600;
+  }
+  .route-badge[data-routed-kind="lead"] { background: var(--accent-wash); color: var(--accent-dim); }
+
+  h1 { margin: 0.5rem 0 0.25rem; }
+  .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); margin: 0 0 1.5rem; }
+
+  section.card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1.1rem 1.3rem; margin-bottom: 1.25rem;
+  }
+  section.card h2 { margin: 0 0 0.75rem; font-size: var(--step-0); }
+  dl.received dt { font-weight: 600; font-size: var(--step--1); color: var(--text-dim); margin-top: 0.6rem; }
+  dl.received dt:first-child { margin-top: 0; }
+  dl.received dd { margin: 0.15rem 0 0; white-space: pre-wrap; }
+
+  .route-reason { color: var(--text-dim); margin: 0.5rem 0 0; }
+  .route-target { font-weight: 600; }
+
+  .field { display: grid; gap: 0.4rem; margin-bottom: 1rem; }
+  .field label { font-weight: 600; font-size: var(--step--1); }
+  .field input[type="text"], .field textarea {
+    font: inherit; padding: 0.6rem 0.7rem; border-radius: var(--r-md);
+    border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); resize: vertical;
+  }
+  .field textarea { min-height: 8rem; }
+
+  .actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.75rem; }
+  button.primary {
+    background: var(--accent); color: white; border: none; border-radius: var(--r-md);
+    padding: 0.6rem 1.1rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.ghost {
+    background: transparent; color: var(--fail); border: 1px solid var(--line-strong); border-radius: var(--r-md);
+    padding: 0.6rem 1.1rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/leads" data-testid="nav-leads">Leads</a>
+    <a href="/deliveries" data-testid="nav-deliveries">Deliveries</a>
+    <a href="/replies" aria-current="page" data-testid="nav-replies">Replies</a>
+    <a href="/requests" data-testid="nav-requests">Requests</a>
+    <a href="/clients" data-testid="nav-clients">Clients</a>
+  </nav>
+  <span class="identity" data-testid="identity-email">signed in as ops@example.test</span>
+  <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>
+</header>
+<main data-testid="reply-detail" data-rung="6" data-routed-kind="lead">
+  <a class="back-link" href="/replies" data-testid="back-to-replies">&larr; Replies</a>
+
+  <span class="route-badge" data-testid="reply-route-badge" data-routed-kind="lead">New lead LEAD-9B21F4</span>
+  <h1>Interested in a small project</h1>
+  <p class="meta">from <span data-testid="reply-sender-email">priya@example.test</span> &middot;
+    <span data-testid="reply-received-at">2026-08-28T22:15:40Z</span></p>
+
+  <section class="card">
+    <h2>The message as received</h2>
+    <dl class="received">
+      <dt>Authenticated</dt>
+      <dd data-testid="reply-auth-result">none</dd>
+      <dt>Message</dt>
+      <dd data-testid="reply-original-body">Hi, I got your name from a friend. I'm looking for someone to build a small booking page for my studio. What would that cost?</dd>
+    </dl>
+  </section>
+
+  <section class="card">
+    <h2>Why it landed here</h2>
+    <p class="route-reason" data-testid="reply-route-decision" data-routed-kind="lead">
+      Rung 6 — no existing client matches this address. Recorded as
+      <span class="route-target" data-testid="reply-route-target">LEAD-9B21F4</span>, the same
+      inert row <code>/start</code> would have written.
+    </p>
+    <p class="route-reason" data-testid="reply-route-reason">priya@example.test does not match any known client, and nothing in the subject or body quoted an existing SUB-/LEAD- reference.</p>
+  </section>
+
+  <section class="card">
+    <h2>Drafted reply</h2>
+    <form method="POST" action="/replies/rpl_c3d4e5f6a1b2/approve" data-testid="reply-approve-form">
+      <div class="field">
+        <label for="reply-subject">Subject</label>
+        <input type="text" id="reply-subject" name="subject" value="Re: Interested in a small project" data-testid="reply-subject-field">
+      </div>
+      <div class="field">
+        <label for="reply-body">Body</label>
+        <textarea id="reply-body" name="body" data-testid="reply-body-field">Thanks for reaching out — got it, and I'll follow up soon. There's nothing to sign into and nothing to check back on; if you want to follow up yourself, just quote LEAD-9B21F4 in your reply.
+
+— John, Heuron Technology</textarea>
+      </div>
+      <div class="actions">
+        <button type="submit" class="primary" data-testid="reply-approve-button">Approve &amp; send</button>
+      </div>
+    </form>
+    <form method="POST" action="/replies/rpl_c3d4e5f6a1b2/discard" data-testid="reply-discard-form">
+      <div class="actions">
+        <button type="submit" class="ghost" data-testid="reply-discard-button">Discard</button>
+      </div>
+    </form>
+  </section>
+</main>
+</body>
+</html>
