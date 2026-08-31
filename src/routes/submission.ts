@@ -8,7 +8,15 @@ import {
   getCurrentPreviewReview,
   recordPreviewReview,
 } from "../previewReviews"
-import { getOpenQuestion, recordAnswer, type OpenQuestion } from "../questions"
+import {
+  confirmRelayedAnswer,
+  correctRelayedAnswer,
+  getQuestionScreenState,
+  recordAnswer,
+  type OpenQuestion,
+  type QuestionScreenState,
+  type RelayedAnswer,
+} from "../questions"
 import { escapeHtml, html, page, topbar } from "../render"
 import {
   derivedStatus,
@@ -165,17 +173,26 @@ export async function submitSubmissionAction(
   if (action === "approve-preview" || action === "request-preview-changes") {
     return submitPreviewReviewAction(env, email, isOperator, submission, action, form)
   }
+  if (action === "confirm-relay") {
+    return submitConfirmRelay(env, email, isOperator, submission)
+  }
   return submitAnswer(env, email, isOperator, submission, form)
 }
 
 /**
- * Answering an open question (#11).
+ * Answering an open question (#11) — and, per issue #159, correcting a
+ * relayed answer the customer already confirmed.
  *
- * The question being answered is derived from `getOpenQuestion`, never taken
- * from the submitted form. If nothing is open by the time this lands (already
- * answered by a previous submit, a race with a fresh coordinator push, or a
- * question that was never raised), the current screen is re-rendered rather than
- * silently accepting a stray write.
+ * The question being answered is derived from `getQuestionScreenState`, never
+ * taken from the submitted form. Three of its four states may legally submit
+ * this form: `open` (the ordinary case), `relay-pending` (the customer typed
+ * over the pre-filled relay instead of confirming it — nothing has been
+ * confirmed yet, so this is just an ordinary first answer) and
+ * `relay-confirmed` (a correction, per issue #159's "reopen and correct").
+ * `closed` — already answered by a previous submit, a race with a fresh
+ * coordinator push, or a question that was never raised — re-renders the
+ * current screen rather than silently accepting a stray write, exactly as
+ * before this issue.
  */
 async function submitAnswer(
   env: Env,
@@ -184,9 +201,12 @@ async function submitAnswer(
   submission: Submission,
   form: FormData,
 ): Promise<Response> {
-  const open =
-    submission.status === "needs-input" ? await getOpenQuestion(env, submission.reference) : null
-  if (!open) {
+  const state =
+    submission.status === "needs-input"
+      ? await getQuestionScreenState(env, submission.reference)
+      : ({ kind: "closed" } as const)
+
+  if (state.kind === "closed") {
     const thread = { messages: await listMessages(env, submission.reference) }
     const main = await detailFor(env, email, isOperator, submission, thread)
     return html(page(`${submission.reference} — coord-portal`, main), { status: 409 })
@@ -195,25 +215,65 @@ async function submitAnswer(
   const answer = stringField(form, "answer")
   if (!answer) {
     // "an empty answer does not end the pause": nothing is recorded, and the
-    // same open question is redisplayed so the composer stays reachable.
+    // same screen is redisplayed, composer open, so the customer's place is
+    // kept — whichever of the three answerable states it was.
     const thread = { messages: await listMessages(env, submission.reference) }
     return html(
       page(
         `${submission.reference} — coord-portal`,
-        pausedDetail(
-          email,
-          isOperator,
-          submission,
-          open,
-          thread,
-          "Please write an answer before sending.",
-        ),
+        questionScreenDetail(email, isOperator, submission, state, thread, {
+          composerOpen: true,
+          error: "Please write an answer before sending.",
+        }),
       ),
       { status: 400 },
     )
   }
 
-  await recordAnswer(env, submission.reference, open.revision, answer)
+  if (state.kind === "relay-confirmed") {
+    // Already confirmed once — this write supersedes that confirmation
+    // rather than inserting a second row (`question_answers`' primary key is
+    // per question revision, and a relay-confirm already claimed it).
+    await correctRelayedAnswer(env, submission.reference, state.question.revision, answer)
+  } else {
+    await recordAnswer(env, submission.reference, state.question.revision, answer)
+  }
+
+  return new Response(null, {
+    status: 303,
+    headers: { location: `/submissions/${submission.id}` },
+  })
+}
+
+/**
+ * Confirming an operator-relayed answer — "Yes, that's right" (issue #159).
+ *
+ * Legal only from `relay-pending`: a relay that has already been confirmed,
+ * corrected, or superseded by a newer question re-renders the current screen
+ * with a 409, the same "stray write" refusal `submitAnswer` gives a stale
+ * `closed` state — a double-tap (network retry, an impatient second click)
+ * still lands here, but `confirmRelayedAnswer` is itself idempotent against
+ * that, so this only fires for a genuinely stale submit (e.g. a second
+ * browser tab that had the relay open before it was corrected in the first).
+ */
+async function submitConfirmRelay(
+  env: Env,
+  email: string | null,
+  isOperator: boolean,
+  submission: Submission,
+): Promise<Response> {
+  const state =
+    submission.status === "needs-input"
+      ? await getQuestionScreenState(env, submission.reference)
+      : ({ kind: "closed" } as const)
+
+  if (state.kind !== "relay-pending") {
+    const thread = { messages: await listMessages(env, submission.reference) }
+    const main = await detailFor(env, email, isOperator, submission, thread)
+    return html(page(`${submission.reference} — coord-portal`, main), { status: 409 })
+  }
+
+  await confirmRelayedAnswer(env, submission.reference, state.question.revision, state.relay)
 
   return new Response(null, {
     status: 303,
@@ -1249,17 +1309,19 @@ ${comment}
 /* ────────────────────────── the question channel (#11) ───────────────────── */
 
 /**
- * `needs-input` — issue #11's question channel.
+ * `needs-input` — issue #11's question channel, extended by issue #159's
+ * relayed-answer confirmation.
  *
  * `question` arrives coord-owned, in the same push that sets
  * `status: needs-input` (contract § Question channel), and stays in
  * `coord_facts` at whatever revision the daemon last wrote it — see
- * `src/questions.ts`. Whether the pause composer renders depends on that
- * question actually being *open*: a `needs-input` submission with no question
- * on record at all, or whose most recent question the customer has already
- * answered, falls back to `actionableDetail`'s quiet "nothing to do" card —
- * "a submission with no open question offers no answer channel" is a
- * black-box guarantee, not an oversight.
+ * `src/questions.ts`. Which of the four screens renders is exactly
+ * `getQuestionScreenState`'s read: `closed` falls back to `actionableDetail`'s
+ * quiet "nothing to do" card — "a submission with no open question offers no
+ * answer channel" is a black-box guarantee predating this issue, and it stays
+ * true for `relay-confirmed` too once a correction has landed (correcting
+ * flips the row's `source` back to `'client'`, which is indistinguishable
+ * from an ordinary answered question — see `getQuestionScreenState`).
  */
 async function needsInputDetail(
   env: Env,
@@ -1268,9 +1330,45 @@ async function needsInputDetail(
   submission: Submission,
   thread: ThreadContext,
 ): Promise<string> {
-  const open = await getOpenQuestion(env, submission.reference)
-  if (!open) return actionableDetail(env, email, isOperator, submission, thread)
-  return pausedDetail(email, isOperator, submission, open, thread)
+  const state = await getQuestionScreenState(env, submission.reference)
+  if (state.kind === "closed") return actionableDetail(env, email, isOperator, submission, thread)
+  return questionScreenDetail(email, isOperator, submission, state, thread)
+}
+
+interface AnswerComposerState {
+  /** Re-open the answer composer server-side after a rejected submit. */
+  composerOpen?: boolean
+  error?: string
+}
+
+/**
+ * Dispatches the three answerable `QuestionScreenState`s to their template —
+ * the one place `submitAnswer`'s blank-answer redisplay and
+ * `needsInputDetail`'s fresh `GET` share, so both always agree on which
+ * template a given state renders as.
+ */
+function questionScreenDetail(
+  email: string | null,
+  isOperator: boolean,
+  submission: Submission,
+  state: Exclude<QuestionScreenState, { kind: "closed" }>,
+  thread: ThreadContext,
+  composer: AnswerComposerState = {},
+): string {
+  if (state.kind === "open") {
+    return pausedDetail(email, isOperator, submission, state.question, thread, composer.error)
+  }
+  const confirmed = state.kind === "relay-confirmed" ? { answer: state.answer, answeredAt: state.answeredAt } : undefined
+  return relayedAnswerDetail(
+    email,
+    isOperator,
+    submission,
+    state.question,
+    state.relay,
+    thread,
+    composer,
+    confirmed,
+  )
 }
 
 /**
@@ -1334,6 +1432,127 @@ function pausedDetail(
       </div>
     </form>
   </section>
+
+${messageThreadSection(`/submissions/${submission.id}`, thread, "customer", email)}
+</main>`
+}
+
+/** The stated relay source, in the plain-language form this screen shows the customer. */
+const RELAY_SOURCE_TEXT: Record<RelayedAnswer["source"], string> = {
+  verbal: "in person",
+  phone: "on a call",
+  email: "by email",
+}
+
+/**
+ * The relay-confirm screen — issue #159. Renders where `pausedDetail`'s
+ * ordinary composer would, for both of the two states that carry a
+ * `RelayedAnswer` matching the currently open question:
+ *
+ *   unconfirmed (`confirmed` unset) — the relayed text is shown framed as a
+ *   claim, not a fact ("We recorded this ... — is that right?"), with two
+ *   one-tap paths: "Yes, that's right" posts `action=confirm-relay`
+ *   (`submitConfirmRelay` -> `confirmRelayedAnswer`), which is the only
+ *   control on this whole portal that ends a pause without the customer
+ *   writing a word. "Not quite — let me correct it" reveals the ordinary
+ *   answer composer — same `answer-field` / `submit-answer` hooks
+ *   `pausedDetail` uses — pre-filled with the relayed text so fixing one
+ *   wrong sentence does not mean re-typing the whole thing. That composer
+ *   posts the same `action=answer` field `pausedDetail`'s does, and
+ *   `submitAnswer` handles it with plain `recordAnswer`: nothing has been
+ *   confirmed yet, so there is nothing to supersede — it is just an ordinary
+ *   first answer that happens to start from someone else's draft.
+ *
+ *   confirmed (`confirmed` set) — reached only because `needsInputDetail`
+ *   checked for exactly this: `getOpenQuestion` would say this question is
+ *   answered (`question_answers` already has a row), which is normally
+ *   `actionableDetail`'s quiet "nothing to do" card. Issue #159's "a client
+ *   can reopen and correct after confirming" is why this screen renders
+ *   instead — the relay stays visible, now labelled as confirmed, with the
+ *   same "Not quite" disclosure still live. Submitting it here reaches
+ *   `submitAnswer` with `state.kind === "relay-confirmed"`, which calls
+ *   `correctRelayedAnswer` (an `UPDATE`, not an `INSERT` — the row already
+ *   exists) instead of `recordAnswer`.
+ *
+ * `relayed-answer`'s `data-confirmed` attribute, plus the label copy itself,
+ * is the acceptance criterion made literal: "an unconfirmed relayed answer
+ * ... visually distinguishable from a client-authored answer" and "must never
+ * render as the client's own" — nothing on this screen, in either state,
+ * presents the relayed text as though the customer had typed it.
+ */
+function relayedAnswerDetail(
+  email: string | null,
+  isOperator: boolean,
+  submission: Submission,
+  question: OpenQuestion,
+  relay: RelayedAnswer,
+  thread: ThreadContext,
+  composer: AnswerComposerState,
+  confirmed?: { answer: string; answeredAt: string },
+): string {
+  const checked = composer.composerOpen ? " checked" : ""
+  const errorBlock = composer.error
+    ? `<p class="async-note" data-testid="answer-error" role="alert">${escapeHtml(composer.error)}</p>`
+    : ""
+  const prefill = confirmed ? confirmed.answer : relay.answer
+  const sourceText = RELAY_SOURCE_TEXT[relay.source]
+
+  const label = confirmed
+    ? `You confirmed this answer on ${escapeHtml(confirmed.answeredAt)}.`
+    : `We recorded this ${escapeHtml(sourceText)} on ${escapeHtml(relay.relayedAt)} — is that right?`
+
+  const confirmForm = confirmed
+    ? ""
+    : `      <form method="POST" action="/submissions/${submission.id}" class="inline-form">
+        <input type="hidden" name="action" value="confirm-relay">
+        <button type="submit" class="primary" data-testid="confirm-relay-button">Yes, that's right</button>
+      </form>
+`
+
+  return `${topbar(email, "none", isOperator)}
+<main data-testid="submission-detail" data-status="${escapeHtml(submission.status)}">
+  ${statusPill(submission.status)}
+  <h1>${escapeHtml(titleOf(submission))}</h1>
+  ${referenceLine(submission)}
+
+  ${confirmed ? "" : `<p class="pause-banner" data-testid="pause-banner">Work is paused until you answer.</p>`}
+
+  <input class="composer-toggle" type="checkbox" id="correct-relay-toggle" aria-label="Correct this answer"${checked}>
+
+  <section class="round-card relayed-answer" data-testid="relayed-answer" data-confirmed="${confirmed ? "true" : "false"}">
+    <div class="round-head">
+      <span class="round-badge" data-testid="relayed-answer-badge">Relayed answer</span>
+    </div>
+
+    <h2>The question</h2>
+    <p class="question-text" data-testid="question-text">${escapeHtml(questionText(question.value))}</p>
+
+    <h2>What we recorded</h2>
+    <p class="relayed-answer-label">${label}</p>
+    <p class="relayed-answer-text" data-testid="relayed-answer-text">${escapeHtml(relay.answer)}</p>
+    <p class="relayed-answer-meta" data-testid="relayed-answer-meta">
+      Recorded <span data-testid="relayed-answer-source">${escapeHtml(sourceText)}</span> on
+      <span data-testid="relayed-answer-date">${escapeHtml(relay.relayedAt)}</span>
+    </p>
+
+    <div class="round-actions">
+${confirmForm}      <label class="secondary" role="button" for="correct-relay-toggle" data-testid="correct-relay-button">Not quite &mdash; let me correct it</label>
+    </div>
+  </section>
+
+  <form class="composer answer-form" method="POST" action="/submissions/${submission.id}" data-testid="answer-form">
+    <input type="hidden" name="action" value="answer">
+    <h2>Your answer</h2>
+    ${errorBlock}
+    <label for="answer" class="visually-hidden">Your answer</label>
+    <textarea id="answer" name="answer" rows="4" required
+      data-testid="answer-field"
+      placeholder="Write your answer here.">${escapeHtml(prefill)}</textarea>
+    <div class="actions">
+      <label class="ghost" role="button" for="correct-relay-toggle" data-testid="cancel-correct-relay">Cancel</label>
+      <button type="submit" class="primary" data-testid="submit-answer">Send answer</button>
+    </div>
+  </form>
 
 ${messageThreadSection(`/submissions/${submission.id}`, thread, "customer", email)}
 </main>`
