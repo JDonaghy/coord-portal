@@ -253,6 +253,38 @@ describe("decideRoute — rung 4 (several-project client scoring)", () => {
     expect(decision.runnerUp?.submissionReference).toBe("SUB-BUSY")
   })
 
+  it("does not repeat the reference in the runner-up reason when the runner-up has no project name", () => {
+    const waiting = candidate({
+      projectId: "proj_waiting",
+      projectName: "Website refresh",
+      submissionReference: "SUB-WAITING",
+      status: "awaiting-signoff",
+      createdAt: "2020-01-01T00:00:00.000Z",
+    })
+    // A one-off request with no project (`projectId`/`projectName` both
+    // `null`) — `describeCandidate` renders this as `submission SUB-XXXXXX`,
+    // which already IS the reference; the runner-up reason must not append
+    // `(SUB-XXXXXX)` a second time.
+    const busy = candidate({
+      projectId: null,
+      projectName: null,
+      submissionReference: "SUB-BUSY",
+      status: "in-progress",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    })
+    const decision = decideRoute(
+      message(),
+      lookup({
+        matchedClientId: "client_x",
+        matchedClientVia: "email",
+        clientProjectCount: 2,
+        clientProjectCandidates: [busy, waiting],
+      }),
+    )
+    expect(decision.runnerUp?.reason).toBe("Also scored, but not picked: submission SUB-BUSY.")
+    expect(decision.runnerUp?.reason).not.toContain("(SUB-BUSY)")
+  })
+
   it("falls back to most recent activity when both are equally waiting on the customer", () => {
     const older = candidate({ submissionReference: "SUB-OLDER", status: "needs-input", createdAt: "2020-01-01T00:00:00.000Z" })
     const newer = candidate({ submissionReference: "SUB-NEWER", status: "quality-check", createdAt: "2026-01-01T00:00:00.000Z" })

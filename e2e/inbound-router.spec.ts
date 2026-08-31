@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test"
+import { insertClientRow, insertProjectRow, insertSubmissionRow } from "./client-fixtures"
 
 /**
  * Black-box coverage for issue #163 ([portal] EM-3: the inbound router),
@@ -246,6 +247,170 @@ test("a quoted reference outside today's hex mint is still recognised as a refer
   expect(row.routed_rung, "a LEAD- token in the pinned alphabet resolves at rung 2").toBe(2)
   expect(row.routed_kind).toBe("lead")
   expectReadableReason(row)
+})
+
+// ── RUNG 3 — a known client, one project, matched via cc_emails ─────────────
+//
+// A `clients` row with a `projects` row linked to it is only ever produced,
+// through this app's own HTTP surface, by lead promotion (ms-4). Driving that
+// full flow just to get a fixture here would make this coverage depend on
+// ms-4's UI mechanics — `client-fixtures.ts` seeds the same three tables
+// directly instead, the same posture `outbox-fixtures.ts` already takes and
+// the same one the sealed acceptance slice for this issue
+// (`tests/acceptance/ms-5/163-inbound-router.spec.ts`) takes for these exact
+// tables. See that file's own doc comment for the fuller rationale.
+
+test("rung 3 — a cc_emails match resolves a single-project known client, even via a long address with % and _", async ({
+  request,
+}) => {
+  const primaryEmail = uniqueEmail("router-rung3-primary")
+  // Deliberately long (well past D1's 50-character LIKE-pattern cap the
+  // router's `getClientRecordByCcEmail` used to crash on) and carrying both
+  // `%` and `_` — both legal in a local part, and both `LIKE` wildcards. This
+  // is the regression #313 found: the fix moved to `instr()`, which has
+  // neither a length cap nor metacharacters. See `src/clients.ts`'s own doc
+  // on `getClientRecordByCcEmail` for the full story.
+  const ccEmail = `cc-with-percent%and_underscore-and-quite-a-bit-of-extra-length-${tag()}@sender.example.test`
+  const otherCc = uniqueEmail("router-rung3-other-cc")
+  const client = insertClientRow(primaryEmail, `${otherCc}, ${ccEmail}`)
+  const project = insertProjectRow({ clientId: client, customerEmail: primaryEmail, name: "Solo Project" })
+  insertSubmissionRow({ customerEmail: primaryEmail, projectId: project })
+
+  const row = await deliver(request, {
+    from: ccEmail, // the cc address, not the client's own primary email
+    dmarc: "pass",
+    messageId: `rung3-${tag()}@sender.example.test`,
+    subject: "checking in",
+    body: "How is this coming along?",
+  })
+
+  expect(row.routed_rung, "getClientRecordByEmail found nothing, but cc_emails did").toBe(3)
+  expect(row.routed_kind).toBe("message")
+  expectReadableReason(row)
+  expect(row.routed_runner_up, "rung 3 is an exact match — no runner-up").toBeNull()
+})
+
+/**
+ * The exact shape #313 found: `LIKE` reads `_` as "any one character," so a
+ * `cc_emails` entry of `a_b@…` used to also match a sender of `axb@…` — a
+ * stranger silently resolved to somebody else's client record. `instr()` is a
+ * plain substring search with no such wildcard, so a one-character difference
+ * must remain a miss.
+ */
+test("a cc_emails entry is matched literally — a wildcard-shaped near-miss does not resolve", async ({
+  request,
+}) => {
+  const primaryEmail = uniqueEmail("router-rung3-literal-primary")
+  const ccLocal = `a_b-router-rung3-${tag()}`
+  const ccEmail = `${ccLocal}@sender.example.test`
+  const nearMiss = `${ccLocal.replace("_", "x")}@sender.example.test` // differs by exactly the `_` position
+
+  const client = insertClientRow(primaryEmail, ccEmail)
+  const project = insertProjectRow({ clientId: client, customerEmail: primaryEmail, name: "Literal Match Project" })
+  insertSubmissionRow({ customerEmail: primaryEmail, projectId: project })
+
+  const row = await deliver(request, {
+    from: nearMiss,
+    dmarc: "pass",
+    messageId: `rung3literal-${tag()}@sender.example.test`,
+    subject: "checking in",
+    body: "How is this coming along?",
+  })
+
+  expect(
+    row.routed_rung,
+    "a near-miss address one character off a cc_emails entry must not resolve to that client",
+  ).toBe(6)
+  expect(row.routed_kind).toBe("lead")
+})
+
+// ── RUNG 4 — a known client, several projects, scored ───────────────────────
+
+test("rung 4 — a project awaiting sign-off wins over a merely more recent one", async ({ request }) => {
+  const clientEmail = uniqueEmail("router-rung4-multi")
+  const client = insertClientRow(clientEmail)
+
+  const loserMarker = tag()
+  const winnerMarker = tag()
+  const olderTime = new Date(Date.now() - 60_000).toISOString()
+  const newerTime = new Date(Date.now() - 1_000).toISOString()
+
+  // The NOT-waiting project is the MORE RECENT one — a naive
+  // "most-recent-wins" implementation would pick this one instead.
+  const loserProject = insertProjectRow({
+    clientId: client,
+    customerEmail: clientEmail,
+    name: `Loser Marker ${loserMarker}`,
+  })
+  insertSubmissionRow({ customerEmail: clientEmail, projectId: loserProject, status: "describing", createdAt: newerTime })
+
+  // Older, but waiting on the customer — contract order is
+  // [waiting-on-customer, newest-first, word-overlap], in that order, so this
+  // one must win despite being older.
+  const winnerProject = insertProjectRow({
+    clientId: client,
+    customerEmail: clientEmail,
+    name: `Winner Marker ${winnerMarker}`,
+  })
+  insertSubmissionRow({
+    customerEmail: clientEmail,
+    projectId: winnerProject,
+    status: "awaiting-signoff",
+    createdAt: olderTime,
+  })
+
+  const row = await deliver(request, {
+    from: clientEmail,
+    dmarc: "pass",
+    messageId: `rung4-${tag()}@sender.example.test`,
+    subject: "Any news?", // no overlap with either project's name
+    body: "Following up on where things stand.",
+  })
+
+  expect(row.routed_rung, "a known client with several projects is scored, not an exact match").toBe(4)
+  expect(row.routed_kind).toBe("message")
+  expectReadableReason(row)
+  expect(row.routed_runner_up, "more than one candidate was scored").not.toBeNull()
+  expect(row.routed_runner_up, "the losing (merely more recent) project is the runner-up").toContain(loserMarker)
+  expect(row.routed_runner_up, "the winning project must not itself be reported as the runner-up").not.toContain(
+    winnerMarker,
+  )
+})
+
+test("rung 4 → 6 — an exact tie between two equally-weighted projects falls to unrouted, never guessed", async ({
+  request,
+}) => {
+  const clientEmail = uniqueEmail("router-rung4-tied")
+  const client = insertClientRow(clientEmail)
+  const tiedTime = new Date(Date.now() - 30_000).toISOString()
+
+  // Same status (neither waiting on the customer), same recency, and neither
+  // project's name overlaps at all with the subject below — a genuine
+  // three-way tie across every scoring axis the contract pins.
+  const projectA = insertProjectRow({ clientId: client, customerEmail: clientEmail, name: "Zeta Program" })
+  insertSubmissionRow({ customerEmail: clientEmail, projectId: projectA, status: "describing", createdAt: tiedTime })
+
+  const projectB = insertProjectRow({ clientId: client, customerEmail: clientEmail, name: "Omega Program" })
+  insertSubmissionRow({ customerEmail: clientEmail, projectId: projectB, status: "describing", createdAt: tiedTime })
+
+  const row = await deliver(request, {
+    from: clientEmail,
+    dmarc: "pass",
+    messageId: `rung4tie-${tag()}@sender.example.test`,
+    subject: "Following up on things",
+    body: "Just checking in.",
+  })
+
+  expect(
+    row.routed_rung,
+    "a tie is not a winner — it falls to rung 6 as unrouted, never a silent pick of A or B",
+  ).toBe(6)
+  expect(row.routed_kind, "a known client's tie is unrouted, not a fabricated lead").toBe("unrouted")
+  expectReadableReason(row)
+  expect(
+    row.routed_runner_up,
+    "this is a known client (unlike a total stranger), so there is something to be a runner-up to",
+  ).not.toBeNull()
 })
 
 // ── RUNG 5 — a returning sender with no `clients` row ────────────────────────

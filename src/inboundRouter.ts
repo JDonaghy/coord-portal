@@ -340,13 +340,18 @@ function unroutedDecision(
 }
 
 function describeRunnerUp(candidate: RoutingCandidate | null): RoutingRunnerUp | null {
-  return candidate === null
-    ? null
-    : {
-        projectId: candidate.projectId,
-        submissionReference: candidate.submissionReference,
-        reason: `Also scored, but not picked: ${describeCandidate(candidate)} (${candidate.submissionReference}).`,
-      }
+  if (candidate === null) return null
+  // `describeCandidate` already renders the reference verbatim when there is
+  // no project name (`submission SUB-XXXXXX`) — appending
+  // `(${submissionReference})` in that case would repeat it right back,
+  // e.g. "submission SUB-XXXXXX (SUB-XXXXXX)". The parenthetical is only
+  // useful, and only added, when `describeCandidate` said something else
+  // (the project name) that the reference itself is not already part of.
+  const description = describeCandidate(candidate)
+  const reason = candidate.projectName
+    ? `Also scored, but not picked: ${description} (${candidate.submissionReference}).`
+    : `Also scored, but not picked: ${description}.`
+  return { projectId: candidate.projectId, submissionReference: candidate.submissionReference, reason }
 }
 
 // ── SCORING (rungs 4 and 5 share this) ──────────────────────────────────────
@@ -639,6 +644,24 @@ async function candidatesFromProjects(
  * ordinary one-off ask) is its own candidate — #109's own rule that a bare
  * email match must never silently fold two unrelated asks together applies
  * here too, so it is never merged into anything.
+ *
+ * ── CASE-SENSITIVITY: AN UNASSERTED CROSS-MODULE ASSUMPTION ────────────────
+ * `listSubmissionsForCustomer` (`src/submissions.ts`) below matches on plain
+ * `customer_email = ?` — no `lower()` — whereas rungs 3/4's client match
+ * (`getClientRecordByEmail`/`getClientRecordByCcEmail`, `src/clients.ts`)
+ * is explicitly case-insensitive. This does not read a `RoutingLookup` field
+ * of its own to compensate: `message.fromEmail` arrives here already
+ * lower-cased by `normaliseAddress` (`src/inboundEmail.ts`), and every
+ * `customer_email` this repo's own write paths persist is, in practice, the
+ * same already-lower-cased value (the caller's Access identity, read the
+ * same way `dashboard.ts`/`submission.ts` scope a customer's own rows).
+ * Nothing in this module — or in `submissions.ts`, which #163 does not own
+ * and adds no write path to — enforces that as an invariant, though, so a
+ * `customer_email` written with mixed case by some future path would
+ * silently fall through rung 5 to rung 6 rather than matching. Flagged, not
+ * fixed, here: fixing it means widening `listSubmissionsForCustomer`'s own
+ * query (a function with callers well outside rung 5), which is a call for
+ * whoever owns `submissions.ts`, not a rung-5-local patch.
  */
 async function candidatesFromHistory(env: Env, fromEmail: string): Promise<RoutingCandidate[]> {
   const submissions = await listSubmissionsForCustomer(env, fromEmail)
