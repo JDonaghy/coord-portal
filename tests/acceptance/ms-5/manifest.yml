@@ -41,19 +41,3 @@ issues:
 # watched to fail — there is no control or ratchet clause in this slice (every
 # test depends on `POST /__email` and/or `migrations/0020_inbound_emails.sql`
 # existing, and #161 is the issue that creates both), so nothing is excluded.
-expected_red:
-  161:
-    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › the migration lands, and the running Worker reports the newer schema"
-    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › inbound_emails carries the columns issue 161's own schema section names, with the nullability it pins"
-    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › message_id + to_email is unique, and no foreign key constraint is introduced"
-    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › a plain message produces exactly one inbound_emails row with the parsed fields, and touches no routing, lead, or outbox row"
-    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › auth_result records the DMARC verdict from Authentication-Results — pass"
-    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › auth_result records the DMARC verdict from Authentication-Results — fail"
-    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › auth_result records the DMARC verdict from Authentication-Results — none (header absent)"
-    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — Auto-Submitted: auto-replied — never earns a reply"
-    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — Precedence: bulk — never earns a reply"
-    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — List-Unsubscribe present — never earns a reply"
-    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — empty envelope sender (a bounce) — never earns a reply"
-    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — sender is one of this portal's own sending domains — never earns a reply"
-    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › a redelivery of the same Message-ID produces no second row"
-    - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › an oversized body is stored truncated and flagged, never dropped silently"
