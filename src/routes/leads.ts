@@ -6,6 +6,7 @@ import {
   type ClientRecord,
 } from "../clients"
 import { parseFormData } from "../formData"
+import { getInboundEmailByLeadId, type InboundEmailRecord } from "../inboundEmail"
 import {
   getLead,
   leadStatus,
@@ -202,10 +203,14 @@ export async function leadDetail(request: Request, env: Env, id: string): Promis
   const match = leadStatus(lead) === "new" ? await clientMatchContext(env, lead) : null
   const attachment = reassignment ? await attachmentInfo(env, lead, reassignment) : null
   const attached = await attachedSubmissionContext(env, lead)
+  // The `inbound_emails` row this lead came in on, for an email-sourced lead
+  // (issue #164) — `null` for every lead `POST /start`'s web form wrote. See
+  // `originatingEmail` below.
+  const originating = await getInboundEmailByLeadId(env, lead.id)
   return html(
     page(
       `${lead.reference} — coord-portal`,
-      detail(operator, lead, thread, reassignment, match, attachment, attached),
+      detail(operator, lead, thread, reassignment, match, attachment, attached, originating),
     ),
   )
 }
@@ -830,10 +835,11 @@ export async function postLeadMessage(request: Request, env: Env, id: string): P
     const reassignment = await reassignmentContext(env, lead)
     const attachment = reassignment ? await attachmentInfo(env, lead, reassignment) : null
     const attached = await attachedSubmissionContext(env, lead)
+    const originating = await getInboundEmailByLeadId(env, lead.id)
     return html(
       page(
         `${lead.reference} — coord-portal`,
-        detail(operator, lead, thread, reassignment, null, attachment, attached),
+        detail(operator, lead, thread, reassignment, null, attachment, attached, originating),
       ),
       { status: 400 },
     )
@@ -898,6 +904,7 @@ function detail(
   match: ClientMatchContext | null,
   attachment: AttachmentInfo | null,
   attached: AttachedSubmissionContext | null,
+  originating: InboundEmailRecord | null,
 ): string {
   const status = leadStatus(lead)
   const promoted = status === "promoted"
@@ -921,6 +928,7 @@ function detail(
     <dt>Contact email</dt>
     <dd data-testid="lead-contact-email">${escapeHtml(lead.email)}</dd>
     ${nameBlock(lead)}
+    ${originatingEmail(originating)}
   </dl>
 
   ${promoted ? "" : promoteForm(lead, match)}
@@ -1245,6 +1253,27 @@ function reassignOption(sibling: { project: Project; title: string }, selected: 
           <input type="radio" name="projectChoice" value="${escapeHtml(sibling.project.id)}"${selected ? " checked" : ""}>
           ${escapeHtml(sibling.title)}
         </label>`
+}
+
+/**
+ * `originating-email` — "this lead came in by email", for a lead EM-4 (issue
+ * #164) minted from a stranger's inbound message rather than from `/start`'s
+ * web form. Absent for every web-form lead: there is nothing to say about one
+ * that arrived the ordinary way.
+ *
+ * Plain text, not a link into `/replies/:id`, and the Gate-A contract is
+ * deliberate about that: the drafted reply this lead came with disappears from
+ * `/replies` the moment it is approved or discarded, so a live cross-link
+ * would 404 for most of this lead's life. The subject and arrival time are
+ * enough to find the message again; what an operator actually needs from this
+ * line is to know that a reply was drafted and is (or was) waiting, before
+ * they answer the same person a second time by hand.
+ */
+function originatingEmail(inbound: InboundEmailRecord | null): string {
+  if (inbound === null) return ""
+  const subject = inbound.subject.trim() || "(no subject)"
+  return `<dt>Came in by</dt>
+    <dd data-testid="originating-email">Email — "${escapeHtml(subject)}", received ${escapeHtml(inbound.receivedAt)}. A reply was drafted for approval on /replies.</dd>`
 }
 
 /** Only rendered when the stranger actually gave a name — it is optional on `/start`. */

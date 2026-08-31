@@ -561,6 +561,157 @@ export async function listInboundEmails(env: Env, limit = 200): Promise<InboundE
   return (results ?? []).map(fromRow)
 }
 
+/**
+ * The inbound row one drafted reply answers — the read behind `/replies/:id`
+ * (issue #166, EM-6).
+ *
+ * Keyed on `outbox_id` rather than on `outbox.submission_id`'s mirror of this
+ * table's own id, even though EM-4/EM-5 write both and either would resolve
+ * the same row today. `outbox_id` is the direction that says what the caller
+ * actually has in hand ("I am looking at this draft; what is it about?"), and
+ * it is the column that stays correct if a future issue ever drafts a second
+ * reply for one message: two `outbox` rows would each name their own inbound
+ * row, whereas `submission_id` would resolve one message to whichever draft
+ * SQLite happened to return.
+ */
+export async function getInboundEmailByOutboxId(
+  env: Env,
+  outboxId: string,
+): Promise<InboundEmailRecord | null> {
+  const row = await env.DB.prepare(`${SELECT_COLUMNS} WHERE outbox_id = ? LIMIT 1`)
+    .bind(outboxId)
+    .first<InboundEmailRow>()
+  return row === null ? null : fromRow(row)
+}
+
+/**
+ * The same read for a whole screenful of drafts — `GET /replies` renders one
+ * row per pending draft and needs each one's sender, subject and routing
+ * decision. One query rather than one per row: the list is unbounded in
+ * principle (every draft nobody has acted on yet) and D1 charges per round
+ * trip, so a per-row lookup is the kind of thing that is invisible with three
+ * drafts and painful with three hundred.
+ *
+ * Returned keyed by `outbox_id` so the caller can keep the draft list's own
+ * ordering rather than re-deriving it here. An id with no row simply does not
+ * appear — a draft whose `inbound_emails` row is missing cannot be rendered
+ * (there is no sender, subject or routing decision to show) and the list drops
+ * it, the same posture `fromRow` (`src/notifications.ts`) takes for a row of a
+ * type it does not recognise. EM-4/EM-5 write both rows in one `DB.batch()`,
+ * so this is unreachable in practice.
+ */
+export async function getInboundEmailsByOutboxIds(
+  env: Env,
+  outboxIds: string[],
+): Promise<Map<string, InboundEmailRecord>> {
+  const found = new Map<string, InboundEmailRecord>()
+  if (outboxIds.length === 0) return found
+
+  const placeholders = outboxIds.map(() => "?").join(", ")
+  const { results } = await env.DB.prepare(`${SELECT_COLUMNS} WHERE outbox_id IN (${placeholders})`)
+    .bind(...outboxIds)
+    .all<InboundEmailRow>()
+  for (const row of results ?? []) {
+    const record = fromRow(row)
+    if (record.outboxId !== null) found.set(record.outboxId, record)
+  }
+  return found
+}
+
+/**
+ * The email a lead came in on, if it came in on one at all — `null` for every
+ * lead `POST /start`'s web form wrote.
+ *
+ * The back-reference EM-4's own text asks for ("so `/replies` and future
+ * triage can get from one to the other"), landed here by EM-6 (issue #166)
+ * because the Gate-A contract pins where it renders: as plain text on the
+ * lead's own `/leads/:id` screen, not as a cross-link either direction. The
+ * stranger case is the only one that has both a lead and a drafted reply, and
+ * `/replies`' own row disappears the moment the draft is approved — so the
+ * lead's screen is the surface that has to remember how it arrived.
+ *
+ * `ORDER BY received_at ASC, rowid ASC` picks the earliest, for the same
+ * reason `findByMessageId` does: at most one row can name a given lead today
+ * (`routed_lead_id` is written once, in the same batch that mints the lead),
+ * and "the first one we recorded" is the stable answer if that ever stops
+ * being true, rather than "whichever one SQLite happened to return".
+ */
+export async function getInboundEmailByLeadId(
+  env: Env,
+  leadId: string,
+): Promise<InboundEmailRecord | null> {
+  const row = await env.DB.prepare(
+    `${SELECT_COLUMNS} WHERE routed_lead_id = ? ORDER BY received_at ASC, rowid ASC LIMIT 1`,
+  )
+    .bind(leadId)
+    .first<InboundEmailRow>()
+  return row === null ? null : fromRow(row)
+}
+
+/**
+ * Where an operator re-routed one inbound message to — issue #166's own third
+ * action, "Change route: re-run against an operator-chosen client / project /
+ * lead."
+ *
+ * The same five columns EM-3/EM-4/EM-5 fill at delivery time, restated by a
+ * human. `routedRung` is deliberately NOT in this shape: the rung records
+ * *which rung of the router's ladder decided this*, and after a hand-route the
+ * honest answer to that is still "rung N, and a person disagreed" — overwriting
+ * it would erase the very decision `/replies` exists to let an operator argue
+ * with. `routedReason` carries the disagreement instead.
+ */
+export interface InboundRetarget {
+  kind: RoutedKind
+  /** Human-readable, and now operator-authored — `reply-route-reason`'s source. */
+  reason: string
+  projectId: string | null
+  /** The `SUB-XXXXXX` **reference**, matching `routedSubmissionId`'s own convention above. */
+  submissionReference: string | null
+  leadId: string | null
+}
+
+/**
+ * Applies one `InboundRetarget` to one row — returned rather than executed, so
+ * it lands in the same `DB.batch()` as the redrafted `outbox` row (and, for
+ * the "become a lead" branch, the `leads` row) it belongs with. A message
+ * re-routed to a project whose draft still points at the old thread, or a
+ * lead-shaped decision with no lead behind it, is not a partial success; it is
+ * a screen that lies to the next operator who opens it.
+ *
+ * `routed_runner_up` is cleared unconditionally. It records the candidate *the
+ * router* scored and declined; once a person has overridden the whole
+ * decision, leaving it would attribute a second-place finish to a contest that
+ * no longer decided anything.
+ *
+ * `guard` is required, not optional, for the same reason `intakeReplyStatement`
+ * (`src/notifications.ts`) makes it required: the only caller has one
+ * (`pendingDraftGuard` — every EM-6 write is guarded on its draft still being
+ * `pending`), and a bare re-target would let a double-clicked route form move
+ * a row whose draft another tab already approved and sent.
+ */
+export function retargetInboundEmailStatement(
+  env: Env,
+  inboundEmailId: string,
+  retarget: InboundRetarget,
+  guard: CreateGuard,
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `UPDATE inbound_emails
+        SET routed_kind = ?, routed_reason = ?, routed_runner_up = NULL,
+            routed_project_id = ?, routed_submission_id = ?, routed_lead_id = ?
+      WHERE id = ?
+        ${guard.clause}`,
+  ).bind(
+    retarget.kind,
+    retarget.reason,
+    retarget.projectId,
+    retarget.submissionReference,
+    retarget.leadId,
+    inboundEmailId,
+    ...guard.bindings,
+  )
+}
+
 interface InboundEmailRow {
   id: string
   message_id: string | null

@@ -23,6 +23,14 @@ import {
 } from "./routes/leads"
 import { matchMockBundlePath, mockBundle } from "./routes/mocks"
 import { outbox } from "./routes/outbox"
+import {
+  matchRepliesPath,
+  postReplyApprove,
+  postReplyDiscard,
+  postReplyRoute,
+  repliesInbox,
+  replyDetail,
+} from "./routes/replies"
 import { projectDetail } from "./routes/project"
 import { matchRequestsPath, postRequestReassign, requestDetail, requestsInbox } from "./routes/requests"
 import { startForm, submitStart } from "./routes/start"
@@ -114,6 +122,32 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
   // `routes/deliveries.ts`.
   if (pathname === "/deliveries") {
     if (request.method === "GET") return deliveries(request, env)
+    return leadsNotFound()
+  }
+
+  // The operator's reply-approval queue (#166, EM-6 of milestone #5) — the
+  // screen a drafted intake reply is read, edited and approved on before the
+  // drain will ever carry it. Owned here for every method on any `/replies…`
+  // path, same reasoning as `/deliveries` just above and `/leads…` below;
+  // `matchRepliesPath`'s own `"other"` catch-all is what makes that true for
+  // EM-7's not-yet-implemented `/promote` as well. See `routes/replies.ts`.
+  const repliesMatch = matchRepliesPath(pathname)
+  if (repliesMatch) {
+    if (repliesMatch.kind === "index" && request.method === "GET") {
+      return repliesInbox(request, env)
+    }
+    if (repliesMatch.kind === "detail" && request.method === "GET") {
+      return replyDetail(request, env, repliesMatch.id)
+    }
+    if (repliesMatch.kind === "approve" && request.method === "POST") {
+      return postReplyApprove(request, env, repliesMatch.id)
+    }
+    if (repliesMatch.kind === "discard" && request.method === "POST") {
+      return postReplyDiscard(request, env, repliesMatch.id)
+    }
+    if (repliesMatch.kind === "route" && request.method === "POST") {
+      return postReplyRoute(request, env, repliesMatch.id)
+    }
     return leadsNotFound()
   }
 
