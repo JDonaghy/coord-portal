@@ -594,12 +594,30 @@ const APP_STYLES = `
      tests/acceptance/ms-2/mocks/04-leads-inbox.html, 05-lead-detail.html and
      06-lead-promoted.html. These are the only screens a customer never sees. */
   ul.leads-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+  /* The row WRAPS and its monospace meta line breaks mid-token, for the same
+     load-bearing reason header.topbar above does. Since issue #164 a lead's
+     contact address is whatever a stranger happened to mail us from, not
+     something a form nudged into shape: min-width:0 lets .row-main shrink, but
+     a grid track's automatic minimum is still its longest UNBREAKABLE run, and
+     Chrome breaks at neither the at-sign nor a dot — so one ordinary address
+     (someone-with-a-long-name at mail.example.com) set the row's floor at
+     ~430px and pushed the document to 556px on a 412px phone, measured. Mobile
+     Chrome answers a
+     document wider than device-width by scaling the whole page down, and once
+     page scale != 1 the CSS-pixel coordinates a test (or a thumb) aims at and
+     the screen coordinates the tap lands on drift apart — the Review link is
+     then unclickable, with whatever sits under the drifted point swallowing the
+     tap instead. overflow-wrap:anywhere (NOT break-word, which does not affect
+     min-content sizing and so would not move the floor at all) drops it;
+     flex-wrap lets .row-side fall below rather than squeeze, exactly as
+     .request-row already does. Nothing here changes the desktop layout: with
+     room to spare the row still lays out on one line. */
   .lead-row {
-    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
     background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
     padding: 1rem 1.25rem;
   }
-  .lead-row .row-main { display: grid; gap: 0.3rem; min-width: 0; }
+  .lead-row .row-main { display: grid; gap: 0.3rem; min-width: 0; overflow-wrap: anywhere; }
   .lead-row .summary { font-weight: 600; }
   .lead-row .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
   .lead-row .row-side { display: flex; align-items: center; gap: 1rem; flex-shrink: 0; }
