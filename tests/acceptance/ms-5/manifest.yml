@@ -49,6 +49,14 @@ issues:
     - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 5 — a historical customer_email match with no clients row resolves via address, then scores"
     - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › a DMARC-fail message from a known client's address falls to unrouted rather than matching them"
     - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 6 — nobody we know at all falls to the default, with no runner-up to speak of"
+  164:
+    - "[chromium] ms-5/164-em4-stranger-lead.spec.ts › ms-5 issue 164 EM-4: a stranger's email becomes a lead › a stranger's inbound email creates exactly one leads row, via the same createLead() /start uses"
+    - "[chromium] ms-5/164-em4-stranger-lead.spec.ts › ms-5 issue 164 EM-4: a stranger's email becomes a lead › a stranger's email with no display name leaves the lead's name null, same as /start's optional field"
+    - "[chromium] ms-5/164-em4-stranger-lead.spec.ts › ms-5 issue 164 EM-4: a stranger's email becomes a lead › the lead a stranger's email produces is promotable through the exact same button, and becomes a real submission"
+    - "[chromium] ms-5/164-em4-stranger-lead.spec.ts › ms-5 issue 164 EM-4: a stranger's email becomes a lead › the inbound_emails row records both which lead it produced and which draft it produced"
+    - "[chromium] ms-5/164-em4-stranger-lead.spec.ts › ms-5 issue 164 EM-4: a stranger's email becomes a lead › the stranger's message drafts exactly one outbox row at pending, never sent however many drain ticks run"
+    - "[chromium] ms-5/164-em4-stranger-lead.spec.ts › ms-5 issue 164 EM-4: a stranger's email becomes a lead › re-delivering the same message produces no second lead and no second draft"
+    - "[chromium] ms-5/164-em4-stranger-lead.spec.ts › ms-5 issue 164 EM-4: a stranger's email becomes a lead › the drafted acknowledgement never quotes the sender's own message, discloses no state, and carries the lead's own reference"
 
 # Tests OBSERVED failing against the unimplemented state, recorded per issue at
 # the moment the slice was authored.
@@ -81,6 +89,18 @@ issues:
 # back as `null` where the test expected a specific rung — because #163 is
 # the issue that fills it in. There is no control or ratchet clause in this
 # slice.
+#
+# #164 recorded from `npm run test:acceptance -- ms-5/164` (after `npm ci` +
+# `npx playwright install chromium`), against a checkout with #161/#162/#163
+# already landed (schema head 0021_outbox_approval.sql) but #164 itself
+# unimplemented (no createLead()/enqueue wiring for the rung-6 stranger case
+# in src/inboundEmail.ts, src/leads.ts or src/notifications.ts): 7 failed, 0
+# passed, 0 skipped. Every one of the seven ids below was watched to fail,
+# all on the same underlying signal — `inbound_emails.routed_lead_id` (and,
+# downstream, `.outbox_id`) read back `NULL` where each test expected a real
+# row — because #164 is the issue that fills them in. There is no control or
+# ratchet clause in this slice to exclude: every test's very first assertion
+# past `POST /__email` succeeding depends on #164's own write path existing.
 expected_red:
   162:
     - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › the migration lands, and the running Worker reports the newer schema"
@@ -91,3 +111,11 @@ expected_red:
     - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › flipping a pending row to approved sends it on the very next tick"
     - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › a rejected row is never sent and never retried, however many ticks run"
     - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › every pre-existing row (approval_state = not_required) still sends exactly as before"
+  164:
+    - "[chromium] ms-5/164-em4-stranger-lead.spec.ts › ms-5 issue 164 EM-4: a stranger's email becomes a lead › a stranger's inbound email creates exactly one leads row, via the same createLead() /start uses"
+    - "[chromium] ms-5/164-em4-stranger-lead.spec.ts › ms-5 issue 164 EM-4: a stranger's email becomes a lead › a stranger's email with no display name leaves the lead's name null, same as /start's optional field"
+    - "[chromium] ms-5/164-em4-stranger-lead.spec.ts › ms-5 issue 164 EM-4: a stranger's email becomes a lead › the lead a stranger's email produces is promotable through the exact same button, and becomes a real submission"
+    - "[chromium] ms-5/164-em4-stranger-lead.spec.ts › ms-5 issue 164 EM-4: a stranger's email becomes a lead › the inbound_emails row records both which lead it produced and which draft it produced"
+    - "[chromium] ms-5/164-em4-stranger-lead.spec.ts › ms-5 issue 164 EM-4: a stranger's email becomes a lead › the stranger's message drafts exactly one outbox row at pending, never sent however many drain ticks run"
+    - "[chromium] ms-5/164-em4-stranger-lead.spec.ts › ms-5 issue 164 EM-4: a stranger's email becomes a lead › re-delivering the same message produces no second lead and no second draft"
+    - "[chromium] ms-5/164-em4-stranger-lead.spec.ts › ms-5 issue 164 EM-4: a stranger's email becomes a lead › the drafted acknowledgement never quotes the sender's own message, discloses no state, and carries the lead's own reference"
