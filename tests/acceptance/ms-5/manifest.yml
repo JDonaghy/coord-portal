@@ -30,6 +30,15 @@ issues:
     - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › loop suppression — sender is one of this portal's own sending domains — never earns a reply"
     - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › a redelivery of the same Message-ID produces no second row"
     - "[chromium] ms-5/161-inbound-seam.spec.ts › ms-5 issue 161 the inbound seam › an oversized body is stored truncated and flagged, never dropped silently"
+  162:
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › the migration lands, and the running Worker reports the newer schema"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › outbox carries approval_state / approved_at / approved_by, not_required by default"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › approval_state is a fixed four-value vocabulary — the CHECK is enforced, not decorative"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › outbox.email_type admits 'intake-reply' without it silently vanishing from GET /outbox"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › a pending row is never claimed by the drain, however many ticks run"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › flipping a pending row to approved sends it on the very next tick"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › a rejected row is never sent and never retried, however many ticks run"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › every pre-existing row (approval_state = not_required) still sends exactly as before"
 
 # Tests OBSERVED failing against the unimplemented state, recorded per issue at
 # the moment the slice was authored.
@@ -41,3 +50,24 @@ issues:
 # watched to fail — there is no control or ratchet clause in this slice (every
 # test depends on `POST /__email` and/or `migrations/0020_inbound_emails.sql`
 # existing, and #161 is the issue that creates both), so nothing is excluded.
+#
+# #162 recorded from `npm run test:acceptance -- ms-5/162` (after `npm ci` +
+# `npx playwright install chromium`), against a checkout at schema head 0020
+# (`0020_inbound_emails.sql`, issue #161 — already landed; #162's own
+# `migrations/0021_outbox_approval.sql` had not): 8 failed, 0 passed, 0
+# skipped. All eight ids below were OBSERVED failing — every test in this
+# slice depends on `migrations/0021_outbox_approval.sql` (the
+# `approval_state`/`approved_at`/`approved_by` columns and the widened
+# `email_type` CHECK) and/or `src/drain.ts`'s new clause existing, and #162 is
+# the issue that adds both, so nothing is excluded as a control or ratchet
+# clause.
+expected_red:
+  162:
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › the migration lands, and the running Worker reports the newer schema"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › outbox carries approval_state / approved_at / approved_by, not_required by default"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › approval_state is a fixed four-value vocabulary — the CHECK is enforced, not decorative"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › outbox.email_type admits 'intake-reply' without it silently vanishing from GET /outbox"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › a pending row is never claimed by the drain, however many ticks run"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › flipping a pending row to approved sends it on the very next tick"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › a rejected row is never sent and never retried, however many ticks run"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › every pre-existing row (approval_state = not_required) still sends exactly as before"
