@@ -1,8 +1,15 @@
 import PostalMime, { type Email, type Address } from "postal-mime"
 import { generateInboundEmailId } from "./ids"
-import { routeInboundMessage, type RoutedKind, type RoutingRung } from "./inboundRouter"
+import {
+  routeInboundMessage,
+  type RoutedKind,
+  type RoutingDecision,
+  type RoutingRung,
+  type RoutingTarget,
+} from "./inboundRouter"
 import { leadCreationStatement, mintLead, type Lead } from "./leads"
-import { intakeReplyStatement, type DraftedIntakeReply } from "./notifications"
+import { messageCreationStatement, mintMessage, type Message } from "./messages"
+import { intakeReplyStatement, routedReplyStatement, type DraftedIntakeReply } from "./notifications"
 import type { CreateGuard } from "./submissions"
 import type { Env } from "./types"
 
@@ -11,10 +18,27 @@ import type { Env } from "./types"
  *
  * One real message in, one `inbound_emails` row out. This module's own scope
  * sentence used to be "routes nothing and replies to nothing" — #161's,
- * before EM-3 (routing, issue #163) and EM-4 (drafting rung 6's stranger case,
- * issue #164) both landed here. EM-5 (a known thread) and EM-9 (rate limits)
- * are still ahead; every column those issues will fill stays nullable in
- * `migrations/0020_inbound_emails.sql` and untouched here.
+ * before EM-3 (routing, issue #163), EM-4 (drafting rung 6's stranger case,
+ * issue #164) and EM-5 (a known thread, issue #165) all landed here. EM-9
+ * (rate limits) is still ahead; every column that issue will fill stays
+ * nullable in `migrations/0020_inbound_emails.sql` and untouched here.
+ *
+ * ── EM-5: A KNOWN SENDER'S MESSAGE JOINS ITS OWN THREAD (ISSUE #165) ────────
+ * When the router's decision is `"message"` (rungs 1-5 — a plus-addressed
+ * reply, a quoted reference, or an identity match), `recordInboundEmail`
+ * mints a `messages` row (`src/messages.ts`) on the matched submission,
+ * `author_role = 'customer'`, and drafts a routed acknowledgement into
+ * `outbox` the same way EM-4 drafts a stranger's — `pending`, for an operator
+ * to approve. When the decision is `"unrouted"` (rung 6's ambiguous case: a
+ * tie among a known client's projects, or a known address that failed DMARC)
+ * nothing is appended anywhere and no lead is minted either — the row parks
+ * with the candidates the router considered, for EM-6's screen — but a
+ * neutral acknowledgement is still drafted, because the sender should still
+ * hear back even though nobody has decided where this belongs yet. Every one
+ * of these writes lands in the same guarded `env.DB.batch()` as the
+ * `inbound_emails` row itself, for the identical reason EM-4 gives: no window
+ * in which a message exists whose `inbound_emails` row does not, or a
+ * drafted reply nobody's message justifies.
  *
  * ── EM-4: RUNG 6 CREATES A LEAD AND DRAFTS AN ACKNOWLEDGEMENT (ISSUE #164) ──
  * `recordInboundEmail` below parses, suppresses-or-routes, and then writes —
@@ -166,17 +190,38 @@ export interface InboundEmailRecord {
    * ── EM-4'S OWN LINK (ISSUE #164) ──────────────────────────────────────────
    * The `leads.id` this row produced, set exactly when `routedKind === "lead"`
    * — rung 6, "nobody we know". `null` for every other row: a `message` row
-   * links nowhere here (EM-5 owns `routed_submission_id`), an `unrouted` row
-   * is deliberately never given a lead ("inventing a fresh lead for someone
-   * who may already be a customer is exactly the split-brain CLAUDE.md's
-   * ownership rule warns about" — `src/inboundRouter.ts`'s own words), and a
-   * `suppressed`/`rate_limited` row was never routed at all.
+   * links nowhere here (EM-5 owns `routedProjectId`/`routedSubmissionId`
+   * below), an `unrouted` row is deliberately never given a lead ("inventing
+   * a fresh lead for someone who may already be a customer is exactly the
+   * split-brain CLAUDE.md's ownership rule warns about" — `src/inboundRouter.ts`'s
+   * own words), and a `suppressed`/`rate_limited` row was never routed at all.
    */
   routedLeadId: string | null
   /**
-   * The `outbox.id` of the drafted acknowledgement this row produced, set
-   * alongside `routedLeadId` by the same EM-4 write. `null` whenever
-   * `routedLeadId` is — there is no lead to acknowledge, so nothing to draft.
+   * ── EM-5'S OWN LINK (ISSUE #165) ───────────────────────────────────────────
+   * Which project and submission a `"message"` decision (rungs 1-5) actually
+   * attached to — set together, exactly when `routedKind === "message"`.
+   * `routedProjectId` mirrors `RoutingTarget.projectId` (`src/inboundRouter.ts`)
+   * verbatim, including `null` for a one-off request with no project.
+   * `routedSubmissionId` stores the `SUB-XXXXXX` **reference**, not the
+   * internal row id — the same convention every other portal-owned
+   * per-submission table in this schema uses for its own `submission_id`
+   * column (`design_rounds`, `signoffs`, `question_answers`, and `messages`
+   * itself — see `migrations/0014_messages.sql`), and exactly the value
+   * `postMessage` (`src/messages.ts`) was called with. `null` for every other
+   * row: a `"lead"` row has no submission (it has `routedLeadId` instead), and
+   * an `"unrouted"` row is deliberately left unattached — nothing was decided
+   * confidently enough to attach to, which is the whole reason it parks for a
+   * human on `/replies` (EM-6) rather than picking one.
+   */
+  routedProjectId: string | null
+  routedSubmissionId: string | null
+  /**
+   * The `outbox.id` of the drafted acknowledgement this row produced. Set for
+   * every routed outcome — `"lead"` (EM-4's stranger draft), `"message"`
+   * (EM-5's routed draft) and `"unrouted"` (EM-5's neutral draft) alike — and
+   * `null` only for a row that was never routed at all (`suppressed`,
+   * `rate_limited`).
    */
   outboxId: string | null
 }
@@ -258,21 +303,34 @@ export async function recordInboundEmail(
       ? await routeInboundMessage(env, { fromEmail, toEmail, subject, bodyText: body.text, authResult })
       : null
 
-  // EM-4 (#164): rung 6's lead and its drafted acknowledgement are minted
-  // *before* the write, not after it, so their ids can be recorded on the
-  // `inbound_emails` row in the very statement that creates it and all three
-  // rows can go down in one batch. Nothing is written here — `mintLead` only
-  // generates ids, `intakeReplyStatement` only prepares SQL — and neither is
-  // reached at all unless the router actually answered rung 6.
+  // EM-4 (#164) and EM-5 (#165): every row this write can produce beside
+  // `inbound_emails` itself — a lead, a customer message, a drafted
+  // acknowledgement — is minted *before* the write, not after it, so every id
+  // can be recorded on the `inbound_emails` row in the very statement that
+  // creates it and every row lands in one batch. Nothing is written here —
+  // `mintLead`/`mintMessage` only generate ids, `intakeReplyStatement`/
+  // `routedReplyStatement` only prepare SQL — and each is reached only for
+  // the decision it belongs to.
   const id = generateInboundEmailId()
+  const guard = insertedRowGuard(id)
+
   const lead =
     decision?.kind === "lead"
       ? mintLead({ summary: body.text, email: fromEmail, name: fromName })
       : null
-  const draft =
-    lead === null
+
+  const target: RoutingTarget | null = decision?.kind === "message" ? decision.target : null
+  const inboundMessage: Message | null =
+    target === null
       ? null
-      : intakeReplyStatement(env, id, fromEmail, lead.reference, insertedRowGuard(id))
+      : mintMessage({
+          submissionId: target.submissionReference,
+          authorRole: "customer",
+          authorEmail: fromEmail,
+          body: body.text,
+        })
+
+  const draft = draftFor(env, id, fromEmail, decision, lead, target, guard)
 
   const record: InboundEmailRecord = {
     id,
@@ -294,14 +352,47 @@ export async function recordInboundEmail(
     routedRunnerUp: decision?.runnerUp?.reason ?? null,
     // Rung 6 only, and known before the write — see `writeInboundEmail`.
     routedLeadId: lead?.id ?? null,
+    // Rung 1-5 ("message") only, and known before the write — see `writeInboundEmail`.
+    routedProjectId: target?.projectId ?? null,
+    routedSubmissionId: target?.submissionReference ?? null,
     outboxId: draft?.id ?? null,
   }
 
-  return writeInboundEmail(env, record, lead, draft)
+  return writeInboundEmail(env, record, lead, inboundMessage, draft)
 }
 
 /**
- * The guard every row EM-4 writes beside an `inbound_emails` row carries:
+ * The acknowledgement drafted for whichever outcome the router reached —
+ * EM-4's stranger template for `"lead"` (issue #164), EM-5's routed template
+ * for `"message"` (linked to the submission `postMessage` is about to append
+ * to) and EM-5's neutral template for `"unrouted"` (issue #165's own words:
+ * "Draft a neutral acknowledgement anyway: the sender should still hear
+ * back"). `null` only when `decision` itself is `null` — a suppressed
+ * message, never routed and never answered at all.
+ */
+function draftFor(
+  env: Env,
+  inboundEmailId: string,
+  toEmail: string,
+  decision: RoutingDecision | null,
+  lead: Lead | null,
+  target: RoutingTarget | null,
+  guard: CreateGuard,
+): DraftedIntakeReply | null {
+  if (decision === null) return null
+  if (decision.kind === "lead" && lead !== null) {
+    return intakeReplyStatement(env, inboundEmailId, toEmail, lead.reference, guard)
+  }
+  if (decision.kind === "message" && target !== null) {
+    return routedReplyStatement(env, inboundEmailId, toEmail, `/submissions/${target.submissionId}`, guard)
+  }
+  // `"unrouted"` — rung 6's ambiguous case. No submission was confidently
+  // attached to, so there is nothing behind Access to send this sender to yet.
+  return routedReplyStatement(env, inboundEmailId, toEmail, null, guard)
+}
+
+/**
+ * The guard every row EM-4/EM-5 write beside an `inbound_emails` row carries:
  * *this* insert only happens if the row it belongs to actually landed, in this
  * same batch.
  *
@@ -321,9 +412,11 @@ function insertedRowGuard(inboundEmailId: string): CreateGuard {
 }
 
 /**
- * One `DB.batch()` — the `inbound_emails` row, and (rung 6 only) the `leads`
- * row and the drafted acknowledgement that belong to it — then a read back
- * when the insert found the message already recorded.
+ * One `DB.batch()` — the `inbound_emails` row, and whichever of a `leads` row
+ * (rung 6, stranger), a `messages` row (rungs 1-5, a known thread), or neither
+ * belongs to this decision, plus the drafted acknowledgement every routed
+ * outcome gets — then a read back when the insert found the message already
+ * recorded.
  *
  * ── WHY A BATCH ────────────────────────────────────────────────────────────
  * D1 runs a batch as a single transaction: all three rows land, or none does.
@@ -355,10 +448,14 @@ async function writeInboundEmail(
   env: Env,
   record: InboundEmailRecord,
   lead: Lead | null,
+  inboundMessage: Message | null,
   draft: DraftedIntakeReply | null,
 ): Promise<RecordInboundEmailResult> {
   const statements = [inboundEmailInsert(env, record)]
   if (lead !== null) statements.push(leadCreationStatement(env, lead, insertedRowGuard(record.id)))
+  if (inboundMessage !== null) {
+    statements.push(messageCreationStatement(env, inboundMessage, insertedRowGuard(record.id)))
+  }
   if (draft !== null) statements.push(draft.statement)
 
   const results = await env.DB.batch(statements)
@@ -390,9 +487,9 @@ function inboundEmailInsert(env: Env, record: InboundEmailRecord): D1PreparedSta
        received_at, auth_result, disposition, suppression_reason,
        attachment_count, body_truncated,
        routed_kind, routed_rung, routed_reason, routed_runner_up,
-       routed_lead_id, outbox_id
+       routed_lead_id, routed_project_id, routed_submission_id, outbox_id
      )
-     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       WHERE NOT EXISTS (SELECT 1 FROM inbound_emails WHERE message_id = ?)
      ON CONFLICT DO NOTHING`,
   ).bind(
@@ -414,6 +511,8 @@ function inboundEmailInsert(env: Env, record: InboundEmailRecord): D1PreparedSta
     record.routedReason,
     record.routedRunnerUp,
     record.routedLeadId,
+    record.routedProjectId,
+    record.routedSubmissionId,
     record.outboxId,
     record.messageId,
   )
@@ -445,7 +544,7 @@ const SELECT_COLUMNS = `SELECT id, message_id, from_email, from_name, to_email, 
          body_text, received_at, auth_result, disposition, suppression_reason,
          attachment_count, body_truncated,
          routed_kind, routed_rung, routed_reason, routed_runner_up,
-         routed_lead_id, outbox_id
+         routed_lead_id, routed_project_id, routed_submission_id, outbox_id
     FROM inbound_emails`
 
 /**
@@ -481,6 +580,8 @@ interface InboundEmailRow {
   routed_reason: string | null
   routed_runner_up: string | null
   routed_lead_id: string | null
+  routed_project_id: string | null
+  routed_submission_id: string | null
   outbox_id: string | null
 }
 
@@ -504,6 +605,8 @@ function fromRow(row: InboundEmailRow): InboundEmailRecord {
     routedReason: row.routed_reason,
     routedRunnerUp: row.routed_runner_up,
     routedLeadId: row.routed_lead_id,
+    routedProjectId: row.routed_project_id,
+    routedSubmissionId: row.routed_submission_id,
     outboxId: row.outbox_id,
   }
 }

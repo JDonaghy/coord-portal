@@ -134,11 +134,19 @@ function asJson(record: InboundEmailRecord): Record<string, unknown> {
     routedReason: record.routedReason,
     routed_runner_up: record.routedRunnerUp,
     routedRunnerUp: record.routedRunnerUp,
-    // EM-4 (issue #164): rung 6's own link — which lead and which drafted
-    // reply this row produced. `null`/`null` for anything that was never
-    // routed to `"lead"` at all.
+    // EM-4 (issue #164): rung 6's own link — which lead this row produced.
+    // `null` for anything that was never routed to `"lead"` at all.
     routed_lead_id: record.routedLeadId,
     routedLeadId: record.routedLeadId,
+    // EM-5 (issue #165): which project/submission a `"message"` decision
+    // (rungs 1-5) actually attached to. `null`/`null` for anything that was
+    // never routed to `"message"` at all.
+    routed_project_id: record.routedProjectId,
+    routedProjectId: record.routedProjectId,
+    routed_submission_id: record.routedSubmissionId,
+    routedSubmissionId: record.routedSubmissionId,
+    // The drafted acknowledgement every routed outcome gets — EM-4's stranger
+    // draft, EM-5's routed draft, or EM-5's neutral unrouted draft.
     outbox_id: record.outboxId,
     outboxId: record.outboxId,
   }

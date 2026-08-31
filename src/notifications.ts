@@ -582,9 +582,87 @@ export function intakeReplyStatement(
   leadReference: string,
   guard: CreateGuard,
 ): DraftedIntakeReply {
+  return acknowledgementStatement(env, inboundEmailId, toEmail, intakeReplyContent(leadReference), guard)
+}
+
+/**
+ * The routed-thread acknowledgement — issue #165 (EM-5 of milestone #5).
+ * Deterministic and rendered in the Worker, exactly like `intakeReplyContent`
+ * and `emailContent`, but for the two outcomes EM-5 owns rather than EM-4's
+ * stranger case:
+ *
+ *   - `ctaHref` non-`null` — the router (EM-3) resolved this sender's message
+ *     to a specific submission (rungs 1-5, `routed_kind = 'message'`) and
+ *     `postMessage` (`src/messages.ts`) has already appended it to that
+ *     thread. The CTA lands on that submission's own Access-gated page —
+ *     `/submissions/:id`-shaped, the same destination every one of
+ *     `emailContent`'s three templates already uses — so the sender can read
+ *     the thread themselves rather than take this acknowledgement's word for
+ *     anything.
+ *   - `ctaHref` `null` — rung 6's ambiguous case (`routed_kind = 'unrouted'`):
+ *     a known-ish sender the router could not confidently place on one
+ *     project, or a known client's address that failed DMARC. Nothing was
+ *     appended anywhere and no lead exists either, so — same reasoning
+ *     `intakeReplyContent`'s own doc gives for the stranger case, which has
+ *     no Access seat to send to — there is no page behind Access to send this
+ *     sender to yet. The sender should still hear back (issue #165's own
+ *     words: "Draft a neutral acknowledgement anyway"), and an operator can
+ *     route the row correctly before approving it.
+ *
+ * Neither branch discloses a submission status, a project name, or any other
+ * pipeline-state fact, and neither ever quotes the sender's own message back
+ * to them — the same restrictions `intakeReplyContent`'s own doc states, and
+ * for the same reason: this function's only sender-controlled input is
+ * `ctaHref`, and even that is portal-derived (a submission's own internal id,
+ * never anything the sender wrote).
+ */
+export function routedReplyContent(ctaHref: string | null): EmailContent {
+  return {
+    subject: "Got it — thanks for your message — Heuron Technology",
+    preheader: "Message received",
+    body: `Thanks for getting in touch — I've received your message and will follow up soon.${SIGNATURE}`,
+    ctaText: ctaHref !== null ? "View your project" : "Back home",
+    ctaHref: ctaHref ?? "/",
+  }
+}
+
+/**
+ * Drafts one `intake-reply` acknowledgement for EM-5's own two outcomes — see
+ * `routedReplyContent` above for what distinguishes them. Same shape as
+ * `intakeReplyStatement`: returned rather than executed, guarded on the
+ * `inbound_emails` row it belongs to, and keyed on the same
+ * `(submission_id = inboundEmailId, coord_revision = INTAKE_REPLY_REVISION)`
+ * pair — an inbound email produces at most one draft regardless of which of
+ * EM-3's outcomes it reached, so one idempotency key serves all of them.
+ */
+export function routedReplyStatement(
+  env: Env,
+  inboundEmailId: string,
+  toEmail: string,
+  ctaHref: string | null,
+  guard: CreateGuard,
+): DraftedIntakeReply {
+  return acknowledgementStatement(env, inboundEmailId, toEmail, routedReplyContent(ctaHref), guard)
+}
+
+/**
+ * The one `INSERT` both `intakeReplyStatement` and `routedReplyStatement`
+ * write — factored out so the column list, the guard placement and the
+ * `ON CONFLICT` tail exist once, not twice in step-by-hand copies. See
+ * `intakeReplyStatement`'s own doc for why the statement is returned rather
+ * than executed, why `guard` is required (not optional, unlike
+ * `messageCreationStatement`'s), and why `(submission_id, coord_revision)`
+ * is this draft's idempotency key.
+ */
+function acknowledgementStatement(
+  env: Env,
+  inboundEmailId: string,
+  toEmail: string,
+  content: EmailContent,
+  guard: CreateGuard,
+): DraftedIntakeReply {
   const id = generateOutboxId()
   const now = new Date().toISOString()
-  const content = intakeReplyContent(leadReference)
 
   const statement = env.DB.prepare(
     `INSERT INTO outbox
