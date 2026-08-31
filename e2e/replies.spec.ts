@@ -318,6 +318,14 @@ test.describe("issue #166 — /replies, the approval gate becomes operable", () 
     await expect(page).toHaveURL(/\/replies$/)
     await expect(replyRowFor(page, sender)).toHaveCount(0)
 
+    // Approving a discarded draft afterwards is a guarded no-op, not an error:
+    // the losing half of a race is someone who did nothing wrong, and the
+    // guard — not the missing button — is what keeps it from sending.
+    const approveAfter = await page.context().request.post(`/replies/${draft}/approve`, {
+      form: { subject: "Sneaked in", body: "Sneaked in after the discard." },
+    })
+    expect(approveAfter.status(), "a no-op, not a 404").toBe(200)
+
     for (let tick = 0; tick < 3; tick++) await runDrain(request)
 
     expect(await sentTo(request, sender), "rejected is terminal — it never sends").toHaveLength(0)

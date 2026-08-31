@@ -1,4 +1,5 @@
 import PostalMime, { type Email, type Address } from "postal-mime"
+import { chunkForBinding } from "./d1"
 import { generateInboundEmailId } from "./ids"
 import {
   routeInboundMessage,
@@ -599,6 +600,12 @@ export async function getInboundEmailByOutboxId(
  * it, the same posture `fromRow` (`src/notifications.ts`) takes for a row of a
  * type it does not recognise. EM-4/EM-5 write both rows in one `DB.batch()`,
  * so this is unreachable in practice.
+ *
+ * Split with `chunkForBinding` (`src/d1.ts`) for the reason `getProjectsByIds`
+ * already is: the pending queue is unbounded, and one `IN (…)` over more than
+ * `D1_MAX_BOUND_PARAMS` ids is `D1_ERROR: too many SQL variables` — a screen
+ * that works until the day nobody clears their queue is worse than one that
+ * never worked.
  */
 export async function getInboundEmailsByOutboxIds(
   env: Env,
@@ -607,11 +614,17 @@ export async function getInboundEmailsByOutboxIds(
   const found = new Map<string, InboundEmailRecord>()
   if (outboxIds.length === 0) return found
 
-  const placeholders = outboxIds.map(() => "?").join(", ")
-  const { results } = await env.DB.prepare(`${SELECT_COLUMNS} WHERE outbox_id IN (${placeholders})`)
-    .bind(...outboxIds)
-    .all<InboundEmailRow>()
-  for (const row of results ?? []) {
+  const batches = await Promise.all(
+    chunkForBinding(outboxIds).map(async (chunk) => {
+      const placeholders = chunk.map(() => "?").join(", ")
+      const { results } = await env.DB.prepare(`${SELECT_COLUMNS} WHERE outbox_id IN (${placeholders})`)
+        .bind(...chunk)
+        .all<InboundEmailRow>()
+      return results ?? []
+    }),
+  )
+
+  for (const row of batches.flat()) {
     const record = fromRow(row)
     if (record.outboxId !== null) found.set(record.outboxId, record)
   }
