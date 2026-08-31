@@ -124,6 +124,16 @@ function asJson(record: InboundEmailRecord): Record<string, unknown> {
     body_truncated: record.bodyTruncated,
     bodyTruncated: record.bodyTruncated,
     truncated: record.bodyTruncated,
+    // EM-3's routing decision (issue #163). `null` on all four for a
+    // `suppressed` row, which is never routed at all.
+    routed_kind: record.routedKind,
+    routedKind: record.routedKind,
+    routed_rung: record.routedRung,
+    routedRung: record.routedRung,
+    routed_reason: record.routedReason,
+    routedReason: record.routedReason,
+    routed_runner_up: record.routedRunnerUp,
+    routedRunnerUp: record.routedRunnerUp,
   }
 }
 

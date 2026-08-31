@@ -185,12 +185,35 @@ export async function getClientRecordByEmail(env: Env, email: string): Promise<C
  * `cc_emails` is free text (`routes/account.ts`'s own profile form writes it
  * unvalidated, and `mergeClients` appends to it with a bare `,` join) — never
  * guaranteed to be tightly comma-packed, so a customer who typed
- * `"a@x.test, b@x.test"` still matches. Spaces are stripped before the `LIKE`
- * rather than split-and-trimmed in JS, so this stays one query instead of a
- * full-table fetch to filter in memory. Case-insensitive for the same reason
+ * `"a@x.test, b@x.test"` still matches. Spaces are stripped in SQL rather than
+ * split-and-trimmed in JS, so this stays one query instead of a full-table
+ * fetch to filter in memory. Case-insensitive for the same reason
  * `getClientRecordByEmail` is: no identity provider treats a local part as
  * case-sensitive in practice, and rung 3's whole point is not missing a real
  * match on casing alone.
+ *
+ * ── WHY `instr()` AND NOT `LIKE` ───────────────────────────────────────────
+ * The obvious spelling of this is
+ * `(',' || … || ',') LIKE '%,' || lower(?) || ',%'`, and that is what this
+ * function shipped as first. It is wrong twice over:
+ *
+ *  1. **It crashes on ordinary addresses.** SQLite caps a `LIKE` pattern at
+ *     `SQLITE_MAX_LIKE_PATTERN_LENGTH`, which D1 sets to 50 characters, and
+ *     the pattern here is the address plus four. Any sender whose address runs
+ *     past ~46 characters — unremarkable for `firstname.lastname@` at a real
+ *     company — raised `D1_ERROR: LIKE or GLOB pattern too complex` out of the
+ *     middle of the inbound router, which surfaced as a 500 on the whole
+ *     `email()` path: one long address and *no* mail gets recorded at all.
+ *  2. **It matches the wrong client.** `_` is legal in an email local part and
+ *     `%` is legal in a quoted one, and `LIKE` reads both as wildcards. A
+ *     client with `a_b@x.test` on their `cc_emails` would swallow a message
+ *     from `axb@x.test` — a stranger silently resolved to somebody else's
+ *     account, which for a router whose whole subtitle is "guessing never" is
+ *     precisely the failure it exists to prevent.
+ *
+ * `instr()` is a plain substring search: no length cap, no metacharacters, and
+ * the comma-fencing on both sides still pins it to a whole entry rather than a
+ * prefix of a longer address.
  *
  * Read-only, like everything else exported from this module for EM-3 — see
  * that issue's own "adds no write path" scope note.
@@ -199,7 +222,7 @@ export async function getClientRecordByCcEmail(env: Env, email: string): Promise
   const row = await env.DB.prepare(
     `SELECT id, email, created_at FROM clients
       WHERE cc_emails IS NOT NULL
-        AND (',' || REPLACE(lower(cc_emails), ' ', '') || ',') LIKE '%,' || lower(?) || ',%'
+        AND instr(',' || REPLACE(lower(cc_emails), ' ', '') || ',', ',' || lower(?) || ',') > 0
       LIMIT 1`,
   )
     .bind(email)

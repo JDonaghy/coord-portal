@@ -1,5 +1,6 @@
 import PostalMime, { type Email, type Address } from "postal-mime"
 import { generateInboundEmailId } from "./ids"
+import { routeInboundMessage, type RoutedKind, type RoutingRung } from "./inboundRouter"
 import type { Env } from "./types"
 
 /**
@@ -104,6 +105,21 @@ export interface InboundEmailRecord {
   suppressionReason: SuppressionReason | null
   attachmentCount: number
   bodyTruncated: boolean
+  /**
+   * ── THE ROUTER'S DECISION (issue #163, EM-3) ─────────────────────────────
+   * `null` on every column for a row that was never routed at all — a
+   * `suppressed` message, which #161's own rule keeps out of the router
+   * entirely ("recorded, with a reason; no draft, **no routing**"). For a
+   * `received` row all four are populated together, because the ladder always
+   * reaches an answer: rung 6 ("nobody we know, or ambiguous → a lead") is a
+   * decision, not an absence of one.
+   */
+  routedKind: RoutedKind | null
+  routedRung: RoutingRung | null
+  /** Human-readable: what `/replies` (EM-6) shows an operator to justify the match. */
+  routedReason: string | null
+  /** The candidate the router scored but did not pick, or `null` when there was never a second one. */
+  routedRunnerUp: string | null
 }
 
 export interface RecordInboundEmailResult {
@@ -173,6 +189,16 @@ export async function recordInboundEmail(
   const authResult = parseDmarcVerdict(headerValues(parsed, "authentication-results"))
   const suppressionReason = detectSuppression(env, parsed, message, fromEmail)
 
+  // Suppressed mail is recorded but never routed — #161's own rule, and the
+  // reason the router runs *here* rather than unconditionally inside
+  // `insertInboundEmail`: a machine's auto-reply must not be resolved to a
+  // person, given a draft, or shown to an operator as a routing decision that
+  // was never really made.
+  const decision =
+    suppressionReason === null
+      ? await routeInboundMessage(env, { fromEmail, toEmail, subject, bodyText: body.text, authResult })
+      : null
+
   const record: InboundEmailRecord = {
     id: generateInboundEmailId(),
     messageId: normaliseMessageId(parsed.messageId),
@@ -187,6 +213,10 @@ export async function recordInboundEmail(
     suppressionReason,
     attachmentCount: parsed.attachments.length,
     bodyTruncated: body.truncated,
+    routedKind: decision?.kind ?? null,
+    routedRung: decision?.rung ?? null,
+    routedReason: decision?.reason ?? null,
+    routedRunnerUp: decision?.runnerUp?.reason ?? null,
   }
 
   return insertInboundEmail(env, record)
@@ -215,9 +245,10 @@ async function insertInboundEmail(
     `INSERT INTO inbound_emails (
        id, message_id, from_email, from_name, to_email, subject, body_text,
        received_at, auth_result, disposition, suppression_reason,
-       attachment_count, body_truncated
+       attachment_count, body_truncated,
+       routed_kind, routed_rung, routed_reason, routed_runner_up
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT DO NOTHING`,
   )
     .bind(
@@ -234,6 +265,10 @@ async function insertInboundEmail(
       record.suppressionReason,
       record.attachmentCount,
       record.bodyTruncated ? 1 : 0,
+      record.routedKind,
+      record.routedRung,
+      record.routedReason,
+      record.routedRunnerUp,
     )
     .run()
 
@@ -259,7 +294,8 @@ async function findByMessageId(
 
 const SELECT_COLUMNS = `SELECT id, message_id, from_email, from_name, to_email, subject,
          body_text, received_at, auth_result, disposition, suppression_reason,
-         attachment_count, body_truncated
+         attachment_count, body_truncated,
+         routed_kind, routed_rung, routed_reason, routed_runner_up
     FROM inbound_emails`
 
 /**
@@ -290,6 +326,10 @@ interface InboundEmailRow {
   suppression_reason: string | null
   attachment_count: number
   body_truncated: number
+  routed_kind: string | null
+  routed_rung: number | null
+  routed_reason: string | null
+  routed_runner_up: string | null
 }
 
 function fromRow(row: InboundEmailRow): InboundEmailRecord {
@@ -307,6 +347,10 @@ function fromRow(row: InboundEmailRow): InboundEmailRecord {
     suppressionReason: row.suppression_reason as SuppressionReason | null,
     attachmentCount: row.attachment_count,
     bodyTruncated: row.body_truncated !== 0,
+    routedKind: row.routed_kind as RoutedKind | null,
+    routedRung: row.routed_rung as RoutingRung | null,
+    routedReason: row.routed_reason,
+    routedRunnerUp: row.routed_runner_up,
   }
 }
 
