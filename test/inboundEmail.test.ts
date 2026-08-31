@@ -45,6 +45,8 @@ interface StoredRow {
   routed_reason: string | null
   routed_runner_up: string | null
   routed_lead_id: string | null
+  routed_project_id: string | null
+  routed_submission_id: string | null
   outbox_id: string | null
 }
 
@@ -294,6 +296,8 @@ function rowFromBindings(args: unknown[]): StoredRow {
     routed_reason,
     routed_runner_up,
     routed_lead_id,
+    routed_project_id,
+    routed_submission_id,
     outbox_id,
   ] = args as [
     string,
@@ -311,6 +315,8 @@ function rowFromBindings(args: unknown[]): StoredRow {
     number,
     string | null,
     number | null,
+    string | null,
+    string | null,
     string | null,
     string | null,
     string | null,
@@ -334,10 +340,13 @@ function rowFromBindings(args: unknown[]): StoredRow {
     routed_rung,
     routed_reason,
     routed_runner_up,
-    // Bound by the `INSERT` itself since issue #164: the lead and its draft
-    // are minted before the write and land in the same batch, so the row is
-    // never briefly recorded as routed to a lead it does not name.
+    // Bound by the `INSERT` itself since issue #164/#165: the lead (or
+    // message) and its draft are minted before the write and land in the
+    // same batch, so the row is never briefly recorded as routed to
+    // something it does not name.
     routed_lead_id,
+    routed_project_id,
+    routed_submission_id,
     outbox_id,
   }
 }

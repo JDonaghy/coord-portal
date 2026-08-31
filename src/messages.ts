@@ -1,4 +1,5 @@
 import { generateMessageId } from "./ids"
+import type { CreateGuard } from "./submissions"
 import type { Env } from "./types"
 
 /**
@@ -90,6 +91,73 @@ export async function listMessages(env: Env, submissionReference: string): Promi
     .filter((message): message is Message => message !== null)
 }
 
+export interface NewMessageInput {
+  submissionId: string
+  authorRole: MessageAuthorRole
+  authorEmail: string
+  body: string
+}
+
+/**
+ * Mint one message's identity — id and `created_at` — without writing it.
+ *
+ * Split out of `postMessage` for issue #165 (EM-5 of milestone #5), whose
+ * caller (`src/inboundEmail.ts`) must know the `messages.id` *before* the
+ * write so the same guarded `DB.batch()` that inserts the `inbound_emails`
+ * row can carry this message's own insert alongside it — the identical shape
+ * `mintLead` (`src/leads.ts`) already established for EM-4's lead. Every
+ * other caller of `postMessage` keeps calling that function unchanged; this
+ * split adds a second, lower-level pair of exports rather than touching the
+ * ordinary "just do it" behaviour every existing route relies on.
+ */
+export function mintMessage(input: NewMessageInput): Message {
+  return {
+    id: generateMessageId(),
+    submissionId: input.submissionId,
+    authorRole: input.authorRole,
+    authorEmail: input.authorEmail,
+    body: input.body,
+    createdAt: new Date().toISOString(),
+  }
+}
+
+/**
+ * The one `INSERT` every message in this app is written by — returned rather
+ * than executed, so a caller that must write a message *atomically alongside
+ * other rows* can put it in its own `DB.batch()`. `postMessage` below is the
+ * ordinary wrapper every existing route uses.
+ *
+ * ── A SECOND CALLER (ISSUE #165, EM-5 OF MILESTONE #5) ──────────────────────
+ * `src/inboundEmail.ts` mints a message for a known sender's inbound email
+ * (rungs 1-5 of EM-3's router: a `"message"` decision) and must not let it
+ * land unless the `inbound_emails` row it belongs to actually landed in the
+ * same batch — the identical "no window where one row exists without the
+ * other" argument EM-4 already makes for `leadCreationStatement`. `guard` is
+ * optional because `postMessage`'s own ordinary callers
+ * (`src/routes/submission.ts`, `src/routes/leads.ts`) have nothing to guard
+ * against: a customer or operator posting to an existing thread needs no
+ * "did some other row land first" check.
+ */
+export function messageCreationStatement(
+  env: Env,
+  message: Message,
+  guard?: CreateGuard,
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `INSERT INTO messages (id, submission_id, author_role, author_email, body, created_at)
+     SELECT ?, ?, ?, ?, ?, ?
+     ${guard ? guard.clause : ""}`,
+  ).bind(
+    message.id,
+    message.submissionId,
+    message.authorRole,
+    message.authorEmail,
+    message.body,
+    message.createdAt,
+    ...(guard ? guard.bindings : []),
+  )
+}
+
 /**
  * Appends one message. `authorEmail` is whatever `resolveSiteIdentity` (for a
  * customer) or `readOperator` (for an operator) resolved for the caller —
@@ -103,15 +171,7 @@ export async function postMessage(
   authorEmail: string,
   body: string,
 ): Promise<Message> {
-  const id = generateMessageId()
-  const createdAt = new Date().toISOString()
-
-  await env.DB.prepare(
-    `INSERT INTO messages (id, submission_id, author_role, author_email, body, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(id, submissionReference, authorRole, authorEmail, body, createdAt)
-    .run()
-
-  return { id, submissionId: submissionReference, authorRole, authorEmail, body, createdAt }
+  const message = mintMessage({ submissionId: submissionReference, authorRole, authorEmail, body })
+  await messageCreationStatement(env, message).run()
+  return message
 }

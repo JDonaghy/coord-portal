@@ -34,8 +34,8 @@ import { runWrangler } from "./wrangler-cli"
  */
 const DATABASE = "coord-portal"
 
-function execute(command: string): void {
-  runWrangler(["d1", "execute", DATABASE, "--local", "--json", "--command", command])
+function execute(command: string): string {
+  return runWrangler(["d1", "execute", DATABASE, "--local", "--json", "--command", command])
 }
 
 function sqlString(value: string): string {
@@ -120,4 +120,47 @@ export function insertSubmissionRow(opts: {
   }
   execute(`INSERT INTO submissions (${cols.join(", ")}) VALUES (${vals.join(", ")})`)
   return { id, reference }
+}
+
+/** One `messages` row, as `messageCreationStatement` (`src/messages.ts`) writes one. */
+export interface StoredMessageRow {
+  id: string
+  submission_id: string
+  author_role: string
+  author_email: string
+  body: string
+  created_at: string
+}
+
+/**
+ * Every `messages` row on one submission's thread, oldest first — read
+ * directly rather than through `/submissions/:id`'s own rendering, for issue
+ * #165 (EM-5)'s own e2e coverage.
+ *
+ * `detailFor` (`src/routes/submission.ts`) deliberately omits the whole
+ * message-thread section for a submission still at `describing` — the
+ * receipt screen's own copy already says "No one is chatting with you right
+ * now." Several of this file's own fixtures (and #163's rung 3/4 fixtures
+ * this file was written for) leave a submission at that default status, so a
+ * black-box assertion that a message *landed* has no page to read it back
+ * from without first pushing the submission to some other status purely to
+ * make the assertion possible — the same "no HTTP route to seed this through"
+ * situation `outbox-fixtures.ts`'s own module comment describes for delivery
+ * state, solved the same way here.
+ */
+export function readMessagesForSubmission(reference: string): StoredMessageRow[] {
+  const output = execute(
+    `SELECT id, submission_id, author_role, author_email, body, created_at FROM messages WHERE submission_id = ${sqlString(reference)} ORDER BY created_at ASC, id ASC`,
+  )
+  const [{ results }] = JSON.parse(output) as [{ results: StoredMessageRow[] }]
+  return results
+}
+
+/** One submission's own `status` column — read directly for the same reason `readMessagesForSubmission` is. */
+export function readSubmissionStatus(reference: string): string {
+  const output = execute(`SELECT status FROM submissions WHERE reference = ${sqlString(reference)}`)
+  const [{ results }] = JSON.parse(output) as [{ results: Array<{ status: string }> }]
+  const row = results[0]
+  if (!row) throw new Error(`no submission with reference ${reference}`)
+  return row.status
 }
