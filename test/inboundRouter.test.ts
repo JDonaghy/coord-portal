@@ -117,12 +117,18 @@ describe("decideRoute — rung 2 (quoted reference)", () => {
     expect(decision.target).toBeNull()
   })
 
-  it("falls through when the quoted SUB- reference names nothing real", () => {
+  it("falls through when the quoted SUB- reference names nothing real, to a clean lead when nothing else matches either", () => {
+    // Issue #164 (EM-4): with no client match and no history, there is no
+    // identity here for a spoofed `From:` to steal, so an unresolvable
+    // reference and a failed DMARC check both fall straight through to rung
+    // 6's `lead` outcome, not `unrouted` — DMARC only ever parks a message as
+    // `unrouted` when there is an actual client/history match it could be
+    // spoofing.
     const decision = decideRoute(
       message({ authResult: "fail" }),
       lookup({ quotedReference: { kind: "SUB", token: "SUB-DEADBE", submission: null } }),
     )
-    expect(decision.kind).toBe("unrouted")
+    expect(decision.kind).toBe("lead")
     expect(decision.rung).toBe(6)
   })
 
@@ -399,6 +405,27 @@ describe("decideRoute — rung 6 (default)", () => {
     expect(decision.rung).toBe(6)
     expect(decision.target).toBeNull()
     expect(decision.runnerUp).toBeNull()
+  })
+
+  /**
+   * Issue #164 (EM-4): the DMARC gate on rungs 3–5 must not reach a genuine
+   * stranger at all. `decideRoute — the DMARC gate` above already covers the
+   * case where DMARC fails *and* there is a client/history match (parks as
+   * `unrouted`); these two cover the case this contract's own amendment adds
+   * — no match of any kind, so there is no identity for a spoofed `From:` to
+   * steal, and "auth_result is irrelevant to which rung a genuine stranger's
+   * message reaches."
+   */
+  it("is still a clean lead when DMARC fails outright and nobody matches", () => {
+    const decision = decideRoute(message({ authResult: "fail" }), lookup())
+    expect(decision.kind).toBe("lead")
+    expect(decision.rung).toBe(6)
+  })
+
+  it("is still a clean lead when there is no DMARC evidence at all and nobody matches", () => {
+    const decision = decideRoute(message({ authResult: "none" }), lookup())
+    expect(decision.kind).toBe("lead")
+    expect(decision.rung).toBe(6)
   })
 })
 

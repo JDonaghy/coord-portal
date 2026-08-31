@@ -107,6 +107,18 @@ function fromRow(row: LeadRow): Lead {
  * them." The id and reference are generated here, never accepted from the
  * caller, for the same reason `createSubmission` does it this way: which lead
  * this is is not something a request gets to assert about itself.
+ *
+ * ── A SECOND CALLER (ISSUE #164, EM-4 OF MILESTONE #5) ──────────────────────
+ * `src/routes/start.ts`'s `POST /start` is no longer this function's only
+ * caller: `src/inboundEmail.ts`'s `recordInboundEmail` calls it too, for rung
+ * 6 of EM-3's router ("nobody we know, or ambiguous → a lead") — "the *same
+ * function* `POST /start` calls, producing the same inert row on the same
+ * triage screen, promotable by the same button. A stranger's email is a
+ * stranger's form submission that happened to arrive over SMTP." Nothing in
+ * this function changed to accommodate that second caller: it already took
+ * exactly the three fields a stranger's email supplies (`summary`, `email`,
+ * `name`), and it already writes nothing else and dispatches nothing — the
+ * two properties EM-4 needed in a caller it could reuse rather than fork.
  */
 export async function createLead(env: Env, input: NewLeadInput): Promise<Lead> {
   const id = generateLeadId()

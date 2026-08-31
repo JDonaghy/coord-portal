@@ -77,14 +77,17 @@ import type { Env } from "./types"
  * one other status a customer must actually act on, not merely a status
  * report to skim later.
  *
- * `intake-reply` — issue #162 (EM-2, milestone #5) — is the fifth. Nothing in
- * this repo inserts a row of this type yet (that is a later milestone once a
- * reply draft exists to gate); it is added here only so
- * `migrations/0021_outbox_approval.sql`'s widened `outbox.email_type` CHECK
- * and this vocabulary land together. Skipping this edit while widening the
- * column would not fail loudly — `fromRow` below just returns `null` for any
- * row of a type it does not recognise, so a future intake-reply row would
- * silently vanish from both `/outbox` and `/deliveries` the moment one was
+ * `intake-reply` — issue #162 (EM-2, milestone #5) — is the fifth. When #162
+ * landed, nothing in this repo inserted a row of this type yet; it was added
+ * then only so `migrations/0021_outbox_approval.sql`'s widened
+ * `outbox.email_type` CHECK and this vocabulary landed together, ahead of a
+ * writer existing to need it. Issue #164 (EM-4) is that writer:
+ * `enqueueIntakeReply` below is the first, and so far only, code that inserts
+ * one — a stranger's inbound-email acknowledgement, drafted `pending` for a
+ * human to approve. Skipping this vocabulary edit while widening the column
+ * would not have failed loudly — `fromRow` below just returns `null` for any
+ * row of a type it does not recognise, so an intake-reply row would have
+ * silently vanished from both `/outbox` and `/deliveries` the moment one was
  * ever written.
  */
 export const SENDING_TYPES = [
@@ -456,6 +459,144 @@ export async function emailContent(env: Env, submission: Submission, type: SendT
     ctaText: "View the result",
     ctaHref,
   }
+}
+
+/**
+ * The fixed `coord_revision` every `intake-reply` draft is enqueued with —
+ * issue #164 (EM-4 of milestone #5). `recordNotificationForStatus`'s own
+ * idempotency key is `(submission_id, coord_revision)`, one real submission
+ * revision per row; an intake-reply draft has no submission and no revision
+ * to be about, so this reuses that exact column pair for a different purpose:
+ * `submission_id` carries the `inbound_emails.id` the draft is *for* (never a
+ * real `submissions.id` — there is no FK, per CLAUDE.md § Ownership, and
+ * nothing downstream parses this column's shape), and `coord_revision` is
+ * this fixed constant, because there is only ever one draft per inbound
+ * email. See `enqueueIntakeReply` below for why this is the belt-and-braces
+ * layer issue #164 itself asks for, not the only thing standing between one
+ * inbound email and two drafts.
+ */
+const INTAKE_REPLY_REVISION = 0
+
+/**
+ * The stranger-case acknowledgement — issue #164's own template. Deterministic
+ * and rendered in the Worker, exactly like `emailContent`'s three states, but
+ * with none of that function's inputs: a stranger's draft is not about a
+ * `Submission` at all, only about the `LEAD-XXXXXX` reference `createLead`
+ * just minted for them.
+ *
+ * ── WHY THIS NEVER TAKES THE SENDER'S OWN MESSAGE ───────────────────────────
+ * #164's own words: "it never quotes submission content and never discloses
+ * state." The only sender-controlled value that could possibly reach this
+ * function is `leadReference` itself, and that is portal-minted text
+ * (`generateLeadReference`, `src/ids.ts`), never anything the sender wrote —
+ * so there is no parameter here a caller could accidentally thread the
+ * message body or subject through.
+ *
+ * ── WHY THE COPY MIRRORS `/start`'S RECEIPT ─────────────────────────────────
+ * "Mirror the copy `/start`'s receipt already uses, including the reference:
+ * the lead reference is what the sender quotes back, and rung 2 reads it.
+ * Same voice, same promise, different channel." `receipt` in
+ * `src/routes/start.ts` is that copy; the body below restates its two load-
+ * bearing promises ("nothing to sign into, nothing to check back on" and
+ * "quote the reference to follow up") in first person, so a sender who saw
+ * the web form's receipt and a sender who only ever emailed in read the same
+ * thing.
+ *
+ * ── WHY THE CTA NAMES NO URL ─────────────────────────────────────────────────
+ * Every other template's CTA lands on `/submissions/:id`, an Access-gated
+ * page — the whole safety argument for sending unprompted mail to an address
+ * nobody has verified yet ("even a reply that reaches the wrong person shows
+ * them a login screen"). A stranger's own lead has no Access seat at all
+ * (`/leads/:id` is an *operator* screen, gated by the operator allowlist, not
+ * something this sender could ever sign into), so there is no Access-gated
+ * page to send them to — the contract's own resolution of #164's cut-off
+ * sentence. The reference is the only thing this draft asks the sender to
+ * hold onto; `ctaHref`/`ctaText` still have to be non-empty strings (the
+ * `outbox` schema's own `NOT NULL`), so they point back to the public site
+ * home, exactly where `/start`'s own receipt already sends a "back home"
+ * click.
+ */
+export function intakeReplyContent(leadReference: string): EmailContent {
+  return {
+    subject: "Got it — thanks for reaching out — Heuron Technology",
+    preheader: `Reference ${leadReference}`,
+    body:
+      `Thanks for reaching out — got it, and I'll follow up soon. There's nothing to sign into and ` +
+      `nothing to check back on; if you want to follow up yourself, just quote ${leadReference} in ` +
+      `your reply.${SIGNATURE}`,
+    ctaText: "Back home",
+    ctaHref: "/",
+  }
+}
+
+/**
+ * Drafts one `intake-reply` acknowledgement — issue #164 (EM-4 of milestone
+ * #5). A dedicated enqueue function, deliberately not a call through
+ * `recordNotificationForStatus`: that function is bound to a bridge status
+ * push (it reads a `Submission`, and its idempotency key is a submission
+ * revision) and neither exists for a stranger's email — there is no
+ * submission yet, only the lead `recordInboundEmail`
+ * (`src/inboundEmail.ts`) just created.
+ *
+ * Written `pending` (`approval_state`), never `not_required` — issue #162's
+ * own gate: a drafted reply waits for a human on `/replies` (EM-6) before the
+ * drain (`src/drain.ts`) will ever claim it. Every other column is exactly
+ * what `recordNotificationForStatus` would write for an ordinary send:
+ * `status` and `attempts` left to their column defaults (born `queued`, zero
+ * attempts), `queued_at` stamped now.
+ *
+ * Idempotent the same "insert guarded, then read back" way every other
+ * belt-and-braces write in this repo is (`insertInboundEmail`,
+ * `enqueueIntakeReply`'s own caller's insert, `promoteLead`): `ON CONFLICT
+ * (submission_id, coord_revision) DO NOTHING` against the existing
+ * constraint (see `INTAKE_REPLY_REVISION` above for why that pair, not a new
+ * column, is this draft's idempotency key), then a read-back when the insert
+ * lost so the caller always learns the id of the one draft that exists for
+ * this inbound email — never the row it built and failed to insert. In
+ * practice `recordInboundEmail` only ever calls this once per inbound email
+ * (it only reaches here for an insert its own `ON CONFLICT DO NOTHING` on
+ * `inbound_emails` genuinely won), so this is the belt to that suspenders,
+ * not the only thing standing between one inbound email and two drafts.
+ */
+export async function enqueueIntakeReply(
+  env: Env,
+  inboundEmailId: string,
+  toEmail: string,
+  leadReference: string,
+): Promise<string> {
+  const id = generateOutboxId()
+  const now = new Date().toISOString()
+  const content = intakeReplyContent(leadReference)
+
+  const result = await env.DB.prepare(
+    `INSERT INTO outbox
+       (id, submission_id, email_type, to_email, from_email, subject, preheader, body, cta_text, cta_href, coord_revision, queued_at, approval_state)
+     VALUES (?, ?, 'intake-reply', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+     ON CONFLICT (submission_id, coord_revision) DO NOTHING`,
+  )
+    .bind(
+      id,
+      inboundEmailId,
+      toEmail,
+      emailFrom(env),
+      content.subject,
+      content.preheader,
+      content.body,
+      content.ctaText,
+      content.ctaHref,
+      INTAKE_REPLY_REVISION,
+      now,
+    )
+    .run()
+
+  if ((result.meta?.changes ?? 0) > 0) return id
+
+  const existing = await env.DB.prepare(
+    `SELECT id FROM outbox WHERE submission_id = ? AND coord_revision = ?`,
+  )
+    .bind(inboundEmailId, INTAKE_REPLY_REVISION)
+    .first<{ id: string }>()
+  return existing?.id ?? id
 }
 
 /**
