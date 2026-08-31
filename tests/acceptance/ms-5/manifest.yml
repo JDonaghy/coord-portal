@@ -73,6 +73,13 @@ issues:
     - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › approving twice sends once"
     - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › a discarded draft never sends however many ticks run, and approving it afterward is a guarded no-op"
     - '[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › "Change route" re-targets an unrouted row to an operator-chosen project and keeps it pending'
+  167:
+    - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › promoting a matched reply creates exactly one submission in the matched project, owned by the sender, and leaves EM-5's own thread message untouched"
+    - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › promoting an inbound email produces exactly one submission.created event, shaped like an ordinary intake"
+    - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › promoting the same inbound email twice — a retry and two concurrent attempts — converges on one submission"
+    - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › \"Change route\" to an operator-chosen project, then promote, lands the new submission in that chosen project"
+    - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › a stranger's inbound email (already a lead) has no promote path here, and a direct POST creates no submission"
+    - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › a discarded draft cannot be promoted afterward — the pending guard blocks it"
 
 # Tests OBSERVED failing against the unimplemented state, recorded per issue at
 # the moment the slice was authored.
@@ -186,3 +193,19 @@ expected_red:
     - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › approving twice sends once"
     - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › a discarded draft never sends however many ticks run, and approving it afterward is a guarded no-op"
     - '[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › "Change route" re-targets an unrouted row to an operator-chosen project and keeps it pending'
+#
+# #167 recorded from `npm run test:acceptance -- ms-5/167` against a checkout
+# with #161-#166 already landed but #167 itself unimplemented (no
+# `POST /replies/:id/promote` route, no `src/inboundPromotion.ts`,
+# `migrations/0022_inbound_promotion.sql` absent): `POST /replies/:id/promote`
+# 404s unconditionally, the same way any undefined route does. Four of the
+# six ids below were watched to fail on that same first signal. The other two
+# — the stranger/no-project row and the already-discarded-draft row — assert
+# only a guard invariant ("no submission is created"), which already holds
+# trivially while the route doesn't exist at all, so they were not observed
+# failing and are correctly omitted here per the OBSERVED-not-INTENDED rule.
+  167:
+    - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › promoting a matched reply creates exactly one submission in the matched project, owned by the sender, and leaves EM-5's own thread message untouched"
+    - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › promoting an inbound email produces exactly one submission.created event, shaped like an ordinary intake"
+    - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › promoting the same inbound email twice — a retry and two concurrent attempts — converges on one submission"
+    - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › \"Change route\" to an operator-chosen project, then promote, lands the new submission in that chosen project"
