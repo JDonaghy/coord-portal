@@ -12,7 +12,7 @@ import {
   projectCreationForEmailResolvedClient,
   projectCreationForKnownClient,
 } from "./projects"
-import { createSubmissionStatements } from "./submissions"
+import { createSubmissionStatements, type CreateGuard } from "./submissions"
 import type { Env } from "./types"
 
 /**
@@ -98,51 +98,86 @@ function fromRow(row: LeadRow): Lead {
 }
 
 /**
+ * Mint one lead's identity — id, reference, `created_at` — without writing it.
+ *
+ * Split out of `createLead` for issue #164 (EM-4), whose caller must know the
+ * `leads.id` and `LEAD-XXXXXX` reference *before* the write, so both can be
+ * recorded on the `inbound_emails` row and rendered into the drafted
+ * acknowledgement inside the same transaction. Same rule as before the split:
+ * the id and reference are generated here, never accepted from a caller —
+ * which lead this is is not something a request gets to assert about itself.
+ */
+export function mintLead(input: NewLeadInput): Lead {
+  return fromRow({
+    id: generateLeadId(),
+    reference: generateLeadReference(),
+    summary: input.summary,
+    email: input.email,
+    name: input.name,
+    created_at: new Date().toISOString(),
+    promoted_at: null,
+    promoted_submission_id: null,
+    promoted_submission_reference: null,
+  })
+}
+
+/**
+ * The one `INSERT` every lead in this app is written by — returned rather than
+ * executed, so a caller that must write a lead *atomically alongside other
+ * rows* can put it in its own `DB.batch()`. `createLead` below is the ordinary
+ * "just do it" wrapper, and `POST /start` is its caller.
+ *
+ * `INSERT … SELECT` rather than `INSERT … VALUES` so the guarded and unguarded
+ * forms are one statement with one column list, not two that can drift apart —
+ * `createSubmissionStatements` (`src/submissions.ts`) established that shape
+ * and this follows it. With no guard the `SELECT` has no `FROM` and yields
+ * exactly one row, which is what `VALUES` did.
+ *
+ * ── A SECOND CALLER (ISSUE #164, EM-4 OF MILESTONE #5) ──────────────────────
+ * `src/routes/start.ts`'s `POST /start` is no longer the only path that mints a
+ * lead: `src/inboundEmail.ts` writes one too, for rung 6 of EM-3's router
+ * ("nobody we know, or ambiguous → a lead") — "the *same function* `POST
+ * /start` calls, producing the same inert row on the same triage screen,
+ * promotable by the same button. A stranger's email is a stranger's form
+ * submission that happened to arrive over SMTP." That sameness is what this
+ * split preserves: both callers write this one statement, with these columns,
+ * from an identity minted by `mintLead` above. What EM-4 adds is a `guard`,
+ * because its lead must not exist unless the `inbound_emails` row that
+ * justifies it landed in the same batch.
+ */
+export function leadCreationStatement(
+  env: Env,
+  lead: Lead,
+  guard?: CreateGuard,
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `INSERT INTO leads (id, reference, summary, email, name, created_at)
+     SELECT ?, ?, ?, ?, ?, ?
+     ${guard ? guard.clause : ""}`,
+  ).bind(
+    lead.id,
+    lead.reference,
+    lead.summary,
+    lead.email,
+    lead.name,
+    lead.createdAt,
+    ...(guard ? guard.bindings : []),
+  )
+}
+
+/**
  * Inserts one lead row and nothing else.
  *
  * Deliberately a single `INSERT`, not a `DB.batch()` alongside a bridge event
  * the way `createSubmission` pairs its insert with `submission.created` —
  * there is no event to pair it with. "Coord never sees leads; they are
  * pre-pipeline by construction, and the sync bridge must not learn about
- * them." The id and reference are generated here, never accepted from the
- * caller, for the same reason `createSubmission` does it this way: which lead
- * this is is not something a request gets to assert about itself.
- *
- * ── A SECOND CALLER (ISSUE #164, EM-4 OF MILESTONE #5) ──────────────────────
- * `src/routes/start.ts`'s `POST /start` is no longer this function's only
- * caller: `src/inboundEmail.ts`'s `recordInboundEmail` calls it too, for rung
- * 6 of EM-3's router ("nobody we know, or ambiguous → a lead") — "the *same
- * function* `POST /start` calls, producing the same inert row on the same
- * triage screen, promotable by the same button. A stranger's email is a
- * stranger's form submission that happened to arrive over SMTP." Nothing in
- * this function changed to accommodate that second caller: it already took
- * exactly the three fields a stranger's email supplies (`summary`, `email`,
- * `name`), and it already writes nothing else and dispatches nothing — the
- * two properties EM-4 needed in a caller it could reuse rather than fork.
+ * them."
  */
 export async function createLead(env: Env, input: NewLeadInput): Promise<Lead> {
-  const id = generateLeadId()
-  const reference = generateLeadReference()
-  const createdAt = new Date().toISOString()
-
-  await env.DB.prepare(
-    `INSERT INTO leads (id, reference, summary, email, name, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(id, reference, input.summary, input.email, input.name, createdAt)
-    .run()
-
-  return fromRow({
-    id,
-    reference,
-    summary: input.summary,
-    email: input.email,
-    name: input.name,
-    created_at: createdAt,
-    promoted_at: null,
-    promoted_submission_id: null,
-    promoted_submission_reference: null,
-  })
+  const lead = mintLead(input)
+  await leadCreationStatement(env, lead).run()
+  return lead
 }
 
 /**

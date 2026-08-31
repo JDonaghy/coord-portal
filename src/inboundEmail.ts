@@ -1,8 +1,9 @@
 import PostalMime, { type Email, type Address } from "postal-mime"
 import { generateInboundEmailId } from "./ids"
 import { routeInboundMessage, type RoutedKind, type RoutingRung } from "./inboundRouter"
-import { createLead } from "./leads"
-import { enqueueIntakeReply } from "./notifications"
+import { leadCreationStatement, mintLead, type Lead } from "./leads"
+import { intakeReplyStatement, type DraftedIntakeReply } from "./notifications"
+import type { CreateGuard } from "./submissions"
 import type { Env } from "./types"
 
 /**
@@ -16,20 +17,42 @@ import type { Env } from "./types"
  * `migrations/0020_inbound_emails.sql` and untouched here.
  *
  * ── EM-4: RUNG 6 CREATES A LEAD AND DRAFTS AN ACKNOWLEDGEMENT (ISSUE #164) ──
- * `recordInboundEmail` below still writes the `inbound_emails` row exactly as
- * EM-1/EM-3 left it — parse, suppress-or-route, insert, guarded against a
- * redelivery. What EM-4 adds is a second step, reached only when that insert
- * genuinely won (never for a redelivery the guard already resolved) and the
- * router's own decision was rung 6, `"lead"`: mint a lead via
- * `createLead` (`src/leads.ts`) — "not a copy of it, not a variant: the *same
- * function* `POST /start` calls" — draft its acknowledgement via
- * `enqueueIntakeReply` (`src/notifications.ts`), and record both ids back onto
- * the row that produced them (`routed_lead_id`, `outbox_id`). Doing this
- * *after* the guarded insert, rather than before it, is what keeps a
- * redelivery from minting a second lead: the insert either wins once (this is
- * a genuinely new message; proceed) or loses (this is a redelivery; the
- * function returns the existing row, lead and draft ids already attached,
- * without calling `createLead`/`enqueueIntakeReply` a second time).
+ * `recordInboundEmail` below parses, suppresses-or-routes, and then writes —
+ * and when the router's own decision was rung 6, `"lead"`, that write is three
+ * rows across three tables rather than one: the `inbound_emails` row, the
+ * `leads` row minted by `mintLead`/`leadCreationStatement` (`src/leads.ts`) —
+ * "not a copy of it, not a variant: the *same* statement `POST /start` writes"
+ * — and the drafted acknowledgement from `intakeReplyStatement`
+ * (`src/notifications.ts`). All three go down **in one `env.DB.batch()`**, with
+ * the `inbound_emails` row already carrying `routed_lead_id` and `outbox_id`,
+ * so there is no window in which a message is recorded as routed to a lead
+ * that does not exist, or a lead exists that nobody ever acknowledged. That is
+ * this repo's own convention for a multi-row write that must land together
+ * (`promoteLead`, `src/leads.ts`), and the alternative — three sequential
+ * round trips — fails in the one way that is invisible and unrecoverable: the
+ * redelivery guard would treat the half-written row as "already handled" and
+ * swallow every retry, leaving a stranger who wrote in with silence.
+ *
+ * ── ONE ROW PER Message-ID ─────────────────────────────────────────────────
+ * The guard against writing a message twice is `WHERE NOT EXISTS (… WHERE
+ * message_id = ?)` on the insert itself — the *message's own* identity, which
+ * is exactly what RFC 5322 says a `Message-ID` is ("globally unique"), not the
+ * (`message_id`, `to_email`) pair `migrations/0020_inbound_emails.sql`'s
+ * partial unique index enforces. The index stays exactly as #161 shipped it
+ * and is still the hard backstop for the race two identical deliveries to the
+ * *same* recipient can lose; this guard is deliberately the wider of the two,
+ * because one message that Cloudflare delivers to two of our addresses (a
+ * customer who writes to `intake@` and copies `intake+SUB-…@`, or an SMTP
+ * retry that lands on a different alias) is still **one message**, and
+ * answering it twice would send that stranger two acknowledgements and give an
+ * operator two leads to triage for one enquiry. When a message carries no
+ * `Message-ID` at all there is no identity to deduplicate on and the guard
+ * matches nothing, which is the same thing #161's index says by being partial.
+ *
+ * A sender does control its own `Message-ID`, so a sender can in principle
+ * suppress *its own* later message by reusing one — the same (self-inflicted)
+ * exposure #161's composite key already had, since the recipient half is not
+ * sender-controlled in a way that helps.
  *
  * ── WHY THIS IS NOT A REQUEST HANDLER ──────────────────────────────────────
  * Cloudflare Email Routing invokes the Worker's `email()` export directly.
@@ -235,8 +258,24 @@ export async function recordInboundEmail(
       ? await routeInboundMessage(env, { fromEmail, toEmail, subject, bodyText: body.text, authResult })
       : null
 
+  // EM-4 (#164): rung 6's lead and its drafted acknowledgement are minted
+  // *before* the write, not after it, so their ids can be recorded on the
+  // `inbound_emails` row in the very statement that creates it and all three
+  // rows can go down in one batch. Nothing is written here — `mintLead` only
+  // generates ids, `intakeReplyStatement` only prepares SQL — and neither is
+  // reached at all unless the router actually answered rung 6.
+  const id = generateInboundEmailId()
+  const lead =
+    decision?.kind === "lead"
+      ? mintLead({ summary: body.text, email: fromEmail, name: fromName })
+      : null
+  const draft =
+    lead === null
+      ? null
+      : intakeReplyStatement(env, id, fromEmail, lead.reference, insertedRowGuard(id))
+
   const record: InboundEmailRecord = {
-    id: generateInboundEmailId(),
+    id,
     messageId: normaliseMessageId(parsed.messageId),
     fromEmail,
     fromName,
@@ -253,124 +292,151 @@ export async function recordInboundEmail(
     routedRung: decision?.rung ?? null,
     routedReason: decision?.reason ?? null,
     routedRunnerUp: decision?.runnerUp?.reason ?? null,
-    // Filled in below, after the insert, only for a genuinely new rung-6 row.
-    routedLeadId: null,
-    outboxId: null,
+    // Rung 6 only, and known before the write — see `writeInboundEmail`.
+    routedLeadId: lead?.id ?? null,
+    outboxId: draft?.id ?? null,
   }
 
-  const inserted = await insertInboundEmail(env, record)
-
-  // A redelivery: the row (and, if it ever produced one, its lead and draft)
-  // already exist. Nothing left to do — see the module doc's "EM-4" section
-  // for why this check, not a second guard inside `createLeadAndDraftReply`,
-  // is what keeps a redelivery from minting a second lead.
-  if (inserted.duplicate) return inserted
-
-  if (decision?.kind === "lead") {
-    const linked = await createLeadAndDraftReply(env, inserted.record)
-    return { record: linked, duplicate: false }
-  }
-
-  return inserted
+  return writeInboundEmail(env, record, lead, draft)
 }
 
 /**
- * EM-4's own write (issue #164): mint the lead rung 6 decided on, draft its
- * acknowledgement, and record both ids back onto the `inbound_emails` row
- * that produced them. Only ever called once per inbound email — see
- * `recordInboundEmail`'s own guard above.
+ * The guard every row EM-4 writes beside an `inbound_emails` row carries:
+ * *this* insert only happens if the row it belongs to actually landed, in this
+ * same batch.
+ *
+ * It reads the id back out of the database rather than trusting the caller's
+ * own "I think I won", which is the whole point: inside one `DB.batch()` the
+ * `inbound_emails` insert runs first, and by the time these statements are
+ * evaluated the answer to "did it insert?" is a plain fact SQLite can see. A
+ * redelivery, whose insert did nothing, leaves this `EXISTS` false and so mints
+ * neither a lead nor a draft — with no second guard in TypeScript to keep in
+ * step with this one.
  */
-async function createLeadAndDraftReply(
-  env: Env,
-  record: InboundEmailRecord,
-): Promise<InboundEmailRecord> {
-  const lead = await createLead(env, {
-    summary: record.bodyText,
-    email: record.fromEmail,
-    name: record.fromName,
-  })
-  const outboxId = await enqueueIntakeReply(env, record.id, record.fromEmail, lead.reference)
-
-  await env.DB.prepare(`UPDATE inbound_emails SET routed_lead_id = ?, outbox_id = ? WHERE id = ?`)
-    .bind(lead.id, outboxId, record.id)
-    .run()
-
-  return { ...record, routedLeadId: lead.id, outboxId }
+function insertedRowGuard(inboundEmailId: string): CreateGuard {
+  return {
+    clause: "WHERE EXISTS (SELECT 1 FROM inbound_emails WHERE id = ?)",
+    bindings: [inboundEmailId],
+  }
 }
 
 /**
- * `INSERT … ON CONFLICT DO NOTHING`, then read back.
+ * One `DB.batch()` — the `inbound_emails` row, and (rung 6 only) the `leads`
+ * row and the drafted acknowledgement that belong to it — then a read back
+ * when the insert found the message already recorded.
  *
- * No conflict target is named: the only uniqueness in 0020 beyond the primary
- * key is the partial `(message_id, to_email)` index, and SQLite's bare
- * `DO NOTHING` covers any of them — including the (impossible in practice, but
- * free to survive) case of a minted id colliding.
+ * ── WHY A BATCH ────────────────────────────────────────────────────────────
+ * D1 runs a batch as a single transaction: all three rows land, or none does.
+ * Three sequential round trips instead would let a transient failure between
+ * them record a message as `routed_kind = 'lead'` whose `routed_lead_id` is
+ * `NULL` forever — and because the redelivery guard reads "the row exists" as
+ * "this message was handled", every SMTP retry of that message would then be
+ * swallowed and the stranger would never be acknowledged. `promoteLead`
+ * (`src/leads.ts`) batches its own client/project/submission writes against
+ * exactly this failure, and this is the same shape.
  *
- * The read-back is not an optimisation, it is the correctness argument: two
- * concurrent redeliveries can both find no row and both attempt an insert, and
- * exactly one wins. The loser must return the winner's row rather than the
- * record it built and threw away, or the same message would report two
- * different ids. Same "read back rather than assuming the race was won" shape
- * `promoteLead` already uses.
+ * ── WHY THE READ-BACK ──────────────────────────────────────────────────────
+ * Not an optimisation, a correctness argument: two concurrent redeliveries can
+ * both see no row and both attempt the insert, and exactly one wins. The loser
+ * must return the winner's row rather than the record it built and threw away,
+ * or the same message would report two different ids to two callers.
  *
- * `routed_lead_id`/`outbox_id` are deliberately absent from the column list
- * below — `record.routedLeadId`/`record.outboxId` are always `null` at this
- * point (see `recordInboundEmail`), so leaving them out of the `INSERT` and
- * off their column defaults reaches the same `NULL` with less to bind. EM-4's
- * own `UPDATE` (`createLeadAndDraftReply`) is what ever sets them, strictly
- * after this insert has already won.
+ * The insert keeps `ON CONFLICT DO NOTHING` **as well as** its `NOT EXISTS`
+ * guard, and the difference matters in exactly that race: `NOT EXISTS` is
+ * evaluated before the concurrent writer commits, so the losing insert still
+ * reaches 0020's partial unique index, and `DO NOTHING` is what turns that into
+ * `changes = 0` (a redelivery, resolved by the read-back) instead of a thrown
+ * constraint error that would roll the whole batch back and 500 the delivery.
+ * No conflict target is named because any uniqueness in 0020 — the index, or
+ * the (impossible in practice, free to survive) case of a minted id colliding —
+ * should resolve the same way.
  */
-async function insertInboundEmail(
+async function writeInboundEmail(
   env: Env,
   record: InboundEmailRecord,
+  lead: Lead | null,
+  draft: DraftedIntakeReply | null,
 ): Promise<RecordInboundEmailResult> {
-  const result = await env.DB.prepare(
+  const statements = [inboundEmailInsert(env, record)]
+  if (lead !== null) statements.push(leadCreationStatement(env, lead, insertedRowGuard(record.id)))
+  if (draft !== null) statements.push(draft.statement)
+
+  const results = await env.DB.batch(statements)
+
+  if ((results[0]?.meta?.changes ?? 0) > 0) {
+    return { record, duplicate: false }
+  }
+
+  const existing = record.messageId === null ? null : await findByMessageId(env, record.messageId)
+  return { record: existing ?? record, duplicate: existing !== null }
+}
+
+/**
+ * The `inbound_emails` insert, guarded on the message's own `Message-ID` — see
+ * the module doc's "one row per Message-ID" section for why that, and not
+ * 0020's composite index, is where the app draws the line.
+ *
+ * `message_id` is bound twice (columns, then guard) rather than referenced as
+ * a numbered parameter, because every other statement in this repo binds
+ * positional `?` and one file quietly using `?2` is a trap for whoever edits
+ * the column list next. A `NULL` `message_id` makes the subquery's `= ?` match
+ * nothing, so a message with no id of its own is always inserted — the same
+ * thing 0020's index says by being partial.
+ */
+function inboundEmailInsert(env: Env, record: InboundEmailRecord): D1PreparedStatement {
+  return env.DB.prepare(
     `INSERT INTO inbound_emails (
        id, message_id, from_email, from_name, to_email, subject, body_text,
        received_at, auth_result, disposition, suppression_reason,
        attachment_count, body_truncated,
-       routed_kind, routed_rung, routed_reason, routed_runner_up
+       routed_kind, routed_rung, routed_reason, routed_runner_up,
+       routed_lead_id, outbox_id
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE NOT EXISTS (SELECT 1 FROM inbound_emails WHERE message_id = ?)
      ON CONFLICT DO NOTHING`,
+  ).bind(
+    record.id,
+    record.messageId,
+    record.fromEmail,
+    record.fromName,
+    record.toEmail,
+    record.subject,
+    record.bodyText,
+    record.receivedAt,
+    record.authResult,
+    record.disposition,
+    record.suppressionReason,
+    record.attachmentCount,
+    record.bodyTruncated ? 1 : 0,
+    record.routedKind,
+    record.routedRung,
+    record.routedReason,
+    record.routedRunnerUp,
+    record.routedLeadId,
+    record.outboxId,
+    record.messageId,
   )
-    .bind(
-      record.id,
-      record.messageId,
-      record.fromEmail,
-      record.fromName,
-      record.toEmail,
-      record.subject,
-      record.bodyText,
-      record.receivedAt,
-      record.authResult,
-      record.disposition,
-      record.suppressionReason,
-      record.attachmentCount,
-      record.bodyTruncated ? 1 : 0,
-      record.routedKind,
-      record.routedRung,
-      record.routedReason,
-      record.routedRunnerUp,
-    )
-    .run()
-
-  if ((result.meta?.changes ?? 0) > 0) {
-    return { record, duplicate: false }
-  }
-
-  const existing = record.messageId === null ? null : await findByMessageId(env, record)
-  return { record: existing ?? record, duplicate: existing !== null }
 }
 
+/**
+ * The row this message was already recorded as, by `Message-ID` alone.
+ *
+ * `ORDER BY received_at, rowid` picks the *earliest* recording when more than
+ * one exists. Going forward the guard above makes that at most one row, but a
+ * database migrated from before this issue can hold two rows for one
+ * `Message-ID` delivered to two of our addresses, and "the first time we saw
+ * this message" is the stable answer to give both callers — never "whichever
+ * one SQLite happened to return".
+ */
 async function findByMessageId(
   env: Env,
-  record: InboundEmailRecord,
+  messageId: string,
 ): Promise<InboundEmailRecord | null> {
   const row = await env.DB.prepare(
-    `${SELECT_COLUMNS} WHERE message_id = ? AND to_email = ? LIMIT 1`,
+    `${SELECT_COLUMNS} WHERE message_id = ? ORDER BY received_at ASC, rowid ASC LIMIT 1`,
   )
-    .bind(record.messageId, record.toEmail)
+    .bind(messageId)
     .first<InboundEmailRow>()
   return row === null ? null : fromRow(row)
 }
