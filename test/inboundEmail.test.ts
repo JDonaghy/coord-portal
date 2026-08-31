@@ -48,7 +48,7 @@ interface StoredRow {
   outbox_id: string | null
 }
 
-/** A `leads` row, as `createLead` (`src/leads.ts`) inserts one — issue #164, EM-4. */
+/** A `leads` row, as `leadCreationStatement` (`src/leads.ts`) inserts one — issue #164, EM-4. */
 interface StoredLead {
   id: string
   reference: string
@@ -59,8 +59,8 @@ interface StoredLead {
 }
 
 /**
- * An `outbox` row, as `enqueueIntakeReply` (`src/notifications.ts`) inserts
- * one — issue #164, EM-4. Only the columns that function actually binds; every
+ * An `outbox` row, as `intakeReplyStatement` (`src/notifications.ts`) inserts
+ * one — issue #164, EM-4. Only the columns that statement actually binds; every
  * other `outbox` column (`status`, `attempts`, …) is a real D1 default this
  * fake has no reason to model, the same restraint `test/notifications.test.ts`'s
  * own `fakeDb` already takes.
@@ -111,17 +111,28 @@ function isRouterRead(statement: string): boolean {
  * test that exercises it instead of passing for the wrong reason
  * (`test/drain.test.ts`'s own convention).
  *
- * It enforces the partial unique index from
- * `migrations/0020_inbound_emails.sql` — `(message_id, to_email)` where
- * `message_id IS NOT NULL` — because the redelivery guard is the whole point of
- * that index and a fake that ignored it would make the duplicate test vacuous.
+ * It models the redelivery guard the real statement carries — `WHERE NOT
+ * EXISTS (… WHERE message_id = ?)`, one row per `Message-ID` (see
+ * `src/inboundEmail.ts`'s own "one row per Message-ID" note for why that is
+ * wider than `migrations/0020_inbound_emails.sql`'s composite index) — because
+ * that guard is the whole point of the duplicate tests and a fake that ignored
+ * it would make them vacuous.
+ *
+ * ── `batch()` IS THE WRITE PATH ────────────────────────────────────────────
+ * EM-4 writes its three rows in one `DB.batch()` (issue #164), so this fake
+ * implements `batch` as "run each statement in order, collect each result" —
+ * which is D1's own semantics minus the rollback, and enough to assert what
+ * these tests assert: that the `leads`/`outbox` statements' `WHERE EXISTS
+ * (SELECT 1 FROM inbound_emails WHERE id = ?)` guard sees the `inbound_emails`
+ * insert that ran ahead of them in the same batch, and writes nothing when
+ * that insert was a redelivery that did nothing.
  *
  * ── EM-4 (ISSUE #164): `leads` AND `outbox` JOIN THE FAKE ──────────────────
  * Rung 6 ("nobody we know") is reachable from this file's own default fixture
  * (an authenticated stranger with no plus address, no quoted reference, and
  * the router's own reads answered as "nothing found" — see
- * `isRouterRead` above) — so `createLead` and `enqueueIntakeReply` are live
- * code paths here, not merely imported. `leads`/`outbox` get the same
+ * `isRouterRead` above) — so `leadCreationStatement` and `intakeReplyStatement`
+ * are live code paths here, not merely imported. `leads`/`outbox` get the same
  * unique-constraint enforcement `inbound_emails` already gets above:
  * `outbox`'s `(submission_id, coord_revision)` — see
  * `INTAKE_REPLY_REVISION` in `src/notifications.ts` for why that pair, not a
@@ -134,7 +145,16 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
   const outbox: StoredOutbox[] = []
   const norm = (sql: string) => sql.replace(/\s+/g, " ").trim()
 
+  /** The `WHERE EXISTS (SELECT 1 FROM inbound_emails WHERE id = ?)` tail EM-4's own writes carry. */
+  const inboundRowExists = (id: unknown): boolean => store.some((s) => s.id === id)
+
   const DB = {
+    batch(statements: Array<{ run: () => Promise<{ meta: { changes: number } }> }>) {
+      return statements.reduce<Promise<Array<{ meta: { changes: number } }>>>(
+        async (soFar, statement) => [...(await soFar), await statement.run()],
+        Promise.resolve([]),
+      )
+    },
     prepare(sql: string) {
       const statement = norm(sql)
       return {
@@ -143,22 +163,26 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
             async run() {
               if (statement.startsWith("INSERT INTO inbound_emails")) {
                 const row = rowFromBindings(args)
+                // `WHERE NOT EXISTS (SELECT 1 FROM inbound_emails WHERE
+                // message_id = ?)` — one row per Message-ID, whatever address
+                // it was delivered to. A NULL id matches nothing.
                 const collides =
-                  row.message_id !== null &&
-                  store.some((s) => s.message_id === row.message_id && s.to_email === row.to_email)
+                  row.message_id !== null && store.some((s) => s.message_id === row.message_id)
                 if (collides) return { meta: { changes: 0 } }
                 store.push(row)
                 return { meta: { changes: 1 } }
               }
               if (statement.startsWith("INSERT INTO leads")) {
-                const [id, reference, summary, email, name, created_at] = args as [
+                const [id, reference, summary, email, name, created_at, guardInboundId] = args as [
                   string,
                   string,
                   string,
                   string,
                   string | null,
                   string,
+                  string,
                 ]
+                if (!inboundRowExists(guardInboundId)) return { meta: { changes: 0 } }
                 leads.push({ id, reference, summary, email, name, created_at })
                 return { meta: { changes: 1 } }
               }
@@ -175,6 +199,7 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
                   cta_href,
                   coord_revision,
                   queued_at,
+                  guardInboundId,
                 ] = args as [
                   string,
                   string,
@@ -187,7 +212,9 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
                   string,
                   number,
                   string,
+                  string,
                 ]
+                if (!inboundRowExists(guardInboundId)) return { meta: { changes: 0 } }
                 const collides = outbox.some(
                   (o) => o.submission_id === submission_id && o.coord_revision === coord_revision,
                 )
@@ -209,31 +236,15 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
                 })
                 return { meta: { changes: 1 } }
               }
-              if (statement.startsWith("UPDATE inbound_emails SET routed_lead_id")) {
-                const [routed_lead_id, outbox_id, id] = args as [string, string, string]
-                const row = store.find((s) => s.id === id)
-                if (row === undefined) return { meta: { changes: 0 } }
-                row.routed_lead_id = routed_lead_id
-                row.outbox_id = outbox_id
-                return { meta: { changes: 1 } }
-              }
               throw new Error(`unrecognized run statement: ${statement}`)
             },
             async first<T>(): Promise<T | null> {
               if (isRouterRead(statement)) return null
-              if (statement.startsWith("SELECT id FROM outbox WHERE submission_id")) {
-                const [submissionId, coordRevision] = args as [string, number]
-                const row = outbox.find(
-                  (o) => o.submission_id === submissionId && o.coord_revision === coordRevision,
-                )
-                return (row ? { id: row.id } : null) as T | null
-              }
               if (!statement.includes("WHERE message_id = ?")) {
                 throw new Error(`unrecognized first statement: ${statement}`)
               }
-              const [messageId, toEmail] = args as [string, string]
-              return ((store.find((s) => s.message_id === messageId && s.to_email === toEmail) ??
-                null) as T | null)
+              const [messageId] = args as [string]
+              return ((store.find((s) => s.message_id === messageId) ?? null) as T | null)
             },
             async all<T>(): Promise<{ results: T[] }> {
               if (isRouterRead(statement)) return { results: [] }
@@ -282,6 +293,8 @@ function rowFromBindings(args: unknown[]): StoredRow {
     routed_rung,
     routed_reason,
     routed_runner_up,
+    routed_lead_id,
+    outbox_id,
   ] = args as [
     string,
     string | null,
@@ -298,6 +311,8 @@ function rowFromBindings(args: unknown[]): StoredRow {
     number,
     string | null,
     number | null,
+    string | null,
+    string | null,
     string | null,
     string | null,
   ]
@@ -319,11 +334,11 @@ function rowFromBindings(args: unknown[]): StoredRow {
     routed_rung,
     routed_reason,
     routed_runner_up,
-    // Never bound by the `INSERT` itself — see `fakeInboundEnv`'s own comment
-    // on why these two are absent from its column list. EM-4's `UPDATE`
-    // (`createLeadAndDraftReply`) is what ever moves them off `null`.
-    routed_lead_id: null,
-    outbox_id: null,
+    // Bound by the `INSERT` itself since issue #164: the lead and its draft
+    // are minted before the write and land in the same batch, so the row is
+    // never briefly recorded as routed to a lead it does not name.
+    routed_lead_id,
+    outbox_id,
   }
 }
 
@@ -630,15 +645,22 @@ describe("redelivery", () => {
     expect(storedRows(env)).toHaveLength(1)
   })
 
-  it("treats the same Message-ID delivered to a different envelope recipient as a separate message", async () => {
+  it("resolves the same Message-ID delivered to a different envelope recipient to the row already recorded", async () => {
     const env = fakeInboundEnv()
-    await record(env, { messageId: "dup002@sender.example.test" })
+    const first = await record(env, { messageId: "dup002@sender.example.test" })
     const second = await record(env, {
       messageId: "dup002@sender.example.test",
       envelopeTo: "intake+SUB-ZZ9900@mail.example.test",
     })
-    expect(second.duplicate).toBe(false)
-    expect(storedRows(env)).toHaveLength(2)
+
+    // One message that Cloudflare delivered to two of our addresses is still
+    // one message — answering it twice would mean two acknowledgements to the
+    // sender and two leads for an operator to triage. See "one row per
+    // Message-ID" in `src/inboundEmail.ts`.
+    expect(second.duplicate).toBe(true)
+    expect(second.record.id).toBe(first.record.id)
+    expect(second.record.toEmail).toBe(first.record.toEmail)
+    expect(storedRows(env)).toHaveLength(1)
   })
 
   it("records two rows for two messages with no Message-ID at all — there is no identity to dedupe on", async () => {
@@ -651,8 +673,9 @@ describe("redelivery", () => {
 
 /**
  * Issue #164 (EM-4 of milestone #5): rung 6 ("nobody we know") creates a lead
- * — via `createLead`, the exact function `POST /start` calls — and drafts its
- * acknowledgement via `enqueueIntakeReply`. `passHeaders()` below is what gets
+ * — via `leadCreationStatement`, the exact statement `POST /start` writes —
+ * and drafts its acknowledgement via `intakeReplyStatement`, both in the same
+ * `DB.batch()` as the `inbound_emails` row itself. `passHeaders()` below is what gets
  * a fixture past rung 6's own auth gate (`decideRoute` in
  * `src/inboundRouter.ts` falls to `unrouted`, not `lead`, unless
  * `authResult === "pass"`) — every case here is a genuine, authenticated
@@ -780,6 +803,24 @@ describe("EM-4 — rung 6 creates a lead and drafts an acknowledgement (issue #1
       storedOutbox(env),
       "issue #164: \"an inbound message that is processed twice must produce ... one draft\"",
     ).toHaveLength(1)
+  })
+
+  it("creates no second lead when the same message reaches a second one of our addresses", async () => {
+    const env = fakeInboundEnv()
+    const opts = {
+      messageId: "em4-two-addresses@sender.example.test",
+      extraHeaders: passHeaders(),
+    }
+    const first = await record(env, opts)
+    const second = await record(env, {
+      ...opts,
+      envelopeTo: "intake+SUB-ZZ9900@mail.example.test",
+    })
+
+    expect(second.record.id).toBe(first.record.id)
+    expect(second.record.routedLeadId).toBe(first.record.routedLeadId)
+    expect(storedLeads(env), "one message, one lead — whatever it was addressed to").toHaveLength(1)
+    expect(storedOutbox(env)).toHaveLength(1)
   })
 })
 

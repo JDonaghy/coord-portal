@@ -51,12 +51,21 @@ interface BlobOptions {
   messageId: string
   extraHeaders?: Record<string, string>
   body?: string
+  /**
+   * The ENVELOPE recipient — `?to=`, out of band from the blob's own `To:`
+   * header, exactly as Cloudflare hands `email()` the two separately (see
+   * `src/routes/inboundTestDoor.ts`). Defaults to the plain intake address;
+   * a test sets it to prove what does (and does not) depend on it.
+   */
+  envelopeTo?: string
 }
+
+const INTAKE = "intake@mail.example.test"
 
 function blob(options: BlobOptions): string {
   const headers = [
     `From: ${options.from}`,
-    `To: intake@mail.example.test`,
+    `To: ${INTAKE}`,
     `Subject: ${options.subject ?? "Hello from a stranger"}`,
     "Date: Tue, 25 Aug 2026 09:14:00 +0000",
     `Message-ID: <${options.messageId}>`,
@@ -72,13 +81,14 @@ interface DoorResponse {
   disposition: string
   from_email: string
   from_name: string | null
+  to_email: string
   routed_kind: string | null
   routed_lead_id: string | null
   outbox_id: string | null
 }
 
 async function deliver(request: APIRequestContext, options: BlobOptions): Promise<DoorResponse> {
-  const params = new URLSearchParams({ to: "intake@mail.example.test", from: options.from })
+  const params = new URLSearchParams({ to: options.envelopeTo ?? INTAKE, from: options.from })
   const res = await request.post(`/__email?${params.toString()}`, {
     data: blob(options),
     headers: { "content-type": "message/rfc822" },
@@ -261,6 +271,50 @@ test.describe("issue #164 — a stranger's email becomes a lead, with a drafted 
     await operatorContext.close()
 
     // And only one drafted reply ever reaches the sender's own outbox.
+    const customerContext = await contextFor(browser, baseURL, from)
+    const customer = await customerContext.newPage()
+    await customer.goto("/outbox")
+    await expect(customer.getByTestId("email-preview")).toHaveCount(1)
+    await customerContext.close()
+  })
+
+  test("one message delivered to two of our own addresses is still one message — one row, one lead, one draft", async ({
+    request,
+    browser,
+    baseURL,
+  }) => {
+    const from = uniqueEmail("em4-two-addresses")
+    const messageId = `em4-two-addresses-${tag()}@sender.example.test`
+    const opts: BlobOptions = {
+      from,
+      messageId,
+      subject: "Copied you on both addresses",
+      body: "Not sure which address reaches you, so I have written to both.",
+    }
+
+    const first = await deliver(request, opts)
+    expect(first.routed_lead_id).not.toBeNull()
+
+    // Same `Message-ID`, different ENVELOPE recipient — what Cloudflare does
+    // when one message names two of our addresses, and what an SMTP retry onto
+    // a different alias looks like. The redelivery guard keys on the message's
+    // own identity, so this resolves to the row already recorded rather than
+    // acknowledging the sender twice.
+    const second = await deliver(request, {
+      ...opts,
+      envelopeTo: "intake+SUB-ZZ9900@mail.example.test",
+    })
+    expect(second.id, "one Message-ID, one inbound_emails row").toBe(first.id)
+    expect(second.to_email, "the row returned is the one recorded first").toBe(first.to_email)
+    expect(second.routed_lead_id).toBe(first.routed_lead_id)
+    expect(second.outbox_id).toBe(first.outbox_id)
+
+    const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+    const operator = await operatorContext.newPage()
+    await operator.goto("/leads")
+    await expect(leadRowFor(operator, from)).toHaveCount(1)
+    await operatorContext.close()
+
     const customerContext = await contextFor(browser, baseURL, from)
     const customer = await customerContext.newPage()
     await customer.goto("/outbox")

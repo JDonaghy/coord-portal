@@ -1,6 +1,6 @@
 import { generateOutboxId } from "./ids"
 import { getCurrentRound } from "./rounds"
-import { titleOf, type Submission } from "./submissions"
+import { titleOf, type CreateGuard, type Submission } from "./submissions"
 import type { Env } from "./types"
 
 /**
@@ -82,7 +82,7 @@ import type { Env } from "./types"
  * then only so `migrations/0021_outbox_approval.sql`'s widened
  * `outbox.email_type` CHECK and this vocabulary landed together, ahead of a
  * writer existing to need it. Issue #164 (EM-4) is that writer:
- * `enqueueIntakeReply` below is the first, and so far only, code that inserts
+ * `intakeReplyStatement` below is the first, and so far only, code that inserts
  * one — a stranger's inbound-email acknowledgement, drafted `pending` for a
  * human to approve. Skipping this vocabulary edit while widening the column
  * would not have failed loudly — `fromRow` below just returns `null` for any
@@ -471,7 +471,7 @@ export async function emailContent(env: Env, submission: Submission, type: SendT
  * real `submissions.id` — there is no FK, per CLAUDE.md § Ownership, and
  * nothing downstream parses this column's shape), and `coord_revision` is
  * this fixed constant, because there is only ever one draft per inbound
- * email. See `enqueueIntakeReply` below for why this is the belt-and-braces
+ * email. See `intakeReplyStatement` below for why this is the belt-and-braces
  * layer issue #164 itself asks for, not the only thing standing between one
  * inbound email and two drafts.
  */
@@ -531,7 +531,7 @@ export function intakeReplyContent(leadReference: string): EmailContent {
 
 /**
  * Drafts one `intake-reply` acknowledgement — issue #164 (EM-4 of milestone
- * #5). A dedicated enqueue function, deliberately not a call through
+ * #5). A dedicated statement, deliberately not a call through
  * `recordNotificationForStatus`: that function is bound to a bridge status
  * push (it reads a `Submission`, and its idempotency key is a submission
  * revision) and neither exists for a stranger's email — there is no
@@ -545,58 +545,69 @@ export function intakeReplyContent(leadReference: string): EmailContent {
  * `status` and `attempts` left to their column defaults (born `queued`, zero
  * attempts), `queued_at` stamped now.
  *
- * Idempotent the same "insert guarded, then read back" way every other
- * belt-and-braces write in this repo is (`insertInboundEmail`,
- * `enqueueIntakeReply`'s own caller's insert, `promoteLead`): `ON CONFLICT
- * (submission_id, coord_revision) DO NOTHING` against the existing
- * constraint (see `INTAKE_REPLY_REVISION` above for why that pair, not a new
- * column, is this draft's idempotency key), then a read-back when the insert
- * lost so the caller always learns the id of the one draft that exists for
- * this inbound email — never the row it built and failed to insert. In
- * practice `recordInboundEmail` only ever calls this once per inbound email
- * (it only reaches here for an insert its own `ON CONFLICT DO NOTHING` on
- * `inbound_emails` genuinely won), so this is the belt to that suspenders,
- * not the only thing standing between one inbound email and two drafts.
+ * ── RETURNED, NOT EXECUTED ─────────────────────────────────────────────────
+ * The statement comes back with the `outbox.id` it will carry, so the caller
+ * can write it in the *same* `DB.batch()` as the `inbound_emails` row and the
+ * `leads` row it belongs to. A stranger's message produces three rows across
+ * three tables and they are one fact: an acknowledgement drafted for a lead
+ * that does not exist, or a lead nobody ever acknowledged, is not a partial
+ * success, it is a stranger who wrote in and got silence. `promoteLead`
+ * (`src/leads.ts`) batches its own multi-table write for exactly this reason
+ * and this follows it.
+ *
+ * `guard` is required, not optional, for the same reason: the only caller has
+ * one (`WHERE EXISTS (SELECT 1 FROM inbound_emails WHERE id = ?)` — draft
+ * nothing unless the row that justifies the draft actually landed), and a
+ * guard is what keeps the `SELECT` from being bare, which is what makes the
+ * `ON CONFLICT` tail below unambiguous to SQLite in an `INSERT … SELECT`.
+ *
+ * `ON CONFLICT (submission_id, coord_revision) DO NOTHING` is the
+ * belt-and-braces layer #164's own text asks for ("key the draft on the
+ * `inbound_emails` row id with a `UNIQUE` constraint or an `ON CONFLICT DO
+ * NOTHING`") — see `INTAKE_REPLY_REVISION` above for why that existing pair,
+ * not a new column, is this draft's idempotency key. It is genuinely the
+ * belt to the guard's suspenders: the `inbound_emails` id this keys on is
+ * minted in the same call, so no earlier draft can exist under it.
  */
-export async function enqueueIntakeReply(
+export interface DraftedIntakeReply {
+  /** The `outbox.id` the statement will insert — known before it runs. */
+  id: string
+  statement: D1PreparedStatement
+}
+
+export function intakeReplyStatement(
   env: Env,
   inboundEmailId: string,
   toEmail: string,
   leadReference: string,
-): Promise<string> {
+  guard: CreateGuard,
+): DraftedIntakeReply {
   const id = generateOutboxId()
   const now = new Date().toISOString()
   const content = intakeReplyContent(leadReference)
 
-  const result = await env.DB.prepare(
+  const statement = env.DB.prepare(
     `INSERT INTO outbox
        (id, submission_id, email_type, to_email, from_email, subject, preheader, body, cta_text, cta_href, coord_revision, queued_at, approval_state)
-     VALUES (?, ?, 'intake-reply', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+     SELECT ?, ?, 'intake-reply', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending'
+     ${guard.clause}
      ON CONFLICT (submission_id, coord_revision) DO NOTHING`,
+  ).bind(
+    id,
+    inboundEmailId,
+    toEmail,
+    emailFrom(env),
+    content.subject,
+    content.preheader,
+    content.body,
+    content.ctaText,
+    content.ctaHref,
+    INTAKE_REPLY_REVISION,
+    now,
+    ...guard.bindings,
   )
-    .bind(
-      id,
-      inboundEmailId,
-      toEmail,
-      emailFrom(env),
-      content.subject,
-      content.preheader,
-      content.body,
-      content.ctaText,
-      content.ctaHref,
-      INTAKE_REPLY_REVISION,
-      now,
-    )
-    .run()
 
-  if ((result.meta?.changes ?? 0) > 0) return id
-
-  const existing = await env.DB.prepare(
-    `SELECT id FROM outbox WHERE submission_id = ? AND coord_revision = ?`,
-  )
-    .bind(inboundEmailId, INTAKE_REPLY_REVISION)
-    .first<{ id: string }>()
-  return existing?.id ?? id
+  return { id, statement }
 }
 
 /**

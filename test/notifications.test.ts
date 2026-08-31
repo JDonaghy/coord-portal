@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest"
 import {
   SENDING_TYPES,
   emailContent,
-  enqueueIntakeReply,
   intakeReplyContent,
+  intakeReplyStatement,
   listAllOutbox,
   listOutboxForCustomer,
   recordNotificationForStatus,
@@ -373,18 +373,20 @@ describe("intakeReplyContent", () => {
   })
 })
 
-describe("enqueueIntakeReply", () => {
+describe("intakeReplyStatement", () => {
   /**
    * A fake `outbox` that enforces the same `(submission_id, coord_revision)`
-   * uniqueness the real table does — the constraint `enqueueIntakeReply`
-   * reuses as its own idempotency key (`INTAKE_REPLY_REVISION`,
-   * `src/notifications.ts`). Unlike `fakeDb` above (which only ever needs to
-   * record what was inserted), this one has to answer the read-back `SELECT`
-   * `enqueueIntakeReply` issues when its own insert loses the race, so it
-   * actually stores rows rather than just an insert log.
+   * uniqueness the real table does — the constraint the drafted reply reuses as
+   * its own idempotency key (`INTAKE_REPLY_REVISION`, `src/notifications.ts`) —
+   * and the `WHERE EXISTS (SELECT 1 FROM inbound_emails WHERE id = ?)` guard
+   * every draft carries, so "nothing is drafted for an inbound row that never
+   * landed" is asserted rather than assumed. `recordedInboundIds` stands in for
+   * the `inbound_emails` insert that runs ahead of this statement in the real
+   * `DB.batch()` (`writeInboundEmail`, `src/inboundEmail.ts`).
    */
   function fakeOutboxDb() {
     const rows: Array<{ id: string; submission_id: string; coord_revision: number }> = []
+    const recordedInboundIds = new Set<string>()
     const DB = {
       prepare(sql: string) {
         return {
@@ -404,6 +406,8 @@ describe("enqueueIntakeReply", () => {
                     string,
                     number,
                   ]
+                  const guardInboundId = args[args.length - 1] as string
+                  if (!recordedInboundIds.has(guardInboundId)) return { meta: { changes: 0 } }
                   const collides = rows.some(
                     (r) => r.submission_id === submission_id && r.coord_revision === coord_revision,
                   )
@@ -413,45 +417,96 @@ describe("enqueueIntakeReply", () => {
                 }
                 throw new Error(`unrecognized run statement: ${sql}`)
               },
-              async first<T>(): Promise<T | null> {
-                if (sql.includes("SELECT id FROM outbox WHERE submission_id")) {
-                  const [submissionId, coordRevision] = args as [string, number]
-                  const row = rows.find(
-                    (r) => r.submission_id === submissionId && r.coord_revision === coordRevision,
-                  )
-                  return (row ? { id: row.id } : null) as T | null
-                }
-                throw new Error(`unrecognized first statement: ${sql}`)
-              },
             }
           },
         }
       },
     }
-    return { env: { DB } as unknown as Env, rows }
+    return { env: { DB } as unknown as Env, rows, recordedInboundIds }
   }
 
-  it("enqueues one pending intake-reply row for the given inbound email", async () => {
-    const { env, rows } = fakeOutboxDb()
-    const id = await enqueueIntakeReply(env, "inb_abc123", "stranger@example.test", "LEAD-9B21F4")
-    expect(id).toMatch(/^ntf_/)
+  /** The guard EM-4's own caller passes — see `insertedRowGuard` in `src/inboundEmail.ts`. */
+  function guardOn(inboundEmailId: string) {
+    return {
+      clause: "WHERE EXISTS (SELECT 1 FROM inbound_emails WHERE id = ?)",
+      bindings: [inboundEmailId],
+    }
+  }
+
+  it("drafts one pending intake-reply row for the given inbound email", async () => {
+    const { env, rows, recordedInboundIds } = fakeOutboxDb()
+    recordedInboundIds.add("inb_abc123")
+
+    const draft = intakeReplyStatement(
+      env,
+      "inb_abc123",
+      "stranger@example.test",
+      "LEAD-9B21F4",
+      guardOn("inb_abc123"),
+    )
+    await draft.statement.run()
+
+    expect(draft.id).toMatch(/^ntf_/)
     expect(rows).toHaveLength(1)
     expect(rows[0]?.submission_id).toBe("inb_abc123")
+    expect(rows[0]?.id, "the id is known before the statement runs, so a caller can record it").toBe(
+      draft.id,
+    )
   })
 
-  it("a second call for the same inbound email id returns the first call's id, not a new one — issue #164's own idempotency", async () => {
+  it("drafts nothing when the inbound_emails row it belongs to never landed — the batch guard", async () => {
     const { env, rows } = fakeOutboxDb()
-    const first = await enqueueIntakeReply(env, "inb_dup999", "stranger@example.test", "LEAD-1A2B3C")
-    const second = await enqueueIntakeReply(env, "inb_dup999", "stranger@example.test", "LEAD-1A2B3C")
-    expect(second).toBe(first)
+
+    const draft = intakeReplyStatement(
+      env,
+      "inb_never",
+      "stranger@example.test",
+      "LEAD-9B21F4",
+      guardOn("inb_never"),
+    )
+    const result = await draft.statement.run()
+
+    expect(result.meta?.changes).toBe(0)
+    expect(rows, "a redelivery whose inbound insert did nothing must draft nothing").toHaveLength(0)
+  })
+
+  it("a second draft for the same inbound email is a no-op — issue #164's own idempotency", async () => {
+    const { env, rows, recordedInboundIds } = fakeOutboxDb()
+    recordedInboundIds.add("inb_dup999")
+
+    const first = intakeReplyStatement(
+      env,
+      "inb_dup999",
+      "stranger@example.test",
+      "LEAD-1A2B3C",
+      guardOn("inb_dup999"),
+    )
+    const second = intakeReplyStatement(
+      env,
+      "inb_dup999",
+      "stranger@example.test",
+      "LEAD-1A2B3C",
+      guardOn("inb_dup999"),
+    )
+    await first.statement.run()
+    const result = await second.statement.run()
+
+    expect(result.meta?.changes, "(submission_id, coord_revision) DO NOTHING").toBe(0)
     expect(rows).toHaveLength(1)
+    expect(rows[0]?.id).toBe(first.id)
   })
 
   it("two different inbound emails each get their own draft", async () => {
-    const { env, rows } = fakeOutboxDb()
-    const a = await enqueueIntakeReply(env, "inb_one", "one@example.test", "LEAD-111111")
-    const b = await enqueueIntakeReply(env, "inb_two", "two@example.test", "LEAD-222222")
-    expect(a).not.toBe(b)
+    const { env, rows, recordedInboundIds } = fakeOutboxDb()
+    recordedInboundIds.add("inb_one")
+    recordedInboundIds.add("inb_two")
+
+    const a = intakeReplyStatement(env, "inb_one", "one@example.test", "LEAD-111111", guardOn("inb_one"))
+    const b = intakeReplyStatement(env, "inb_two", "two@example.test", "LEAD-222222", guardOn("inb_two"))
+    await a.statement.run()
+    await b.statement.run()
+
+    expect(a.id).not.toBe(b.id)
     expect(rows).toHaveLength(2)
   })
 })
