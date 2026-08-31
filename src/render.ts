@@ -88,6 +88,14 @@ export function topbar(email: string | null, current: NavCurrent, isOperator: bo
   const clientsCurrent = current === "clients" ? ' aria-current="page"' : ""
   const identity = email ? escapeHtml(email) : "unknown"
 
+  // `nav-replies` (issue #166) has no `NavCurrent` value of its own: `/replies`
+  // is an operator screen and renders `operatorTopbar()` below, never this
+  // header, so nothing that carries THIS nav can ever be the replies screen.
+  // The link is here only so an operator reading a customer screen can reach
+  // the approval queue without typing the URL — the same one-directional merge
+  // the four links beside it already are. The ms-5 contract flags this entry as
+  // "additive-if-present, not required".
+
   // Appended after the customer links, inside the same `<nav>`, rather than a
   // second `<nav>` — one landmark for one primary-navigation region (the
   // customer links and the operator links are both "where can I go from
@@ -96,6 +104,7 @@ export function topbar(email: string | null, current: NavCurrent, isOperator: bo
     ? `
     <a href="/leads" data-testid="nav-leads"${leadsCurrent}>Leads</a>
     <a href="/deliveries" data-testid="nav-deliveries"${deliveriesCurrent}>Deliveries</a>
+    <a href="/replies" data-testid="nav-replies">Replies</a>
     <a href="/requests" data-testid="nav-requests"${requestsCurrent}>Requests</a>
     <a href="/clients" data-testid="nav-clients"${clientsCurrent}>Clients</a>`
     : ""
@@ -128,7 +137,7 @@ export function publicHeader(): string {
 </header>`
 }
 
-export type OperatorNavCurrent = "leads" | "deliveries" | "requests" | "clients"
+export type OperatorNavCurrent = "leads" | "deliveries" | "replies" | "requests" | "clients"
 
 /**
  * The header `/leads*`, `/deliveries`, `/requests` and `/clients*` carry — kept
@@ -163,6 +172,7 @@ export type OperatorNavCurrent = "leads" | "deliveries" | "requests" | "clients"
 export function operatorTopbar(email: string, current: OperatorNavCurrent): string {
   const leadsCurrent = current === "leads" ? ' aria-current="page"' : ""
   const deliveriesCurrent = current === "deliveries" ? ' aria-current="page"' : ""
+  const repliesCurrent = current === "replies" ? ' aria-current="page"' : ""
   const requestsCurrent = current === "requests" ? ' aria-current="page"' : ""
   const clientsCurrent = current === "clients" ? ' aria-current="page"' : ""
 
@@ -171,6 +181,7 @@ export function operatorTopbar(email: string, current: OperatorNavCurrent): stri
   <nav aria-label="primary">
     <a href="/leads" data-testid="nav-leads"${leadsCurrent}>Leads</a>
     <a href="/deliveries" data-testid="nav-deliveries"${deliveriesCurrent}>Deliveries</a>
+    <a href="/replies" data-testid="nav-replies"${repliesCurrent}>Replies</a>
     <a href="/requests" data-testid="nav-requests"${requestsCurrent}>Requests</a>
     <a href="/clients" data-testid="nav-clients"${clientsCurrent}>Clients</a>
   </nav>
@@ -761,6 +772,100 @@ const APP_STYLES = `
   .client-row { flex-wrap: wrap; overflow-wrap: anywhere; }
   .client-row .row-main { flex: 1 1 16rem; }
   .client-row .row-side { flex-shrink: 1; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+
+  /* ── The operator's reply-approval queue (issue #166) ─────────────────────
+     tests/acceptance/ms-5/mocks/01-05. GET /replies and /replies/:id: the
+     screen a drafted intake reply is proof-read and approved on. Same row
+     chassis as .delivery-row above; the row wraps and its meta line breaks
+     mid-token for the same measured reason .lead-row's does (a sender's
+     address is whatever they mailed us from, not something a form nudged into
+     shape — see that block's comment). */
+  ul.replies-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+  .reply-row {
+    display: grid; gap: 0.6rem;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1rem 1.25rem;
+  }
+  .reply-row .row-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+  .reply-row .row-main { display: grid; gap: 0.3rem; min-width: 0; max-width: 30rem; overflow-wrap: anywhere; }
+  .reply-row .subject { font-weight: 600; }
+  .reply-row .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  .reply-row .row-side { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; min-width: 0; }
+
+  .route-badge {
+    display: inline-flex; align-items: center; padding: 0.25em 0.75em; border-radius: 999px;
+    font-size: var(--step--1); font-weight: 600;
+  }
+  .route-badge[data-routed-kind="message"]  { background: var(--pass-wash);   color: var(--pass); }
+  .route-badge[data-routed-kind="unrouted"] { background: var(--attn-wash);   color: var(--attn); }
+  .route-badge[data-routed-kind="lead"]     { background: var(--accent-wash); color: var(--accent-dim); }
+
+  .attachments-note {
+    display: inline-flex; align-items: center; gap: 0.35em;
+    font-size: var(--step--1); color: var(--attn);
+  }
+  p.attachments-note { margin: 0 0 1.5rem; }
+  .auth-result { font-size: var(--step--1); color: var(--text-faint); font-family: var(--font-mono); }
+
+  main[data-testid="reply-detail"] .meta {
+    color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono);
+    margin: 0.35rem 0 1rem; overflow-wrap: anywhere;
+  }
+  main[data-testid="reply-detail"] h1 { margin: 0.5rem 0 0.25rem; overflow-wrap: anywhere; }
+  section.card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1.1rem 1.3rem; margin-bottom: 1.25rem;
+  }
+  section.card h2 { margin: 0 0 0.75rem; font-size: var(--step-0); }
+  dl.received dt { font-weight: 600; font-size: var(--step--1); color: var(--text-dim); margin-top: 0.6rem; }
+  dl.received dt:first-child { margin-top: 0; }
+  dl.received dd { margin: 0.15rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .route-reason { color: var(--text-dim); margin: 0.5rem 0 0; }
+  .route-target { font-weight: 600; color: var(--text); }
+  .runner-up { color: var(--text-faint); font-size: var(--step--1); margin: 0.5rem 0 0; }
+
+  /* The "Change routing" disclosure. Same no-JavaScript checkbox-and-label
+     mechanism .reassign-toggle above uses (see that block for the full
+     rationale), under its own class names so neither panel depends on the
+     other's markup being on the page. */
+  .routing-toggle {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  .routing-panel { margin-top: 1rem; }
+  form.routing-form { display: none; }
+  .routing-toggle:checked ~ .routing-panel form.routing-form { display: block; }
+  .routing-toggle:focus-visible ~ .routing-panel .routing-open-button {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  .routing-open-button {
+    display: inline-block; border-radius: var(--r-md);
+    padding: 0.45rem 0.9rem; font-size: var(--step--1); font-weight: 600; cursor: pointer;
+  }
+  form.routing-form { margin-top: 1rem; }
+  .routing-note { color: var(--text-dim); font-size: var(--step--1); margin: 0 0 0.75rem; }
+  fieldset.routing-project-list { border: 0; padding: 0; margin: 0 0 1rem; display: grid; gap: 0.5rem; }
+  .routing-project-option {
+    display: flex; align-items: center; gap: 0.5rem;
+    border: 1px solid var(--line-strong); border-radius: var(--r-md);
+    padding: 0.5rem 0.75rem; cursor: pointer;
+  }
+  .routing-form .actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem; }
+
+  /* The three action forms stack inside one card, so each needs its own
+     separator rather than the single trailing .actions margin a lone form
+     gets. */
+  form[data-testid="reply-discard-form"], form[data-testid="reply-promote-form"] {
+    border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 0.75rem;
+  }
+  button.ghost {
+    background: transparent; color: var(--fail); border: 1px solid var(--line-strong);
+    border-radius: var(--r-md); padding: 0.6rem 1.1rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.secondary {
+    background: var(--surface); color: var(--text); border: 1px solid var(--line-strong);
+    border-radius: var(--r-md); padding: 0.6rem 1.1rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
 `
 
 /**

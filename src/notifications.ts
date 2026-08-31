@@ -688,6 +688,238 @@ function acknowledgementStatement(
   return { id, statement }
 }
 
+// ── EM-6: THE APPROVAL GATE'S OWN READS AND WRITES (ISSUE #166) ──────────────
+
+/**
+ * One `pending` intake-reply draft, as `/replies` (`src/routes/replies.ts`)
+ * reads it.
+ *
+ * Deliberately NOT `OutboxEmail` above. That interface is the *delivery*
+ * view — status, attempts, provider id, `last_error` — which is what
+ * `/outbox` and `/deliveries` are about and which a draft nobody has approved
+ * yet has nothing interesting to say about (it is `queued`, zero attempts,
+ * never claimed, by construction: `src/drain.ts`'s own WHERE clause has never
+ * looked at it). What EM-6 needs instead is the *content* an operator is
+ * about to proof-read, plus the `inbound_emails` row it answers — so this is
+ * its own narrow shape rather than a widening of that one.
+ */
+export interface ReplyDraft {
+  id: string
+  /**
+   * The `inbound_emails.id` this draft was written for. `outbox.submission_id`
+   * carries it for an `intake-reply` row and never a real `submissions.id` —
+   * see `INTAKE_REPLY_REVISION` above for why that column, and not a new one,
+   * is where EM-4/EM-5 put it.
+   */
+  inboundEmailId: string
+  to: string
+  subject: string
+  body: string
+  ctaText: string
+  ctaHref: string
+  /** When the portal drafted it — the list's own "newest first" sort key. */
+  queuedAt: string
+}
+
+interface ReplyDraftRow {
+  id: string
+  submission_id: string
+  to_email: string
+  subject: string
+  body: string
+  cta_text: string
+  cta_href: string
+  queued_at: string
+}
+
+function toReplyDraft(row: ReplyDraftRow): ReplyDraft {
+  return {
+    id: row.id,
+    inboundEmailId: row.submission_id,
+    to: row.to_email,
+    subject: row.subject,
+    body: row.body,
+    ctaText: row.cta_text,
+    ctaHref: row.cta_href,
+    queuedAt: row.queued_at,
+  }
+}
+
+/**
+ * The one predicate every read and every write in this section shares:
+ * `email_type = 'intake-reply' AND approval_state = 'pending'`.
+ *
+ * Both halves matter. `approval_state = 'pending'` is what makes `/replies` a
+ * queue rather than an archive (contract § Notes item 2: "the list is
+ * pending-only and a row simply disappears once acted on"), and it is the same
+ * predicate every write guards on, so a row an operator already approved,
+ * discarded — or that a second browser tab already acted on — is invisible
+ * here and unwritable there for one reason rather than two. `email_type` is
+ * belt to that suspenders: nothing else in this repo writes a `pending` row
+ * today, and if some future notification type ever did, it would not
+ * automatically become something this screen renders (it has no
+ * `inbound_emails` row behind it, so it could not render at all).
+ */
+const PENDING_REPLY_PREDICATE = `email_type = 'intake-reply' AND approval_state = 'pending'`
+
+const REPLY_DRAFT_COLUMNS = `SELECT id, submission_id, to_email, subject, body, cta_text, cta_href, queued_at
+    FROM outbox`
+
+/**
+ * Every drafted reply still waiting on a human, newest first — the read behind
+ * `GET /replies`.
+ *
+ * Unscoped by recipient, exactly like `listAllOutbox` above and for the same
+ * reason: the one caller allowed to see across every customer's rows is an
+ * operator-gated screen (`readOperator`, `src/operators.ts`), never a
+ * customer-facing one. A second function rather than a flag on
+ * `listAllOutbox`, for the reason `src/routes/deliveries.ts`'s module comment
+ * gives at length about that exact pair.
+ */
+export async function listPendingReplyDrafts(env: Env): Promise<ReplyDraft[]> {
+  const { results } = await env.DB.prepare(
+    `${REPLY_DRAFT_COLUMNS} WHERE ${PENDING_REPLY_PREDICATE} ORDER BY queued_at DESC, id DESC`,
+  ).all<ReplyDraftRow>()
+  return (results ?? []).map(toReplyDraft)
+}
+
+/**
+ * One drafted reply, by its own `outbox.id` — `null` for an id that names
+ * nothing, or a row that is no longer `pending`. The caller answers both with
+ * the same `leadsNotFound()` 404 every other refusal on the operator surface
+ * gets: "already approved" is not a distinct error an operator's second tab
+ * needs told apart from "never existed".
+ */
+export async function getPendingReplyDraft(env: Env, id: string): Promise<ReplyDraft | null> {
+  const row = await env.DB.prepare(`${REPLY_DRAFT_COLUMNS} WHERE id = ? AND ${PENDING_REPLY_PREDICATE}`)
+    .bind(id)
+    .first<ReplyDraftRow>()
+  return row === null ? null : toReplyDraft(row)
+}
+
+/**
+ * "Every write is guarded `WHERE id = ? AND approval_state = 'pending'`, so a
+ * double-click converges instead of double-sending" — issue #166's own rule,
+ * which the Gate-A contract confirms applies to all four of EM-6's actions,
+ * not only the two that touch `outbox` directly.
+ *
+ * `approve` and `discard` below carry that predicate in their own `UPDATE`'s
+ * `WHERE`. The other two (`/route`'s re-target, and the `leads` row a
+ * re-target to "a lead" mints) write *other tables*, so they carry it as this
+ * `EXISTS` sub-select instead, evaluated inside the same `DB.batch()` — the
+ * same shape `insertedRowGuard` (`src/inboundEmail.ts`) uses to make a row's
+ * existence, not a caller's belief about it, the thing a sibling write
+ * depends on.
+ *
+ * `keyword` picks whether the fragment opens a `WHERE` (an `INSERT … SELECT`,
+ * e.g. `leadCreationStatement`) or extends one (an `UPDATE` that already
+ * matches on its own id).
+ */
+export function pendingDraftGuard(draftId: string, keyword: "WHERE" | "AND" = "WHERE"): CreateGuard {
+  return {
+    clause: `${keyword} EXISTS (SELECT 1 FROM outbox WHERE id = ? AND ${PENDING_REPLY_PREDICATE})`,
+    bindings: [draftId],
+  }
+}
+
+/**
+ * **Approve & send** — issue #166's own table, row 1: "writes the edited
+ * subject/body, `approval_state = 'approved'`, stamps `approved_at`/
+ * `approved_by`, clears `claimed_at`. The next cron tick (≤5 min) carries it."
+ *
+ * The edited subject and body are written in the *same* statement that flips
+ * the gate, not before it. That ordering is the whole acceptance case
+ * ("approving sends the edited text, not the original"): a two-step
+ * write — content first, gate second — has a window in which a drain tick
+ * between them sends the original, and a second click that lost the guard
+ * would still have overwritten the content of a row someone else already
+ * approved.
+ *
+ * `claimed_at = NULL` is defensive rather than load-bearing: a `pending` row
+ * can never have been claimed, because `src/drain.ts`'s batch SELECT *and*
+ * its claim UPDATE both exclude every `approval_state` outside
+ * `('not_required', 'approved')`. Clearing it anyway costs nothing and means
+ * this row enters the drain's world in exactly the state a freshly enqueued
+ * one does.
+ *
+ * Returns whether this call is the one that moved the row. A caller that
+ * loses (a double-click, a replayed POST, a row a second tab already
+ * discarded) gets `false` and must still answer normally — a guarded no-op is
+ * this codebase's convention, not an error (`src/drain.ts`, `promoteLead`).
+ */
+export async function approveReplyDraft(
+  env: Env,
+  id: string,
+  subject: string,
+  body: string,
+  approvedBy: string,
+): Promise<boolean> {
+  const result = await env.DB.prepare(
+    `UPDATE outbox
+        SET subject = ?, body = ?, approval_state = 'approved',
+            approved_at = ?, approved_by = ?, claimed_at = NULL
+      WHERE id = ? AND ${PENDING_REPLY_PREDICATE}`,
+  )
+    .bind(subject, body, new Date().toISOString(), approvedBy, id)
+    .run()
+  return (result.meta.changes ?? 0) === 1
+}
+
+/**
+ * **Discard** — issue #166's own table, row 2: "`approval_state = 'rejected'`.
+ * Terminal, never sends."
+ *
+ * Terminal is enforced by the drain, not here: `rejected` matches neither of
+ * the two states `src/drain.ts` sends from, and unlike `failed` it is never a
+ * retry candidate because it never matches that WHERE clause in the first
+ * place (`migrations/0021_outbox_approval.sql`'s own vocabulary note, and the
+ * Gate-A contract's "a `rejected` row must never transition to `status =
+ * 'failed'`").
+ *
+ * `approved_at`/`approved_by` are stamped on a rejection too — 0021's own
+ * words: "who signed off and when, set together the moment a `pending` row
+ * moves to `approved` **or** `rejected`". Deciding not to send is a decision a
+ * person made, and a discarded draft with no record of who discarded it is
+ * exactly the audit hole that column pair exists to close.
+ */
+export async function discardReplyDraft(env: Env, id: string, decidedBy: string): Promise<boolean> {
+  const result = await env.DB.prepare(
+    `UPDATE outbox
+        SET approval_state = 'rejected', approved_at = ?, approved_by = ?, claimed_at = NULL
+      WHERE id = ? AND ${PENDING_REPLY_PREDICATE}`,
+  )
+    .bind(new Date().toISOString(), decidedBy, id)
+    .run()
+  return (result.meta.changes ?? 0) === 1
+}
+
+/**
+ * **Change route**'s half of the write — issue #166's own table, row 3:
+ * "re-render the draft from the template, stay `pending`."
+ *
+ * Every content column an acknowledgement template produces is rewritten
+ * (`intakeReplyContent` / `routedReplyContent` above), because a re-target
+ * changes which of the two templates applies and what its call to action
+ * resolves to — a re-route that moved `cta_href` but left yesterday's
+ * `preheader` behind would send a message that half agrees with itself.
+ * `approval_state` is deliberately absent from the SET list: the row stays
+ * `pending`, per the issue's own words, so the operator still has to approve
+ * what they just re-routed.
+ *
+ * Returned rather than executed, so the caller can put it in the same
+ * `DB.batch()` as the `inbound_emails` re-target (and, for the "become a
+ * lead" branch, the `leads` row) it belongs with — the same reason
+ * `intakeReplyStatement` above is returned rather than executed. Guarded on
+ * the same `pending` predicate every other write here is.
+ */
+export function redraftReplyStatement(env: Env, id: string, content: EmailContent): D1PreparedStatement {
+  return env.DB.prepare(
+    `UPDATE outbox
+        SET subject = ?, preheader = ?, body = ?, cta_text = ?, cta_href = ?
+      WHERE id = ? AND ${PENDING_REPLY_PREDICATE}`,
+  ).bind(content.subject, content.preheader, content.body, content.ctaText, content.ctaHref, id)
+}
+
 /**
  * Every email ever sent to one customer, oldest first — the read side of the
  * outbox. Scoped by `to_email`, the same shape `listSubmissionsForCustomer`
