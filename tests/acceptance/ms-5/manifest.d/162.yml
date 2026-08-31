@@ -1,0 +1,44 @@
+# ms-5 issue #162 — sealed acceptance manifest fragment (#2543: one file per
+# issue; this file belongs to #162 alone and no other slice writes to it).
+#
+# Ids are the `web-playwright` driver's node ids, exactly as
+# `coord.acceptance_drivers.parse_playwright_json_report` builds them:
+#
+#   [{project}] {file relative to testDir} › {describe path} › {test title}
+#
+# `testDir` is `./tests/acceptance` (see `playwright.acceptance.config.ts`), so
+# the file component is `ms-5/162-outbox-approval.spec.ts`. Ids must match
+# character-for-character, including the `›` separators and the em-dashes
+# inside a few titles.
+
+issues:
+  162:
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › the migration lands, and the running Worker reports the newer schema"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › outbox carries approval_state / approved_at / approved_by, not_required by default"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › approval_state is a fixed four-value vocabulary — the CHECK is enforced, not decorative"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › outbox.email_type admits 'intake-reply' without it silently vanishing from GET /outbox"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › a pending row is never claimed by the drain, however many ticks run"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › flipping a pending row to approved sends it on the very next tick"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › a rejected row is never sent and never retried, however many ticks run"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › every pre-existing row (approval_state = not_required) still sends exactly as before"
+
+# expected_red: recorded from the step-4 run against this checkout, schema
+# head 0020 (`0020_inbound_emails.sql`, issue #161 — already landed; #162's
+# own `migrations/0021_outbox_approval.sql` had not) — `npm run
+# test:acceptance -- ms-5/162` (after `npm ci` + `npx playwright install
+# chromium`): 8 failed, 0 passed, 0 skipped. All eight ids above were
+# OBSERVED failing — every test in this slice depends on
+# `migrations/0021_outbox_approval.sql` (the `approval_state`/`approved_at`/
+# `approved_by` columns and the widened `email_type` CHECK) and/or
+# `src/drain.ts`'s new clause existing, and #162 is the issue that adds both,
+# so nothing is excluded as a control or ratchet clause.
+expected_red:
+  162:
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › the migration lands, and the running Worker reports the newer schema"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › outbox carries approval_state / approved_at / approved_by, not_required by default"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › approval_state is a fixed four-value vocabulary — the CHECK is enforced, not decorative"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › outbox.email_type admits 'intake-reply' without it silently vanishing from GET /outbox"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › a pending row is never claimed by the drain, however many ticks run"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › flipping a pending row to approved sends it on the very next tick"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › a rejected row is never sent and never retried, however many ticks run"
+    - "[chromium] ms-5/162-outbox-approval.spec.ts › ms-5 issue 162 outbox approval state › every pre-existing row (approval_state = not_required) still sends exactly as before"
