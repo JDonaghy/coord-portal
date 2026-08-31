@@ -63,6 +63,16 @@ issues:
     - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › a matched sender's message drafts exactly one intake-reply outbox row at pending, never quotes their own words, discloses no status, and links back to the thread"
     - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › an ambiguous two-project client parks as unrouted with the runner-up recorded, writes no message and no lead, but still drafts a neutral acknowledgement"
     - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › a DMARC-fail message from a known client's address never reaches postMessage at all"
+  166:
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › a non-operator gets the same 404 leadsNotFound() gives /leads, for /replies, /replies/:id, and every action route"
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › a pending draft (rung 3, known client) renders on /replies with its inbound message and the router's decision"
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › GET /replies/:id renders the message as received and the router's decision for an exact match, with no runner-up and a plain-text route target"
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › GET /replies/:id for an ambiguous unrouted row shows both candidates, a runner-up, and the routing panel open by default"
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › GET /replies/:id for a stranger has no routing panel and no promote form"
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › editing the subject and body before approving sends the edited text, not the original"
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › approving twice sends once"
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › a discarded draft never sends however many ticks run, and approving it afterward is a guarded no-op"
+    - '[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › "Change route" re-targets an unrouted row to an operator-chosen project and keeps it pending'
 
 # Tests OBSERVED failing against the unimplemented state, recorded per issue at
 # the moment the slice was authored.
@@ -149,3 +159,30 @@ expected_red:
     - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › a matched sender's message drafts exactly one intake-reply outbox row at pending, never quotes their own words, discloses no status, and links back to the thread"
     - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › an ambiguous two-project client parks as unrouted with the runner-up recorded, writes no message and no lead, but still drafts a neutral acknowledgement"
     - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › a DMARC-fail message from a known client's address never reaches postMessage at all"
+#
+# #166 recorded from `npm run test:acceptance -- ms-5/166` (after `npm ci` +
+# `npx playwright install chromium`), against a checkout with #161-#165
+# already landed (schema head 0022_relayed_answers.sql, the router, the
+# EM-4 stranger/lead path and the EM-5 known-client-thread path all already
+# implemented) but #166 itself unimplemented (no `src/routes/replies.ts`,
+# `GET /replies` answering 404 unconditionally the same way any undefined
+# route does): 9 failed, 0 passed, 0 skipped. All nine ids below were watched
+# to fail, every one at the same first observable signal — this slice's own
+# `replyPathBySender()` helper (every test's first step once its own
+# `POST /__email` seeding succeeds) polls `/replies` for a `reply-row`
+# matching its synthetic sender and times out, because `GET /replies` itself
+# answers `404 Not Found` unconditionally (confirmed in the run's own
+# `[wrangler:info] GET /replies 404 Not Found` log lines) rather than
+# rendering anything — there is no control or ratchet clause in this slice to
+# exclude: every test depends on `/replies` existing at all before it can
+# assert anything #166-specific.
+  166:
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › a non-operator gets the same 404 leadsNotFound() gives /leads, for /replies, /replies/:id, and every action route"
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › a pending draft (rung 3, known client) renders on /replies with its inbound message and the router's decision"
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › GET /replies/:id renders the message as received and the router's decision for an exact match, with no runner-up and a plain-text route target"
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › GET /replies/:id for an ambiguous unrouted row shows both candidates, a runner-up, and the routing panel open by default"
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › GET /replies/:id for a stranger has no routing panel and no promote form"
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › editing the subject and body before approving sends the edited text, not the original"
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › approving twice sends once"
+    - "[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › a discarded draft never sends however many ticks run, and approving it afterward is a guarded no-op"
+    - '[chromium] ms-5/166-em6-replies-review.spec.ts › ms-5 issue 166 EM-6: /replies — proof-read, edit and approve a drafted reply › "Change route" re-targets an unrouted row to an operator-chosen project and keeps it pending'
