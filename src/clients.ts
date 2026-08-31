@@ -174,6 +174,39 @@ export async function getClientRecordByEmail(env: Env, email: string): Promise<C
   return row ? toRecord(row) : null
 }
 
+/**
+ * The other half of issue #163 (EM-3)'s rung 3 — "`getClientRecordByEmail()`
+ * (case-insensitive) plus `clients.cc_emails`." A sender who is not the
+ * client's own address but is copied on their mail (a spouse, an assistant,
+ * a second stakeholder) still resolves to the same client, the same way
+ * `mergeClients` above treats `cc_emails` as "addresses this client's mail
+ * also goes to or comes from."
+ *
+ * `cc_emails` is free text (`routes/account.ts`'s own profile form writes it
+ * unvalidated, and `mergeClients` appends to it with a bare `,` join) — never
+ * guaranteed to be tightly comma-packed, so a customer who typed
+ * `"a@x.test, b@x.test"` still matches. Spaces are stripped before the `LIKE`
+ * rather than split-and-trimmed in JS, so this stays one query instead of a
+ * full-table fetch to filter in memory. Case-insensitive for the same reason
+ * `getClientRecordByEmail` is: no identity provider treats a local part as
+ * case-sensitive in practice, and rung 3's whole point is not missing a real
+ * match on casing alone.
+ *
+ * Read-only, like everything else exported from this module for EM-3 — see
+ * that issue's own "adds no write path" scope note.
+ */
+export async function getClientRecordByCcEmail(env: Env, email: string): Promise<ClientRecord | null> {
+  const row = await env.DB.prepare(
+    `SELECT id, email, created_at FROM clients
+      WHERE cc_emails IS NOT NULL
+        AND (',' || REPLACE(lower(cc_emails), ' ', '') || ',') LIKE '%,' || lower(?) || ',%'
+      LIMIT 1`,
+  )
+    .bind(email)
+    .first<ClientIdentityRow>()
+  return row ? toRecord(row) : null
+}
+
 /** Same lookup, by durable id — for `routes/leads.ts`'s attachment rendering,
  * which already has a `client_id` off a project and needs the row it names. */
 export async function getClientById(env: Env, id: string): Promise<ClientRecord | null> {
