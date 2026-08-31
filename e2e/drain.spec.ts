@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test"
+import { readOutboxRowState, seedGatedOutboxRow, setOutboxApproval } from "./outbox-fixtures"
 
 /**
  * Black-box coverage for issue #50 ([portal] The drain — a Cron Trigger that
@@ -355,4 +356,104 @@ test("the drain hands the provider an absolute, followable link to the submissio
   expect(record.html, "#83 scope item 3: an HTML body must be handed alongside the text one").toBeTruthy()
   expect(record.html).toContain(`href="`)
   expect(record.html).toContain(ctaPath)
+})
+
+/**
+ * ── ISSUE #162 (EM-2): THE APPROVAL GATE ────────────────────────────────────
+ *
+ * `migrations/0021_outbox_approval.sql` adds `outbox.approval_state` — a
+ * second axis beside `status`, not a fourth `status` value — and `src/drain.ts`
+ * gains one clause for it in both the batch SELECT and the claim UPDATE. The
+ * three tests below drive that clause through the real `GET /__scheduled`
+ * against real local D1, because the unit tests in `test/drain.test.ts` prove
+ * only that the SQL text this module builds contains the clause; they cannot
+ * prove SQLite agrees, and they cannot prove the column the migration created
+ * is the one the query names.
+ *
+ * They live in THIS file rather than a new one for the reason the header
+ * above already gives: `GET /__scheduled` drains the whole table, so a second
+ * file firing it would race every "untouched until a drain runs" assertion
+ * here. `test.describe.configure({ mode: "serial" })` at the top covers these
+ * too.
+ *
+ * Seeding is `outbox-fixtures.ts`'s `seedGatedOutboxRow` / `setOutboxApproval`
+ * — #162 is explicitly "no UI, no new sends, no new callers", so there is no
+ * HTTP route on this side that writes the column yet, exactly the situation
+ * that file exists for. `seedGatedOutboxRow` inserts the row already held
+ * rather than enqueuing-then-holding, because the two Playwright projects
+ * share one drain and one database; its own comment has the detail.
+ */
+
+/** How many emails the recording fake was handed for one address (`src/routes/outbound.ts`). */
+async function outboundCount(request: APIRequestContext, email: string): Promise<number> {
+  const res = await request.get("/__outbound")
+  expect(res.ok(), "GET /__outbound must exist under MAIL_PROVIDER=fake").toBe(true)
+  const body = (await res.json()) as { emails: Array<{ to: string }> }
+  return body.emails.filter((e) => e.to === email).length
+}
+
+test("a row held for approval is never claimed by the drain, however many ticks run", async ({
+  page,
+  request,
+}) => {
+  const email = uniqueEmail("e2e-drain-approval-pending")
+  const id = seedGatedOutboxRow(email, "pending")
+
+  for (let i = 0; i < 3; i++) await runDrain(request)
+
+  const [rendered] = await awaitOutbox(page, email, 1)
+  expect(rendered?.status, "a held row stays queued — approval is not a delivery outcome").toBe("queued")
+
+  const row = readOutboxRowState(id)
+  expect(row.approval_state).toBe("pending")
+  expect(row.sent_at, "a held row is never sent").toBeNull()
+  expect(row.attempts, "a held row is never even claimed — no attempt is spent on it").toBe(0)
+  expect(row.claimed_at, "the claim UPDATE must be gated too, not just the batch SELECT").toBeNull()
+  expect(await outboundCount(request, email), "the provider must never have seen it").toBe(0)
+})
+
+test("approving a held row sends it on the very next tick", async ({ page, request }) => {
+  const email = uniqueEmail("e2e-drain-approval-approved")
+  const id = seedGatedOutboxRow(email, "pending")
+  await runDrain(request)
+  expect(readOutboxRowState(id).status, "still held before a human acts").toBe("queued")
+
+  setOutboxApproval(id, "approved", "operator@example.test")
+  await runDrain(request)
+
+  const [rendered] = await awaitOutbox(page, email, 1)
+  expect(rendered?.status, "one tick after approval, it is gone").toBe("sent")
+  expect(rendered?.attempts, "the held ticks must not have burned attempts").toBeNull()
+
+  const row = readOutboxRowState(id)
+  expect(row.approval_state, "sending must not disturb the approval axis").toBe("approved")
+  expect(row.approved_by).toBe("operator@example.test")
+  expect(row.sent_at).not.toBeNull()
+  expect(await outboundCount(request, email), "exactly one send, not one per held tick").toBe(1)
+})
+
+test("a rejected row is never sent and never retried, however many ticks run", async ({
+  page,
+  request,
+}) => {
+  const email = uniqueEmail("e2e-drain-approval-rejected")
+  const id = seedGatedOutboxRow(email, "rejected")
+
+  for (let i = 0; i < 6; i++) await runDrain(request)
+
+  const [rendered] = await awaitOutbox(page, email, 1)
+  expect(rendered?.status, "rejected is not a delivery failure — the row never entered delivery").toBe(
+    "queued",
+  )
+  expect(rendered?.lastError, "a customer is never shown a delivery error for a row nobody sent").toBeNull()
+
+  const row = readOutboxRowState(id)
+  expect(row.approval_state).toBe("rejected")
+  expect(row.sent_at).toBeNull()
+  expect(
+    row.attempts,
+    "unlike `failed`, a rejected row is never a retry candidate — it never matches the WHERE at all",
+  ).toBe(0)
+  expect(row.claimed_at).toBeNull()
+  expect(await outboundCount(request, email)).toBe(0)
 })
