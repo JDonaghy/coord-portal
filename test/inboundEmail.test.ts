@@ -40,13 +40,40 @@ interface StoredRow {
   suppression_reason: string | null
   attachment_count: number
   body_truncated: number
+  routed_kind: string | null
+  routed_rung: number | null
+  routed_reason: string | null
+  routed_runner_up: string | null
 }
 
 /**
- * A fake `Env["DB"]` that understands the three statements this module issues
- * and nothing else — an unrecognised statement throws loudly rather than
- * silently returning nothing, so a query this file has not kept in step with
- * fails the test that exercises it instead of passing for the wrong reason
+ * The router's own read-only lookups (issue #163), which `recordInboundEmail`
+ * now runs for every non-suppressed message before it inserts.
+ *
+ * They are answered here as "nothing found" — an empty portal — rather than
+ * being modelled, because this file's subject is the *seam*: the parse, the
+ * suppression rules, the DMARC verdict, the cap and the redelivery guard. The
+ * ladder itself has exhaustive, database-free coverage in
+ * `test/inboundRouter.test.ts` (which drives `decideRoute` over hand-built
+ * `RoutingLookup` fixtures), and the wired-up end-to-end behaviour is
+ * `e2e/inbound-router.spec.ts` against real D1. Modelling `clients` /
+ * `projects` / `submissions` a third time here would duplicate both without
+ * asserting anything neither already covers.
+ *
+ * Matching is still by explicit table, not a blanket allow: a statement against
+ * a table this seam has no business touching still throws.
+ */
+const ROUTER_READ_TABLES = ["FROM clients", "FROM submissions", "FROM projects"]
+
+function isRouterRead(statement: string): boolean {
+  return ROUTER_READ_TABLES.some((table) => statement.includes(table))
+}
+
+/**
+ * A fake `Env["DB"]` that understands the statements this module issues and
+ * nothing else — an unrecognised statement throws loudly rather than silently
+ * returning nothing, so a query this file has not kept in step with fails the
+ * test that exercises it instead of passing for the wrong reason
  * (`test/drain.test.ts`'s own convention).
  *
  * It enforces the partial unique index from
@@ -77,6 +104,7 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
               return { meta: { changes: 1 } }
             },
             async first<T>(): Promise<T | null> {
+              if (isRouterRead(statement)) return null
               if (!statement.includes("WHERE message_id = ?")) {
                 throw new Error(`unrecognized first statement: ${statement}`)
               }
@@ -85,6 +113,7 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
                 null) as T | null)
             },
             async all<T>(): Promise<{ results: T[] }> {
+              if (isRouterRead(statement)) return { results: [] }
               if (!statement.includes("ORDER BY received_at DESC")) {
                 throw new Error(`unrecognized all statement: ${statement}`)
               }
@@ -122,6 +151,10 @@ function rowFromBindings(args: unknown[]): StoredRow {
     suppression_reason,
     attachment_count,
     body_truncated,
+    routed_kind,
+    routed_rung,
+    routed_reason,
+    routed_runner_up,
   ] = args as [
     string,
     string | null,
@@ -136,6 +169,10 @@ function rowFromBindings(args: unknown[]): StoredRow {
     string | null,
     number,
     number,
+    string | null,
+    number | null,
+    string | null,
+    string | null,
   ]
   return {
     id,
@@ -151,6 +188,10 @@ function rowFromBindings(args: unknown[]): StoredRow {
     suppression_reason,
     attachment_count,
     body_truncated,
+    routed_kind,
+    routed_rung,
+    routed_reason,
+    routed_runner_up,
   }
 }
 

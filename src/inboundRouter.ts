@@ -253,7 +253,8 @@ export function decideRoute(message: InboundRoutingMessage, lookup: RoutingLooku
     if (picked.outcome === "tie") {
       return unroutedDecision(
         6,
-        `Sender matches a known client with several projects, and more than one scored equally as the best match for this message — a tie is not a winner.`,
+        `Sender matches a known client with several projects, and more than one scored equally as the best match for this message — a tie is not a winner, so this is parked for a human.`,
+        picked.second,
       )
     }
     return messageDecision(
@@ -281,7 +282,8 @@ export function decideRoute(message: InboundRoutingMessage, lookup: RoutingLooku
   if (historyPicked.outcome === "tie") {
     return unroutedDecision(
       6,
-      "This address has written in before under more than one project, and more than one scored equally as the best match for this message — a tie is not a winner.",
+      "This address has written in before under more than one project, and more than one scored equally as the best match for this message — a tie is not a winner, so this is parked for a human.",
+      historyPicked.second,
     )
   }
 
@@ -312,13 +314,7 @@ function messageDecision(
       projectId: candidate.projectId,
       clientId: candidate.clientId,
     },
-    runnerUp: runnerUp
-      ? {
-          projectId: runnerUp.projectId,
-          submissionReference: runnerUp.submissionReference,
-          reason: `Also scored, but second-best: ${describeCandidate(runnerUp)}.`,
-        }
-      : null,
+    runnerUp: describeRunnerUp(runnerUp),
   }
 }
 
@@ -326,8 +322,31 @@ function leadDecision(rung: RoutingRung, reason: string): RoutingDecision {
   return { kind: "lead", rung, reason, target: null, runnerUp: null }
 }
 
-function unroutedDecision(rung: RoutingRung, reason: string): RoutingDecision {
-  return { kind: "unrouted", rung, reason, target: null, runnerUp: null }
+/**
+ * `runnerUp` is optional and only ever supplied by the *tie* branches: a tie is
+ * the one unrouted outcome where the router genuinely had a second candidate it
+ * declined to pick, which is exactly the contract's presence rule for
+ * `reply-route-runner-up` ("rung 4's scoring case, and the unrouted case"). A
+ * DMARC failure or a client with no projects has nothing to be a runner-up to,
+ * and inventing one there would tell an operator the router weighed options it
+ * never saw.
+ */
+function unroutedDecision(
+  rung: RoutingRung,
+  reason: string,
+  runnerUp: RoutingCandidate | null = null,
+): RoutingDecision {
+  return { kind: "unrouted", rung, reason, target: null, runnerUp: describeRunnerUp(runnerUp) }
+}
+
+function describeRunnerUp(candidate: RoutingCandidate | null): RoutingRunnerUp | null {
+  return candidate === null
+    ? null
+    : {
+        projectId: candidate.projectId,
+        submissionReference: candidate.submissionReference,
+        reason: `Also scored, but not picked: ${describeCandidate(candidate)} (${candidate.submissionReference}).`,
+      }
 }
 
 // ── SCORING (rungs 4 and 5 share this) ──────────────────────────────────────
@@ -386,7 +405,8 @@ function compareScores(a: Score, b: Score): number {
 
 type PickResult =
   | { outcome: "none" }
-  | { outcome: "tie" }
+  /** `second` is the other half of the tie — recorded so `/replies` can show an operator both of the things the router refused to choose between. */
+  | { outcome: "tie"; second: RoutingCandidate }
   | { outcome: "winner"; winner: RoutingCandidate; runnerUp: RoutingCandidate | null }
 
 /**
@@ -401,7 +421,7 @@ function pickCandidate(candidates: RoutingCandidate[], subject: string): PickRes
   const first = ranked[0]!
   const second = ranked[1]
   if (second !== undefined && compareScores(scoreOf(first, subject), scoreOf(second, subject)) === 0) {
-    return { outcome: "tie" }
+    return { outcome: "tie", second }
   }
   return { outcome: "winner", winner: first, runnerUp: second ?? null }
 }
@@ -409,12 +429,31 @@ function pickCandidate(candidates: RoutingCandidate[], subject: string): PickRes
 // ── EXTRACTION (pure — no I/O, exhaustively unit-testable on its own) ──────
 
 /**
- * `SUB-XXXXXX` / `LEAD-XXXXXX` — `generateSubmissionReference` /
- * `generateLeadReference` (`src/ids.ts`) both mint six upper-case hex
- * characters, but a human quoting one back may not preserve the case, so the
- * pattern matches either and callers normalise to upper-case.
+ * `SUB-XXXXXX` / `LEAD-XXXXXX`, where `XXXXXX` is six characters of
+ * `[A-Z0-9]`.
+ *
+ * ── WHY `[A-Z0-9]` AND NOT `[0-9A-F]` ──────────────────────────────────────
+ * `generateSubmissionReference` / `generateLeadReference` (`src/ids.ts`)
+ * happen to mint six upper-case *hex* characters today, and an earlier draft
+ * of this pattern matched exactly that. That was a bug: hex is an
+ * implementation detail of one minting function, while `[A-Z0-9]` is the
+ * alphabet the *reference format itself* is pinned to — `src/ids.ts`'s own
+ * doc says so ("a subset of `[A-Z0-9]`, the alphabet the contract and mock
+ * both use"), the ms-5 contract writes it as `SUB-XXXXXX`, and every existing
+ * spec in `e2e/` asserts `/^SUB-[A-Z0-9]{6}$/`, never `[0-9A-F]`.
+ *
+ * Recognising only today's narrower alphabet means the day anyone widens the
+ * mint — or seeds a reference from anywhere else — the router silently stops
+ * matching a reference a customer is quoting back verbatim off a receipt this
+ * portal printed for them, and the failure looks like "rung 6, nobody we
+ * know" rather than like a bug. Matching the pinned public format instead
+ * costs nothing: an unresolvable `SUB-` token already falls through the
+ * ladder rather than being treated as a match.
+ *
+ * Case-insensitive because a human quoting one back may not preserve the
+ * case; callers normalise to upper-case.
  */
-const REFERENCE_PATTERN = /\b(SUB|LEAD)-([0-9A-Fa-f]{6})\b/i
+const REFERENCE_PATTERN = /\b(SUB|LEAD)-([A-Za-z0-9]{6})\b/i
 
 export interface ExtractedReference {
   kind: "SUB" | "LEAD"
@@ -440,7 +479,10 @@ export function extractPlusAddressReference(toEmail: string): ExtractedReference
   const plusIndex = local.indexOf("+")
   if (plusIndex < 0) return null
   const candidate = local.slice(plusIndex + 1)
-  const match = /^(SUB|LEAD)-([0-9A-Fa-f]{6})$/i.exec(candidate)
+  // Anchored, not `REFERENCE_PATTERN`: everything after the first `+` must be
+  // *exactly* one reference, not merely contain one — see this function's own
+  // doc. Same `[A-Z0-9]` alphabet, for the same reason.
+  const match = /^(SUB|LEAD)-([A-Za-z0-9]{6})$/i.exec(candidate)
   if (match === null) return null
   const kind = match[1]!.toUpperCase() as "SUB" | "LEAD"
   if (kind !== "SUB") return null
