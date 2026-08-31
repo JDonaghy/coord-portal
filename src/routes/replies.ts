@@ -357,7 +357,7 @@ function replyDetailPage(operator: Operator, view: ReplyView, candidates: Routin
   const { draft, inbound } = view
   const action = `/replies/${encodeURIComponent(draft.id)}`
   return `${operatorTopbar(operator.email, "replies")}
-<main data-testid="reply-detail" data-rung="${rungOf(inbound)}" data-routed-kind="${escapeHtml(kindOf(inbound))}">
+<main class="reply-detail" data-testid="reply-detail" data-rung="${rungOf(inbound)}" data-routed-kind="${escapeHtml(kindOf(inbound))}">
   <a class="back-link" href="/replies" data-testid="back-to-replies">&larr; Replies</a>
 
   ${routeBadge(view)}
@@ -396,7 +396,7 @@ function replyDetailPage(operator: Operator, view: ReplyView, candidates: Routin
         <button type="submit" class="primary" data-testid="reply-approve-button">Approve &amp; send</button>
       </div>
     </form>
-    <form method="POST" action="${action}/discard" data-testid="reply-discard-form">
+    <form method="POST" action="${action}/discard" class="reply-discard-form" data-testid="reply-discard-form">
       <div class="actions">
         <button type="submit" class="ghost" data-testid="reply-discard-button">Discard</button>
       </div>
@@ -534,7 +534,7 @@ function routingOption(candidate: RoutingCandidate): string {
 function promoteForm(inbound: InboundEmailRecord, action: string): string {
   if (kindOf(inbound) === "lead") return ""
   return `
-    <form method="POST" action="${action}/promote" data-testid="reply-promote-form">
+    <form method="POST" action="${action}/promote" class="reply-promote-form" data-testid="reply-promote-form">
       <div class="actions">
         <button type="submit" class="secondary" data-testid="reply-promote-button">Promote to a submission</button>
       </div>
@@ -751,10 +751,28 @@ async function readForm(request: Request): Promise<FormData | null> {
   return parseFormData(request)
 }
 
-/** One form field, falling back to what the draft already says rather than to `""`. */
+/**
+ * One form field, falling back to what the draft already says rather than to
+ * `""`, with line endings normalised to bare `\n`.
+ *
+ * The normalisation is not cosmetic. HTML's form payload encoding puts a
+ * `<textarea>`'s value on the wire with CRLF line breaks whatever the operator
+ * actually typed (the "textarea line break normalisation" step — every browser
+ * does it, and it is the value the *server* sees, not the value the DOM holds).
+ * Store that verbatim and the approved reply differs from the text on screen by
+ * an invisible `\r` on every line — which then reaches the customer's mailbox,
+ * and makes "sends the edited text, not the original" fail on a byte nobody
+ * typed. Nothing else is touched: no trim, no collapse. What the operator wrote
+ * is what sends.
+ */
 function fieldOr(form: FormData, name: string, fallback: string): string {
   const raw = form.get(name)
-  return typeof raw === "string" ? raw : fallback
+  return typeof raw === "string" ? normaliseNewlines(raw) : fallback
+}
+
+/** CRLF (and a lone CR) to `\n`. See `fieldOr`. */
+function normaliseNewlines(value: string): string {
+  return value.replace(/\r\n?/g, "\n")
 }
 
 function seeOther(location: string): Response {

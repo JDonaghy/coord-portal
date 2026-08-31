@@ -807,20 +807,29 @@ const APP_STYLES = `
   p.attachments-note { margin: 0 0 1.5rem; }
   .auth-result { font-size: var(--step--1); color: var(--text-faint); font-family: var(--font-mono); }
 
-  main[data-testid="reply-detail"] .meta {
+  /* Selected by CLASS, not by a data-testid attribute selector the way the
+     older per-screen blocks above are — and this comment does not spell one of
+     this screen's testids out either. This stylesheet is inlined into EVERY
+     page this Worker serves, including leadsNotFound()'s 404, so any literal
+     testid string in here (selector OR prose) is handed to an ANONYMOUS caller
+     who was just told the page does not exist. "A non-operator is not told the
+     operator surface exists" is EM-6's own 404 rule, and it is about the bytes,
+     not the status line. A class carries the same specificity and says nothing.
+     Same reason the two action-form rules further down are classes. */
+  main.reply-detail .meta {
     color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono);
     margin: 0.35rem 0 1rem; overflow-wrap: anywhere;
   }
-  main[data-testid="reply-detail"] h1 { margin: 0.5rem 0 0.25rem; overflow-wrap: anywhere; }
+  main.reply-detail h1 { margin: 0.5rem 0 0.25rem; overflow-wrap: anywhere; }
   /* Scoped to this screen's own main, NOT a bare section.card rule:
      /submissions/:id and /projects/:id already render section.card against
      their own scoped rules above, and an unscoped rule here would silently
      restyle both. */
-  main[data-testid="reply-detail"] section.card {
+  main.reply-detail section.card {
     background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
     padding: 1.1rem 1.3rem; margin-bottom: 1.25rem;
   }
-  main[data-testid="reply-detail"] section.card h2 { margin: 0 0 0.75rem; font-size: var(--step-0); }
+  main.reply-detail section.card h2 { margin: 0 0 0.75rem; font-size: var(--step-0); }
   dl.received dt { font-weight: 600; font-size: var(--step--1); color: var(--text-dim); margin-top: 0.6rem; }
   dl.received dt:first-child { margin-top: 0; }
   dl.received dd { margin: 0.15rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -859,7 +868,7 @@ const APP_STYLES = `
   /* The three action forms stack inside one card, so each needs its own
      separator rather than the single trailing .actions margin a lone form
      gets. */
-  form[data-testid="reply-discard-form"], form[data-testid="reply-promote-form"] {
+  form.reply-discard-form, form.reply-promote-form {
     border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 0.75rem;
   }
   button.ghost {

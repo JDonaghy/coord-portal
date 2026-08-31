@@ -160,6 +160,18 @@ test.describe("issue #166 — /replies, the approval gate becomes operable", () 
         const res = await context.post(`/replies/${draft}/${action}`, { form: { target: "lead" } })
         expect(res.status(), `POST /replies/:id/${action} must 404 for a non-operator`).toBe(404)
       }
+      // "Same 404 as /leads" is about the BYTES, not just the status line. The
+      // not-found page inlines the whole app stylesheet, so a CSS selector that
+      // spells an operator-surface testid out in full (the shipped sheet once
+      // carried `main[data-testid="reply-detail"]`) hands a stranger the name
+      // of a screen they were just told does not exist. Asserted on the 404
+      // body for every one of these paths, since that is the page they all get.
+      for (const path of ["/replies", `/replies/${draft}`]) {
+        const body = await (await context.get(path)).text()
+        for (const leak of ['data-testid="replies-list"', 'data-testid="reply-detail"', sender]) {
+          expect(body, `the 404 for ${path} must not carry ${leak}`).not.toContain(leak)
+        }
+      }
     }
     await customerContext.close()
 
@@ -258,7 +270,12 @@ test.describe("issue #166 — /replies, the approval gate becomes operable", () 
     expect(original.length, "there is a drafted body to proof-read").toBeGreaterThan(0)
 
     const editedSubject = `Edited subject ${tag()}`
-    const editedBody = `Proof-read and corrected by hand — ${tag()}.`
+    // Deliberately MULTI-LINE, with a blank line in it. A browser puts a
+    // textarea's value on the wire with CRLF line breaks whatever the operator
+    // typed, so a single-line edit cannot tell a verbatim store apart from one
+    // that leaves a stray `\r` on the end of every line — invisible on screen,
+    // and in the customer's mailbox.
+    const editedBody = `Proof-read and corrected by hand — ${tag()}.\n\n— John, Heuron Technology`
     await page.getByTestId("reply-subject-field").fill(editedSubject)
     await bodyField.fill(editedBody)
     await page.getByTestId("reply-approve-button").click()
@@ -278,6 +295,10 @@ test.describe("issue #166 — /replies, the approval gate becomes operable", () 
     expect(sent[0]?.subject).toBe(editedSubject)
     expect(sent[0]?.text, "the edited text is what goes out").toContain(editedBody)
     expect(sent[0]?.text, "the original draft is not what goes out").not.toContain(original)
+    expect(
+      sent[0]?.text,
+      "verbatim means verbatim: no CR the operator never typed, on any line",
+    ).not.toContain("\r")
     await page.context().close()
   })
 

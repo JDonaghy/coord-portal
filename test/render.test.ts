@@ -56,6 +56,28 @@ describe("the shared page shell", () => {
       "<title>a &quot;quoted&quot; &lt;title&gt;</title>",
     )
   })
+
+  /**
+   * Issue #166: this shell inlines the WHOLE stylesheet into every page the
+   * Worker serves, `leadsNotFound()`'s 404 included. EM-6's 404 rule is that a
+   * non-operator "is not told the operator surface exists", and that is about
+   * the bytes of the response, not its status line — so a rule (or a code
+   * comment) inside this sheet that spells one of `/replies`' testids out in
+   * full hands a stranger the name of the screen they were just told is not
+   * there. The reply screens are styled by class for exactly that reason; this
+   * is the tripwire, because the leak is invisible from every operator-facing
+   * test (they are all signed in, and the page still looks right).
+   */
+  it.each([
+    'data-testid="replies-list"',
+    'data-testid="reply-detail"',
+    'data-testid="reply-row"',
+    'data-testid="reply-approve-form"',
+    'data-testid="reply-discard-form"',
+    'data-testid="reply-promote-form"',
+  ])("never names an operator reply testid in the sheet every 404 carries: %s", (literal) => {
+    expect(shell).not.toContain(literal)
+  })
 })
 
 describe("topbar", () => {
