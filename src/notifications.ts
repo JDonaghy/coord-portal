@@ -76,8 +76,24 @@ import type { Env } from "./types"
  * "instant-ish, not a digest" treatment `awaiting-signoff` gets: it is the
  * one other status a customer must actually act on, not merely a status
  * report to skim later.
+ *
+ * `intake-reply` — issue #162 (EM-2, milestone #5) — is the fifth. Nothing in
+ * this repo inserts a row of this type yet (that is a later milestone once a
+ * reply draft exists to gate); it is added here only so
+ * `migrations/0021_outbox_approval.sql`'s widened `outbox.email_type` CHECK
+ * and this vocabulary land together. Skipping this edit while widening the
+ * column would not fail loudly — `fromRow` below just returns `null` for any
+ * row of a type it does not recognise, so a future intake-reply row would
+ * silently vanish from both `/outbox` and `/deliveries` the moment one was
+ * ever written.
  */
-export const SENDING_TYPES = ["signoff-ready", "needs-input", "shipped", "preview-ready"] as const
+export const SENDING_TYPES = [
+  "signoff-ready",
+  "needs-input",
+  "shipped",
+  "preview-ready",
+  "intake-reply",
+] as const
 
 export type SendType = (typeof SENDING_TYPES)[number]
 
