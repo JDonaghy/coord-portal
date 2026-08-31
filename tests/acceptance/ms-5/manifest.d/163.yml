@@ -1,0 +1,46 @@
+# ms-5 issue #163 — sealed acceptance manifest fragment (this issue's own file,
+# per #2543: each issue's manifest.d/<issue>.yml is written and owned by that
+# issue's own test-author dispatch, never a shared file another slice also
+# writes to).
+#
+# Ids are the `web-playwright` driver's node ids, exactly as
+# `coord.acceptance_drivers.parse_playwright_json_report` builds them:
+#
+#   [{project}] {file relative to testDir} › {describe path} › {test title}
+#
+# `testDir` is `./tests/acceptance` (see `playwright.acceptance.config.ts`), so
+# the file component is `ms-5/163-inbound-router.spec.ts`. Ids below were
+# copied verbatim from a real `--reporter=json` run of this exact file (not
+# retyped), so the `›`/`—`/`→` characters match byte-for-byte.
+
+issues:
+  163:
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 1 — a plus-addressed envelope recipient beats a contradictory sender identity"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 2 — a LEAD-XXXXXX reference quoted in the body routes to that lead"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 2 — a SUB-XXXXXX reference quoted in the subject line also routes there"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 3 — a cc_emails match resolves a single-project known client"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 4 — a two-project client where one is awaiting sign-off wins over a merely more recent one"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 4 → 6 — an exact tie between two equally-weighted projects falls to unrouted, never guessed"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 5 — a historical customer_email match with no clients row resolves via address, then scores"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › a DMARC-fail message from a known client's address falls to unrouted rather than matching them"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 6 — nobody we know at all falls to the default, with no runner-up to speak of"
+
+# Recorded from `npm run test:acceptance -- ms-5/163` against a checkout with
+# #161 and #162 already landed (migrations through 0021_outbox_approval.sql)
+# but #163 itself unimplemented (no src/inboundRouter.ts, nothing wiring it
+# into inbound processing): 9 failed, 0 passed, 0 skipped. All nine ids below
+# are exactly the nine OBSERVED failing, every one on the same signal —
+# `inbound_emails.routed_rung` read back as `null` where the test expected a
+# specific rung — because #163 is the issue that fills it in. There is no
+# control or ratchet clause in this slice.
+expected_red:
+  163:
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 1 — a plus-addressed envelope recipient beats a contradictory sender identity"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 2 — a LEAD-XXXXXX reference quoted in the body routes to that lead"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 2 — a SUB-XXXXXX reference quoted in the subject line also routes there"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 3 — a cc_emails match resolves a single-project known client"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 4 — a two-project client where one is awaiting sign-off wins over a merely more recent one"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 4 → 6 — an exact tie between two equally-weighted projects falls to unrouted, never guessed"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 5 — a historical customer_email match with no clients row resolves via address, then scores"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › a DMARC-fail message from a known client's address falls to unrouted rather than matching them"
+    - "[chromium] ms-5/163-inbound-router.spec.ts › ms-5 issue 163 the inbound router › rung 6 — nobody we know at all falls to the default, with no runner-up to speak of"
