@@ -57,6 +57,21 @@ import type { Env } from "./types"
  * drain that burned every attempt in one tick would give up before a
  * customer's screen ever showed the merely-retrying state contract §
  * vocabulary pins as "indistinguishable" from fresh.
+ *
+ * APPROVAL GATE (issue #162, `migrations/0021_outbox_approval.sql`). A row
+ * can also be held for a human even though `status = 'queued'` — a different
+ * axis from delivery state entirely, so it is `outbox.approval_state`, not a
+ * fourth `status`. Both the batch SELECT and the claim UPDATE's own WHERE
+ * restrict to `approval_state IN ('not_required', 'approved')` — the claim is
+ * guarded independently for the same reason the lease is: a row this
+ * invocation's SELECT correctly excluded a moment ago must not become
+ * claimable through the UPDATE alone if something concurrently un-gates it
+ * mid-batch. `not_required` (every row before this migration, and every one
+ * of the four existing notification types) and `approved` (a human read it)
+ * are the only two states this module ever sends from; `pending` blocks
+ * forever until a human acts, and `rejected` is terminal — sent from
+ * neither, and unlike `failed` it is never a retry candidate because it never
+ * matches this WHERE clause in the first place.
  */
 
 /**
@@ -147,6 +162,7 @@ export async function drainOutbox(env: Env): Promise<void> {
     `SELECT id, to_email, from_email, subject, body, cta_text, cta_href, attempts
        FROM outbox
       WHERE status = 'queued'
+        AND approval_state IN ('not_required', 'approved')
         AND (claimed_at IS NULL OR claimed_at <= ?)
       ORDER BY queued_at ASC, id ASC
       LIMIT ?`,
@@ -179,7 +195,8 @@ export async function processRow(env: Env, provider: MailProvider, row: QueuedRo
   // abandoned.
   const claim = await env.DB.prepare(
     `UPDATE outbox SET attempts = attempts + 1, claimed_at = ?
-      WHERE id = ? AND status = 'queued' AND attempts = ?
+      WHERE id = ? AND status = 'queued' AND approval_state IN ('not_required', 'approved')
+        AND attempts = ?
         AND (claimed_at IS NULL OR claimed_at <= ?)`,
   )
     .bind(claimedAt, row.id, row.attempts, leaseThreshold)

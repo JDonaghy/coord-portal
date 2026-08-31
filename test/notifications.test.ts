@@ -101,8 +101,19 @@ describe("sendTypeForStatus", () => {
 })
 
 describe("SENDING_TYPES", () => {
-  it("is exactly signoff-ready / needs-input / shipped / preview-ready", () => {
-    expect([...SENDING_TYPES]).toEqual(["signoff-ready", "needs-input", "shipped", "preview-ready"])
+  it("is exactly signoff-ready / needs-input / shipped / preview-ready / intake-reply", () => {
+    // issue #162 (EM-2, milestone #5) widened this to a fifth type,
+    // `intake-reply`, so a future intake-reply row does not silently vanish
+    // from `fromRow` the way an unrecognised `email_type` always does. Note
+    // #162's own scope: nothing yet inserts a row of this type — see
+    // `recordNotificationForStatus`'s TYPE_FOR_STATUS map, unchanged here.
+    expect([...SENDING_TYPES]).toEqual([
+      "signoff-ready",
+      "needs-input",
+      "shipped",
+      "preview-ready",
+      "intake-reply",
+    ])
   })
 })
 

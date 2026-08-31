@@ -43,6 +43,8 @@ interface StoredRow {
   provider_message_id: string | null
   queued_at: string
   claimed_at: string | null
+  /** Issue #162's approval gate — see `fakeDrainDB`'s SELECT/claim matchers. */
+  approval_state: string
 }
 
 function seedRow(overrides: Partial<StoredRow> = {}): StoredRow {
@@ -61,6 +63,7 @@ function seedRow(overrides: Partial<StoredRow> = {}): StoredRow {
     provider_message_id: null,
     queued_at: "2026-08-11T00:00:00.000Z",
     claimed_at: null,
+    approval_state: "not_required",
     ...overrides,
   }
 }
@@ -89,6 +92,7 @@ function fakeDrainDB(rows: StoredRow[]) {
                   .filter(
                     (row) =>
                       row.status === "queued" &&
+                      (row.approval_state === "not_required" || row.approval_state === "approved") &&
                       (row.claimed_at === null || row.claimed_at <= leaseThreshold),
                   )
                   .sort(
@@ -109,8 +113,14 @@ function fakeDrainDB(rows: StoredRow[]) {
                 ]
                 const row = store.get(id)
                 const leaseIsLive = !!row && row.claimed_at !== null && row.claimed_at > leaseThreshold
+                const approvalAllows =
+                  !!row && (row.approval_state === "not_required" || row.approval_state === "approved")
                 const won =
-                  !!row && row.status === "queued" && row.attempts === expectedAttempts && !leaseIsLive
+                  !!row &&
+                  row.status === "queued" &&
+                  approvalAllows &&
+                  row.attempts === expectedAttempts &&
+                  !leaseIsLive
                 if (won && row) {
                   row.attempts += 1
                   row.claimed_at = claimedAt
@@ -456,6 +466,86 @@ describe("processRow — the claim", () => {
     expect(sendCalls, "a live lease must block a second claim attempt").toBe(0)
     expect(store.get("outbox-1")?.attempts, "a blocked claim must not perturb the row").toBe(1)
     expect(store.get("outbox-1")?.status).toBe("queued")
+  })
+})
+
+describe("the approval gate (issue #162)", () => {
+  it("a pending row is never claimed by the drain, however many ticks run", async () => {
+    const seeded = seedRow({ approval_state: "pending" })
+    const { DB, store } = fakeDrainDB([seeded])
+    const env = { DB, MAIL_PROVIDER: "fake" } as unknown as Env
+
+    let sendCalls = 0
+    const provider: MailProvider = {
+      async send() {
+        sendCalls++
+        return { ok: true, providerMessageId: "should-not-happen" }
+      },
+    }
+
+    // Several ticks, not just one — a pending row must never become
+    // claimable purely by the passage of time (unlike an expired
+    // `claimed_at` lease, which is meant to self-heal).
+    await drainOutbox(env)
+    await drainOutbox(env)
+    await drainOutbox(env)
+
+    // Also drive `processRow` directly, bypassing the batch SELECT entirely
+    // — the claim UPDATE's own WHERE must independently refuse a pending row,
+    // the same "guarded in both places" the lease already is.
+    await processRow(env, provider, queuedRowFrom(seeded))
+
+    expect(sendCalls, "a pending row must never reach the provider").toBe(0)
+    const final = store.get("outbox-1")
+    expect(final?.status).toBe("queued")
+    expect(final?.attempts, "a refused claim must not perturb attempts").toBe(0)
+    expect(final?.approval_state).toBe("pending")
+  })
+
+  it("flipping a row from pending to approved makes the very next tick send it", async () => {
+    const seeded = seedRow({ approval_state: "pending" })
+    const { DB, store } = fakeDrainDB([seeded])
+    const env = { DB, MAIL_PROVIDER: "fake" } as unknown as Env
+
+    // A tick while still pending: no-op, confirming the starting state is
+    // actually held.
+    await drainOutbox(env)
+    expect(store.get("outbox-1")?.status).toBe("queued")
+
+    // A human approves it — modelled directly against the fake store, since
+    // the approval action itself is out of scope for this change (issue
+    // #162: "no UI, no new sends, no new callers").
+    const row = store.get("outbox-1")
+    if (row) row.approval_state = "approved"
+
+    await drainOutbox(env)
+
+    const final = store.get("outbox-1")
+    expect(final?.status, "the very next tick after approval must send it").toBe("sent")
+  })
+
+  it("a rejected row is never sent and never retried", async () => {
+    const seeded = seedRow({ approval_state: "rejected" })
+    const { DB, store } = fakeDrainDB([seeded])
+    const env = { DB, MAIL_PROVIDER: "fake" } as unknown as Env
+
+    await drainOutbox(env)
+    await drainOutbox(env)
+
+    const final = store.get("outbox-1")
+    expect(final?.status, "rejected is terminal, not a retry candidate").toBe("queued")
+    expect(final?.attempts).toBe(0)
+    expect(final?.approval_state).toBe("rejected")
+  })
+
+  it("a pre-existing row (approval_state = 'not_required') still sends exactly as before", async () => {
+    const seeded = seedRow({ approval_state: "not_required" })
+    const { DB, store } = fakeDrainDB([seeded])
+    const env = { DB, MAIL_PROVIDER: "fake" } as unknown as Env
+
+    await drainOutbox(env)
+
+    expect(store.get("outbox-1")?.status).toBe("sent")
   })
 })
 
