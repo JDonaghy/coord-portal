@@ -812,11 +812,15 @@ const APP_STYLES = `
     margin: 0.35rem 0 1rem; overflow-wrap: anywhere;
   }
   main[data-testid="reply-detail"] h1 { margin: 0.5rem 0 0.25rem; overflow-wrap: anywhere; }
-  section.card {
+  /* Scoped to this screen's own main, NOT a bare section.card rule:
+     /submissions/:id and /projects/:id already render section.card against
+     their own scoped rules above, and an unscoped rule here would silently
+     restyle both. */
+  main[data-testid="reply-detail"] section.card {
     background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
     padding: 1.1rem 1.3rem; margin-bottom: 1.25rem;
   }
-  section.card h2 { margin: 0 0 0.75rem; font-size: var(--step-0); }
+  main[data-testid="reply-detail"] section.card h2 { margin: 0 0 0.75rem; font-size: var(--step-0); }
   dl.received dt { font-weight: 600; font-size: var(--step--1); color: var(--text-dim); margin-top: 0.6rem; }
   dl.received dt:first-child { margin-top: 0; }
   dl.received dd { margin: 0.15rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
