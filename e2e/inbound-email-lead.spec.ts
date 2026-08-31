@@ -106,6 +106,23 @@ function leadRowFor(page: Page, email: string) {
   return page.getByTestId("lead-row").filter({ hasText: email })
 }
 
+/**
+ * The document's laid-out width against the layout viewport's. A stranger's
+ * address is arbitrary — nobody picked it to fit our columns — so the operator
+ * screens that render one must not go sideways on a phone: mobile Chrome
+ * answers a document wider than device-width by scaling the whole page down,
+ * and once page scale != 1 the coordinates a tap is aimed at and the ones it
+ * lands on drift apart, so the control under the thumb is not the one that
+ * gets it. `src/render.ts`'s `header.topbar` comment documents the same
+ * failure on `/start`; `.lead-row`'s documents it here.
+ */
+async function pageWidth(page: Page): Promise<{ scroll: number; client: number }> {
+  return page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }))
+}
+
 /** Anchored — for matching a reference against a whole string, e.g. `door.routed_lead_id`'s reference. */
 const LEAD_REFERENCE = /^LEAD-[A-Z0-9]{6}$/
 /** Unanchored — for `toContainText`, which needs a substring match, not a whole-string one. */
@@ -139,6 +156,20 @@ test.describe("issue #164 — a stranger's email becomes a lead, with a drafted 
     await expect(row, `exactly one /leads row for ${from}`).toHaveCount(1)
     await expect(row).toHaveAttribute("data-status", "new")
 
+    // A stranger's address is arbitrary — nobody picked it to fit our layout —
+    // and `.lead-row .meta` renders it in a monospace face on a 412 CSS px
+    // phone. If it pushes the document wider than the layout viewport, mobile
+    // Chrome answers by scaling the whole page down, and once page scale != 1
+    // every click coordinate drifts (see the `header.topbar` comment in
+    // src/render.ts, which documents the identical failure on /start). Asserted
+    // here, before the click, so the layout bug reads as a layout bug rather
+    // than as a flaky "element intercepts pointer events".
+    const listWidth = await pageWidth(operator)
+    expect(
+      listWidth.scroll,
+      `/leads must not scroll sideways for ${from} (scale drift makes every click land wrong)`,
+    ).toBeLessThanOrEqual(listWidth.client)
+
     await row.getByTestId("review-lead").click()
     await expect(operator).toHaveURL(new RegExp(`/leads/${door.routed_lead_id}$`))
     await expect(operator.getByTestId("lead-detail")).toHaveAttribute("data-status", "new")
@@ -150,6 +181,15 @@ test.describe("issue #164 — a stranger's email becomes a lead, with a drafted 
       operator.getByTestId("promote-lead-form"),
       "issue #164: promotable by the exact same, unmodified button",
     ).toBeVisible()
+
+    // Same guard on the screen the Review link leads to: the address is
+    // rendered a second time there, and Promote is the button that must stay
+    // hittable.
+    const detailWidth = await pageWidth(operator)
+    expect(
+      detailWidth.scroll,
+      `/leads/:id must not scroll sideways for ${from} either`,
+    ).toBeLessThanOrEqual(detailWidth.client)
 
     await operatorContext.close()
   })
