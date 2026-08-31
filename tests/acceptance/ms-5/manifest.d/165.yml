@@ -1,0 +1,53 @@
+# ms-5 sealed acceptance manifest fragment — issue #165 ONLY (#2543).
+#
+# Owned exclusively by issue #165's slice. No other slice writes to this
+# file, and this file makes no claim about any other issue's tests — see
+# `tests/acceptance/ms-5/manifest.yml` for #161-#164's own entries (written
+# under the shared-file convention that predates this repo's own switch to
+# `manifest.d/`, per that dispatch's own `fix(ms-5): fold #164's manifest
+# into manifest.yml, not manifest.d` commit) and any sibling
+# `manifest.d/<issue-number>.yml` for #166-#169.
+#
+# Ids are the `web-playwright` driver's node ids, exactly as
+# `coord.acceptance_drivers.parse_playwright_json_report` builds them:
+#
+#   [{project}] {file relative to testDir} › {describe path} › {test title}
+#
+# `testDir` is `./tests/acceptance` (see `playwright.acceptance.config.ts`),
+# so the file component is `ms-5/165-em5-known-client-thread.spec.ts`.
+
+issues:
+  165:
+    - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › rung 3 — a known client's message appends exactly one messages row on the project's newest submission, records the routing link, and changes no submissions.status"
+    - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › rung 1 — a plus-addressed envelope recipient routes the message to the exact named submission, not the sender's own newest one"
+    - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › a matched sender's message drafts exactly one intake-reply outbox row at pending, never quotes their own words, discloses no status, and links back to the thread"
+    - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › an ambiguous two-project client parks as unrouted with the runner-up recorded, writes no message and no lead, but still drafts a neutral acknowledgement"
+    - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › a DMARC-fail message from a known client's address never reaches postMessage at all"
+
+# Tests OBSERVED failing against the unimplemented state, recorded per issue
+# at the moment this slice was authored.
+#
+# Recorded from `npm run test:acceptance -- ms-5/165` (after `npm ci` +
+# `npx playwright install chromium`), against a checkout with #161/#162/#163
+# already landed (schema head 0022_relayed_answers.sql — #164, EM-4's own
+# stranger/lead case, also already landed) but #165 itself unimplemented (no
+# rungs-1-5 message-append or unrouted-parking wiring in
+# `src/inboundEmail.ts`/`src/messages.ts`/`src/notifications.ts`): 5 failed,
+# 0 passed, 0 skipped.
+#
+# The DMARC-fail test's first draft (four pure-absence assertions: no
+# message, no leads row, `routed_submission_id` null) passed vacuously
+# against the unimplemented state, because an entirely-missing #165 already
+# satisfies "writes nothing" by doing nothing — it was not actually red. It
+# was strengthened with one positive assertion tied to contract § "Unrouted"
+# (a neutral acknowledgement must still be drafted for every unrouted row,
+# not only the ambiguous-tie flavour) before this run, so all five ids below
+# are genuinely, freshly observed failing — none is a vacuous or
+# already-passing clause excluded from this list.
+expected_red:
+  165:
+    - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › rung 3 — a known client's message appends exactly one messages row on the project's newest submission, records the routing link, and changes no submissions.status"
+    - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › rung 1 — a plus-addressed envelope recipient routes the message to the exact named submission, not the sender's own newest one"
+    - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › a matched sender's message drafts exactly one intake-reply outbox row at pending, never quotes their own words, discloses no status, and links back to the thread"
+    - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › an ambiguous two-project client parks as unrouted with the runner-up recorded, writes no message and no lead, but still drafts a neutral acknowledgement"
+    - "[chromium] ms-5/165-em5-known-client-thread.spec.ts › ms-5 issue 165 EM-5: a known client's email lands on the matched thread › a DMARC-fail message from a known client's address never reaches postMessage at all"
