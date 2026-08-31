@@ -62,6 +62,18 @@ export const COORD_OWNED_FIELDS = [
   // `coord_facts` mirror — see that migration's module comment for why a
   // real column, not a JSON-encoded fact row.
   "preview_url",
+  // Issue #159: an answer the operator received out of band (in person, on a
+  // call, by email) and is relaying on the customer's behalf — the answer
+  // text, the `question` revision it responds to, the stated source and a
+  // timestamp, kept verbatim in `coord_facts` exactly like `question` itself
+  // (see `src/questions.ts`). Coord-owned because the operator, not the
+  // customer, is the one asserting it happened; it becomes a genuine
+  // customer-authored answer only once the portal records a confirmation or
+  // correction, at which point it is indistinguishable from any other
+  // `question.answered` bridge event. Never rendered as the customer's own
+  // words until that happens — see `src/routes/submission.ts`'s
+  // `relayedAnswerDetail`.
+  "relayed_answer",
 ] as const
 
 export type PortalOwnedField = (typeof PORTAL_OWNED_FIELDS)[number]
