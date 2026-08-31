@@ -274,9 +274,3 @@ issues:
 expected_red:
   10:
     - "[chromium] ms-1/10-up-mapping.spec.ts › ms-1 issue 10 up-mapping read model › quality-check now asks the customer to act, per the #107 amendment"
-  14:
-    - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › a preview ready for approval sends the customer exactly one email"
-    - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › shipped work sends the customer exactly one final email"
-    - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › the sending vocabulary is closed and exhaustive over the whole status list"
-    - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › every email carries the pinned envelope, addressed to the signed-in customer"
-    - "[chromium] ms-1/14-notifications.spec.ts › ms-1 issue 14 customer notifications › no engineer-side identifier reaches the customer's inbox"
