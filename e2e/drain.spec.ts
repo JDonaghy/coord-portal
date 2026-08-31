@@ -382,6 +382,16 @@ test("the drain hands the provider an absolute, followable link to the submissio
  * that file exists for. `seedGatedOutboxRow` inserts the row already held
  * rather than enqueuing-then-holding, because the two Playwright projects
  * share one drain and one database; its own comment has the detail.
+ *
+ * "approving a held row sends it on the very next tick" below carries more
+ * weight than a smoke test usually does: the sealed slice's own version of
+ * that scenario cannot complete its arrange step, because it asserts the
+ * approving UPDATE reported `changes === 1` and `wrangler d1 execute --local`
+ * discards everything but `duration` from `meta` before printing (see
+ * `outbox-fixtures.ts`'s note — reproduced at wrangler 4.120.0 and 4.127.1,
+ * and not fixable from this side). This test drives the same behaviour
+ * through the same real `GET /__scheduled`, and its fixture proves the
+ * approval landed by reading the row back instead.
  */
 
 /** How many emails the recording fake was handed for one address (`src/routes/outbound.ts`). */

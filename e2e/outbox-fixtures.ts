@@ -28,6 +28,33 @@ function execute(command: string): string {
   return runWrangler(["d1", "execute", DATABASE, "--local", "--json", "--command", command])
 }
 
+/**
+ * ── WHY NO FIXTURE HERE EVER CHECKS `meta.changes` ─────────────────────────
+ *
+ * The obvious way to prove a seeding `UPDATE` actually touched the row it
+ * named is SQLite's `changes()` — and D1 does report it as `meta.changes` on
+ * a `.run()` inside a Worker (`src/drain.ts` leans on exactly that for the
+ * claim). It is NOT available through this CLI seam: `wrangler d1 execute`'s
+ * local path (`executeLocally`, wrangler-dist/cli.js) rebuilds the per-
+ * statement result as
+ *
+ *     { results, success, meta: { duration: result.meta?.duration } }
+ *
+ * — the whole of `meta` except `duration` is discarded before the `--json`
+ * output is printed, so `meta.changes` is `undefined` for every local
+ * statement, read or write. Verified empirically at the repo-pinned wrangler
+ * 4.120.0 and at 4.127.1 (latest, 2026-08-31): an `INSERT` that demonstrably
+ * added a row still printed `"meta": { "duration": 1 }` and nothing else. It
+ * is not a version we can bump past, and nothing in `src/` or `migrations/`
+ * can put the field back — it is dropped CLI-side, after SQLite has answered.
+ *
+ * So a fixture that wants "the write landed" has to READ IT BACK, which is
+ * what `setOutboxApproval` does below. A read-after-write over the same
+ * `--local` state is strictly stronger anyway: `changes = 1` says one row
+ * matched the WHERE, while the read says the column now holds the value the
+ * test asked for.
+ */
+
 /** Inline a value into a `--command` string. Synthetic test data only — see CLAUDE.md rule 1. */
 function sqlString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`
@@ -99,6 +126,19 @@ export function setOutboxApproval(id: string, state: ApprovalState, approvedBy?:
   execute(
     `UPDATE outbox SET approval_state = ${sqlString(state)}${bookkeeping} WHERE id = ${sqlString(id)}`,
   )
+
+  // Read back rather than trust the UPDATE — see the `meta.changes` note at
+  // the top of this file for why the row count is not available here. A
+  // silently-zero-row UPDATE (a typo'd id, a row a sibling test already
+  // moved) would otherwise surface as "the drain refused to send an approved
+  // row", blaming `src/drain.ts` for a fixture that never approved anything.
+  const after = readOutboxRowState(id)
+  if (after.approval_state !== state) {
+    throw new Error(
+      `approving ${id} did not take: approval_state is ${after.approval_state}, expected ${state} ` +
+        `— the UPDATE matched no row, so nothing below is testing what it claims to test`,
+    )
+  }
 }
 
 /**
