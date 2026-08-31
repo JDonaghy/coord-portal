@@ -40,13 +40,24 @@ import type { Env } from "./types"
  * called "AI" — #163's own scope line: "the portal never runs one, and a
  * lead's text cannot cross the bridge to a fleet that could."
  *
- * ── RUNGS 3–5 REQUIRE AN AUTHENTICATED SENDER ───────────────────────────────
+ * ── RUNGS 3–5 REQUIRE AN AUTHENTICATED SENDER — BUT ONLY WHEN THERE IS
+ * SOMEONE TO SPOOF ───────────────────────────────────────────────────────────
  * "Anyone can put any address in a `From:` header." Rungs 3, 4 and 5 resolve
  * an address into a *person* — the one thing spoofing must never buy for
- * free. `decideRoute` checks `message.authResult === "pass"` once, right
- * before those rungs, and anything else (`fail` or `none`) falls straight to
- * rung 6 as `unrouted` — never `lead`, because "unrouted" is a human's queue
- * and a wrongly-invented lead is not free to create.
+ * free. `decideRoute` checks `message.authResult === "pass"` once for each
+ * rung-group, but only once that group is the only thing left in play: right
+ * before rung 3/4 if `lookup.matchedClientId !== null`, right before rung 5 if
+ * `lookup.historyCandidates` is non-empty. When either fires without a DMARC
+ * pass, the message falls to rung 6 as `unrouted` — never `lead`, because
+ * "unrouted" is a human's queue and a wrongly-invented lead is not free to
+ * create; there IS a specific person here that an unauthenticated `From:`
+ * might be impersonating. An address that matches **neither** — no client, no
+ * history — has no identity here for a spoofed header to steal, so it still
+ * reaches rung 6's other outcome, `lead`, regardless of DMARC (issue #164,
+ * EM-4, confirmed by amendment in `tests/acceptance/ms-5/contract.md`: "rungs
+ * 3-5 never fire for an address with no clients/historical submissions row
+ * regardless of DMARC, so auth_result is irrelevant to which rung a genuine
+ * stranger's message reaches").
  */
 
 /** The rungs of the ladder, 1 (most trusted) through 6 (the safe default). */
@@ -221,18 +232,34 @@ export function decideRoute(message: InboundRoutingMessage, lookup: RoutingLooku
   }
 
   // Rungs 3–5 resolve an address into a person. Anyone can put any address in
-  // a `From:` header, so none of them may fire without EM-1's DMARC pass.
-  if (message.authResult !== "pass") {
-    return unroutedDecision(
-      6,
-      "DMARC did not pass for this sender's address — rungs 3–5 only resolve an address into a person once EM-1 has recorded a DMARC pass, and this message carries none. Spoofing an address must not buy a match.",
-    )
-  }
+  // a `From:` header, so none of them may fire without EM-1's DMARC pass —
+  // BUT ONLY WHEN THERE IS SOMEONE TO SPOOF. The gate below is checked once
+  // per rung-group, immediately before that group is the only thing left that
+  // could resolve this message (`lookup.matchedClientId !== null` for 3/4,
+  // `lookup.historyCandidates.length > 0` for 5), never unconditionally up
+  // front. Issue #164 (EM-4)'s own contract is what pins the reason this has
+  // to be conditional rather than a single early return: "rungs 3-5 never
+  // fire for an address with no clients/historical submissions row *regardless
+  // of DMARC*, so auth_result is irrelevant to which rung a genuine stranger's
+  // message reaches." An address that matches nothing is not a spoofing
+  // target — there is no real identity being claimed that an unauthenticated
+  // `From:` could steal — so it still falls through to rung 6's own default,
+  // `lead`, never gets stuck at `unrouted` on DMARC's account alone. An
+  // address that *does* match something, without a DMARC pass to back it up,
+  // still correctly parks as `unrouted`: there IS a specific identity here
+  // that spoofing could exploit, and "a human looks at it" is what closes that
+  // gap.
 
   // Rung 3 / Rung 4 — a known client, one project or several. Both share one
   // scorer; what tells them apart is `clientProjectCount`, the client's *raw*
   // project count, not how many ended up with a submission to attach to.
   if (lookup.matchedClientId !== null) {
+    if (message.authResult !== "pass") {
+      return unroutedDecision(
+        6,
+        "DMARC did not pass for this sender's address — this address matches a known client, but rungs 3–4 only resolve an address into that person once EM-1 has recorded a DMARC pass, and this message carries none. Spoofing an address must not buy a match.",
+      )
+    }
     const via = lookup.matchedClientVia === "cc" ? "a cc_emails entry" : "their own address"
     if (lookup.clientProjectCount === 0) {
       return unroutedDecision(
@@ -269,7 +296,15 @@ export function decideRoute(message: InboundRoutingMessage, lookup: RoutingLooku
 
   // Rung 5 — sender wrote in before, but 0016 never backfilled a `clients`
   // row for them. Same scorer as rung 4, over whatever this address's own
-  // history offers instead of a client's project list.
+  // history offers instead of a client's project list. Same gate shape as
+  // rung 3/4 above: only checked because there is history here that a
+  // spoofed `From:` could otherwise claim.
+  if (lookup.historyCandidates.length > 0 && message.authResult !== "pass") {
+    return unroutedDecision(
+      6,
+      "DMARC did not pass for this sender's address — this address has written in before, but rung 5 only resolves that history to the same person once EM-1 has recorded a DMARC pass, and this message carries none. Spoofing an address must not buy a match.",
+    )
+  }
   const historyPicked = pickCandidate(lookup.historyCandidates, message.subject)
   if (historyPicked.outcome === "winner") {
     return messageDecision(

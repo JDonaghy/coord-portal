@@ -44,6 +44,41 @@ interface StoredRow {
   routed_rung: number | null
   routed_reason: string | null
   routed_runner_up: string | null
+  routed_lead_id: string | null
+  outbox_id: string | null
+}
+
+/** A `leads` row, as `createLead` (`src/leads.ts`) inserts one — issue #164, EM-4. */
+interface StoredLead {
+  id: string
+  reference: string
+  summary: string
+  email: string
+  name: string | null
+  created_at: string
+}
+
+/**
+ * An `outbox` row, as `enqueueIntakeReply` (`src/notifications.ts`) inserts
+ * one — issue #164, EM-4. Only the columns that function actually binds; every
+ * other `outbox` column (`status`, `attempts`, …) is a real D1 default this
+ * fake has no reason to model, the same restraint `test/notifications.test.ts`'s
+ * own `fakeDb` already takes.
+ */
+interface StoredOutbox {
+  id: string
+  submission_id: string
+  coord_revision: number
+  email_type: string
+  to_email: string
+  from_email: string
+  subject: string
+  preheader: string
+  body: string
+  cta_text: string
+  cta_href: string
+  queued_at: string
+  approval_state: string
 }
 
 /**
@@ -80,9 +115,23 @@ function isRouterRead(statement: string): boolean {
  * `migrations/0020_inbound_emails.sql` — `(message_id, to_email)` where
  * `message_id IS NOT NULL` — because the redelivery guard is the whole point of
  * that index and a fake that ignored it would make the duplicate test vacuous.
+ *
+ * ── EM-4 (ISSUE #164): `leads` AND `outbox` JOIN THE FAKE ──────────────────
+ * Rung 6 ("nobody we know") is reachable from this file's own default fixture
+ * (an authenticated stranger with no plus address, no quoted reference, and
+ * the router's own reads answered as "nothing found" — see
+ * `isRouterRead` above) — so `createLead` and `enqueueIntakeReply` are live
+ * code paths here, not merely imported. `leads`/`outbox` get the same
+ * unique-constraint enforcement `inbound_emails` already gets above:
+ * `outbox`'s `(submission_id, coord_revision)` — see
+ * `INTAKE_REPLY_REVISION` in `src/notifications.ts` for why that pair, not a
+ * dedicated column, is this fake's (and the real schema's) idempotency key
+ * for a drafted reply.
  */
 function fakeInboundEnv(vars: Partial<Env> = {}): Env {
   const store: StoredRow[] = []
+  const leads: StoredLead[] = []
+  const outbox: StoredOutbox[] = []
   const norm = (sql: string) => sql.replace(/\s+/g, " ").trim()
 
   const DB = {
@@ -92,19 +141,93 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
         bind(...args: unknown[]) {
           return {
             async run() {
-              if (!statement.startsWith("INSERT INTO inbound_emails")) {
-                throw new Error(`unrecognized run statement: ${statement}`)
+              if (statement.startsWith("INSERT INTO inbound_emails")) {
+                const row = rowFromBindings(args)
+                const collides =
+                  row.message_id !== null &&
+                  store.some((s) => s.message_id === row.message_id && s.to_email === row.to_email)
+                if (collides) return { meta: { changes: 0 } }
+                store.push(row)
+                return { meta: { changes: 1 } }
               }
-              const row = rowFromBindings(args)
-              const collides =
-                row.message_id !== null &&
-                store.some((s) => s.message_id === row.message_id && s.to_email === row.to_email)
-              if (collides) return { meta: { changes: 0 } }
-              store.push(row)
-              return { meta: { changes: 1 } }
+              if (statement.startsWith("INSERT INTO leads")) {
+                const [id, reference, summary, email, name, created_at] = args as [
+                  string,
+                  string,
+                  string,
+                  string,
+                  string | null,
+                  string,
+                ]
+                leads.push({ id, reference, summary, email, name, created_at })
+                return { meta: { changes: 1 } }
+              }
+              if (statement.startsWith("INSERT INTO outbox")) {
+                const [
+                  id,
+                  submission_id,
+                  to_email,
+                  from_email,
+                  subject,
+                  preheader,
+                  body,
+                  cta_text,
+                  cta_href,
+                  coord_revision,
+                  queued_at,
+                ] = args as [
+                  string,
+                  string,
+                  string,
+                  string,
+                  string,
+                  string,
+                  string,
+                  string,
+                  string,
+                  number,
+                  string,
+                ]
+                const collides = outbox.some(
+                  (o) => o.submission_id === submission_id && o.coord_revision === coord_revision,
+                )
+                if (collides) return { meta: { changes: 0 } }
+                outbox.push({
+                  id,
+                  submission_id,
+                  coord_revision,
+                  email_type: "intake-reply",
+                  to_email,
+                  from_email,
+                  subject,
+                  preheader,
+                  body,
+                  cta_text,
+                  cta_href,
+                  queued_at,
+                  approval_state: "pending",
+                })
+                return { meta: { changes: 1 } }
+              }
+              if (statement.startsWith("UPDATE inbound_emails SET routed_lead_id")) {
+                const [routed_lead_id, outbox_id, id] = args as [string, string, string]
+                const row = store.find((s) => s.id === id)
+                if (row === undefined) return { meta: { changes: 0 } }
+                row.routed_lead_id = routed_lead_id
+                row.outbox_id = outbox_id
+                return { meta: { changes: 1 } }
+              }
+              throw new Error(`unrecognized run statement: ${statement}`)
             },
             async first<T>(): Promise<T | null> {
               if (isRouterRead(statement)) return null
+              if (statement.startsWith("SELECT id FROM outbox WHERE submission_id")) {
+                const [submissionId, coordRevision] = args as [string, number]
+                const row = outbox.find(
+                  (o) => o.submission_id === submissionId && o.coord_revision === coordRevision,
+                )
+                return (row ? { id: row.id } : null) as T | null
+              }
               if (!statement.includes("WHERE message_id = ?")) {
                 throw new Error(`unrecognized first statement: ${statement}`)
               }
@@ -133,7 +256,11 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
     },
   }
 
-  return { DB, ...vars, rows: store } as unknown as Env & { rows: StoredRow[] }
+  return { DB, ...vars, rows: store, leadRows: leads, outboxRows: outbox } as unknown as Env & {
+    rows: StoredRow[]
+    leadRows: StoredLead[]
+    outboxRows: StoredOutbox[]
+  }
 }
 
 function rowFromBindings(args: unknown[]): StoredRow {
@@ -192,11 +319,24 @@ function rowFromBindings(args: unknown[]): StoredRow {
     routed_rung,
     routed_reason,
     routed_runner_up,
+    // Never bound by the `INSERT` itself — see `fakeInboundEnv`'s own comment
+    // on why these two are absent from its column list. EM-4's `UPDATE`
+    // (`createLeadAndDraftReply`) is what ever moves them off `null`.
+    routed_lead_id: null,
+    outbox_id: null,
   }
 }
 
 function storedRows(env: Env): StoredRow[] {
   return (env as unknown as { rows: StoredRow[] }).rows
+}
+
+function storedLeads(env: Env): StoredLead[] {
+  return (env as unknown as { leadRows: StoredLead[] }).leadRows
+}
+
+function storedOutbox(env: Env): StoredOutbox[] {
+  return (env as unknown as { outboxRows: StoredOutbox[] }).outboxRows
 }
 
 interface BlobOptions {
@@ -506,6 +646,140 @@ describe("redelivery", () => {
     await record(env, { messageId: null })
     await record(env, { messageId: null })
     expect(storedRows(env)).toHaveLength(2)
+  })
+})
+
+/**
+ * Issue #164 (EM-4 of milestone #5): rung 6 ("nobody we know") creates a lead
+ * — via `createLead`, the exact function `POST /start` calls — and drafts its
+ * acknowledgement via `enqueueIntakeReply`. `passHeaders()` below is what gets
+ * a fixture past rung 6's own auth gate (`decideRoute` in
+ * `src/inboundRouter.ts` falls to `unrouted`, not `lead`, unless
+ * `authResult === "pass"`) — every case here is a genuine, authenticated
+ * stranger: no plus address, no quoted reference, and the router's own
+ * `clients`/`submissions`/`projects` reads answered as "nothing found" (see
+ * `isRouterRead` above), which is exactly rung 6's own precondition.
+ */
+describe("EM-4 — rung 6 creates a lead and drafts an acknowledgement (issue #164)", () => {
+  function passHeaders(): Record<string, string> {
+    return {
+      "Authentication-Results": "mx.forwarder.example.test; dmarc=pass header.from=sender.example.test",
+    }
+  }
+
+  it("creates exactly one leads row and one outbox row, and links both back onto the inbound_emails row", async () => {
+    const env = fakeInboundEnv()
+    const { record: row } = await record(env, {
+      from: "Priya Nair <priya@sender.example.test>",
+      body: "Could someone help us build a small booking page?",
+      extraHeaders: passHeaders(),
+    })
+
+    expect(row.routedKind, "rung 6 — nobody the router's reads found anything for").toBe("lead")
+    expect(row.routedLeadId).not.toBeNull()
+    expect(row.outboxId).not.toBeNull()
+
+    const leads = storedLeads(env)
+    expect(leads).toHaveLength(1)
+    expect(leads[0]?.id).toBe(row.routedLeadId)
+    // Issue #164 scope item 1, verbatim: summary/email/name.
+    expect(leads[0]?.summary).toBe("Could someone help us build a small booking page?")
+    expect(leads[0]?.email).toBe("priya@sender.example.test")
+    expect(leads[0]?.name).toBe("Priya Nair")
+
+    const drafts = storedOutbox(env)
+    expect(drafts).toHaveLength(1)
+    expect(drafts[0]?.id).toBe(row.outboxId)
+    expect(drafts[0]?.email_type).toBe("intake-reply")
+    expect(drafts[0]?.approval_state, "issue #164 scope item 3").toBe("pending")
+    expect(drafts[0]?.to_email).toBe("priya@sender.example.test")
+  })
+
+  it("leaves the lead's name null when the `From:` header carries no display name — same optionality /start's own leads get", async () => {
+    const env = fakeInboundEnv()
+    const { record: row } = await record(env, {
+      from: "bare@sender.example.test",
+      extraHeaders: passHeaders(),
+    })
+    const lead = storedLeads(env).find((l) => l.id === row.routedLeadId)
+    expect(lead?.name).toBeNull()
+  })
+
+  it("the drafted body carries the lead's own LEAD-XXXXXX reference and never the sender's own message", async () => {
+    const env = fakeInboundEnv()
+    const canary = "purple-narwhal-invoice-4471"
+    const { record: row } = await record(env, {
+      body: `Please quote a job referencing ${canary}.`,
+      extraHeaders: passHeaders(),
+    })
+    const lead = storedLeads(env).find((l) => l.id === row.routedLeadId)
+    const draft = storedOutbox(env).find((o) => o.id === row.outboxId)
+
+    expect(draft?.body).toContain(lead?.reference)
+    expect(draft?.body).not.toContain(canary)
+    expect(draft?.subject).not.toContain(canary)
+  })
+
+  it("does not create a lead or a draft for a suppressed message — it is never routed at all", async () => {
+    // #161's own rule, restated by `src/inboundEmail.ts`'s module doc: a
+    // suppressed message never reaches the router (`decision` stays `null`),
+    // so it can never reach EM-4's `kind === "lead"` branch either — an
+    // auto-responder must never be resolved to a person or given a draft.
+    const env = fakeInboundEnv()
+    const { record: row } = await record(env, { extraHeaders: { "Auto-Submitted": "auto-replied" } })
+    expect(row.disposition).toBe("suppressed")
+    expect(row.routedKind).toBeNull()
+    expect(row.routedLeadId).toBeNull()
+    expect(row.outboxId).toBeNull()
+    expect(storedLeads(env)).toHaveLength(0)
+    expect(storedOutbox(env)).toHaveLength(0)
+  })
+
+  /**
+   * Issue #164 (EM-4)'s own correction to #163's DMARC gate (see
+   * `src/inboundRouter.ts`'s module doc and `test/inboundRouter.test.ts`'s
+   * "decideRoute — rung 6 (default)" tests for the full reasoning): an address
+   * that matches nothing has no identity for a spoofed `From:` to steal, so it
+   * still reaches rung 6's `lead` outcome regardless of DMARC. This file's own
+   * fake (`isRouterRead`, above) always answers the router's `clients`/
+   * `submissions`/`projects` reads as "nothing found" — so within this fake
+   * there is no way to construct a genuine `unrouted` outcome at all, and that
+   * is itself the behaviour under test: a DMARC failure alone, with nothing
+   * else to disambiguate, is not enough to keep this out of rung 6's lead
+   * branch.
+   */
+  it("still creates a lead when DMARC fails outright, as long as nothing else matches either", async () => {
+    const env = fakeInboundEnv()
+    const { record: row } = await record(env, { extraHeaders: { "Authentication-Results": "mx.example.test; dmarc=fail" } })
+    expect(row.routedKind).toBe("lead")
+    expect(row.routedLeadId).not.toBeNull()
+    expect(row.outboxId).not.toBeNull()
+  })
+
+  it("re-delivering the same stranger message creates no second lead and no second draft", async () => {
+    const env = fakeInboundEnv()
+    const opts = {
+      messageId: "em4-dup@sender.example.test",
+      extraHeaders: passHeaders(),
+    }
+    const first = await record(env, opts)
+    expect(first.duplicate).toBe(false)
+    expect(first.record.routedLeadId).not.toBeNull()
+    expect(first.record.outboxId).not.toBeNull()
+
+    const second = await record(env, opts)
+    expect(second.duplicate, "the redelivery guard resolves this to the same row").toBe(true)
+    expect(second.record.routedLeadId).toBe(first.record.routedLeadId)
+    expect(second.record.outboxId).toBe(first.record.outboxId)
+
+    expect(
+      storedLeads(env),
+      "issue #164: \"an inbound message that is processed twice must produce one lead\"",
+    ).toHaveLength(1)
+    expect(
+      storedOutbox(env),
+      "issue #164: \"an inbound message that is processed twice must produce ... one draft\"",
+    ).toHaveLength(1)
   })
 })
 

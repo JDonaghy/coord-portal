@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest"
 import {
   SENDING_TYPES,
   emailContent,
+  enqueueIntakeReply,
+  intakeReplyContent,
   listAllOutbox,
   listOutboxForCustomer,
   recordNotificationForStatus,
@@ -326,6 +328,131 @@ describe("recordNotificationForStatus", () => {
     expect(inserted).toHaveLength(1)
     const [, , type] = inserted[0] as [string, string, string]
     expect(type).toBe("preview-ready")
+  })
+})
+
+describe("intakeReplyContent", () => {
+  // Issue #164 (EM-4 of milestone #5): the stranger-case acknowledgement.
+  // Every string here is invented — CLAUDE.md rule 1.
+
+  it("carries the lead reference and mirrors /start's receipt promise", () => {
+    const content = intakeReplyContent("LEAD-9B21F4")
+    expect(content.body).toContain("LEAD-9B21F4")
+    expect(content.body).toContain("nothing to sign into")
+    expect(content.body).toContain("nothing to check back on")
+    expect(content.preheader).toBe("Reference LEAD-9B21F4")
+  })
+
+  it("takes only the reference — there is no parameter a caller could thread the sender's own message through", () => {
+    // `intakeReplyContent`'s entire signature is `(leadReference: string)`.
+    // This is the closest a unit test gets to proving "never quotes submission
+    // content" from the type alone; the black-box proof that the real message
+    // body never reaches this function is `test/inboundEmail.test.ts`'s own
+    // canary test, which drives the real caller.
+    expect(intakeReplyContent.length).toBe(1)
+  })
+
+  it("names no URL a browser could follow — the stranger's own lead has no Access seat yet", () => {
+    const content = intakeReplyContent("LEAD-AAAAAA")
+    expect(content.body).not.toMatch(/https?:\/\//)
+    expect(content.ctaHref).not.toContain("/leads/")
+    expect(content.ctaHref).not.toContain("/submissions/")
+  })
+
+  it("ends with the same first-person signature every other template uses", () => {
+    const content = intakeReplyContent("LEAD-AAAAAA")
+    expect(content.body).toMatch(/\n\n— John, Heuron Technology$/)
+  })
+
+  it("carries no forbidden engineer-side vocabulary", () => {
+    const forbidden = /#\d+|\bissue\s*#?\d+|\bepic\b|\bmilestone\b|\bpull request\b|\bPR\b|\bbranch|\bcommit|\bworktree\b|\bagent\b|\bworker\b|\bgithub\b|\bdaemon\b|\bcoord\b/i
+    const content = intakeReplyContent("LEAD-AAAAAA")
+    for (const [field, value] of Object.entries(content)) {
+      expect(value, field).not.toMatch(forbidden)
+    }
+  })
+})
+
+describe("enqueueIntakeReply", () => {
+  /**
+   * A fake `outbox` that enforces the same `(submission_id, coord_revision)`
+   * uniqueness the real table does — the constraint `enqueueIntakeReply`
+   * reuses as its own idempotency key (`INTAKE_REPLY_REVISION`,
+   * `src/notifications.ts`). Unlike `fakeDb` above (which only ever needs to
+   * record what was inserted), this one has to answer the read-back `SELECT`
+   * `enqueueIntakeReply` issues when its own insert loses the race, so it
+   * actually stores rows rather than just an insert log.
+   */
+  function fakeOutboxDb() {
+    const rows: Array<{ id: string; submission_id: string; coord_revision: number }> = []
+    const DB = {
+      prepare(sql: string) {
+        return {
+          bind(...args: unknown[]) {
+            return {
+              async run() {
+                if (sql.includes("INSERT INTO outbox")) {
+                  const [id, submission_id, , , , , , , , coord_revision] = args as [
+                    string,
+                    string,
+                    string,
+                    string,
+                    string,
+                    string,
+                    string,
+                    string,
+                    string,
+                    number,
+                  ]
+                  const collides = rows.some(
+                    (r) => r.submission_id === submission_id && r.coord_revision === coord_revision,
+                  )
+                  if (collides) return { meta: { changes: 0 } }
+                  rows.push({ id, submission_id, coord_revision })
+                  return { meta: { changes: 1 } }
+                }
+                throw new Error(`unrecognized run statement: ${sql}`)
+              },
+              async first<T>(): Promise<T | null> {
+                if (sql.includes("SELECT id FROM outbox WHERE submission_id")) {
+                  const [submissionId, coordRevision] = args as [string, number]
+                  const row = rows.find(
+                    (r) => r.submission_id === submissionId && r.coord_revision === coordRevision,
+                  )
+                  return (row ? { id: row.id } : null) as T | null
+                }
+                throw new Error(`unrecognized first statement: ${sql}`)
+              },
+            }
+          },
+        }
+      },
+    }
+    return { env: { DB } as unknown as Env, rows }
+  }
+
+  it("enqueues one pending intake-reply row for the given inbound email", async () => {
+    const { env, rows } = fakeOutboxDb()
+    const id = await enqueueIntakeReply(env, "inb_abc123", "stranger@example.test", "LEAD-9B21F4")
+    expect(id).toMatch(/^ntf_/)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.submission_id).toBe("inb_abc123")
+  })
+
+  it("a second call for the same inbound email id returns the first call's id, not a new one — issue #164's own idempotency", async () => {
+    const { env, rows } = fakeOutboxDb()
+    const first = await enqueueIntakeReply(env, "inb_dup999", "stranger@example.test", "LEAD-1A2B3C")
+    const second = await enqueueIntakeReply(env, "inb_dup999", "stranger@example.test", "LEAD-1A2B3C")
+    expect(second).toBe(first)
+    expect(rows).toHaveLength(1)
+  })
+
+  it("two different inbound emails each get their own draft", async () => {
+    const { env, rows } = fakeOutboxDb()
+    const a = await enqueueIntakeReply(env, "inb_one", "one@example.test", "LEAD-111111")
+    const b = await enqueueIntakeReply(env, "inb_two", "two@example.test", "LEAD-222222")
+    expect(a).not.toBe(b)
+    expect(rows).toHaveLength(2)
   })
 })
 

@@ -1,16 +1,35 @@
 import PostalMime, { type Email, type Address } from "postal-mime"
 import { generateInboundEmailId } from "./ids"
 import { routeInboundMessage, type RoutedKind, type RoutingRung } from "./inboundRouter"
+import { createLead } from "./leads"
+import { enqueueIntakeReply } from "./notifications"
 import type { Env } from "./types"
 
 /**
  * The inbound seam — issue #161 (EM-1 of milestone #5).
  *
- * One real message in, one `inbound_emails` row out. This module **routes
- * nothing and replies to nothing** (#161's own scope sentence): it records what
- * arrived and refuses what should never earn an answer. EM-3 routes, EM-4/EM-5
- * draft, EM-9 rate-limits; every column those issues will fill is nullable in
+ * One real message in, one `inbound_emails` row out. This module's own scope
+ * sentence used to be "routes nothing and replies to nothing" — #161's,
+ * before EM-3 (routing, issue #163) and EM-4 (drafting rung 6's stranger case,
+ * issue #164) both landed here. EM-5 (a known thread) and EM-9 (rate limits)
+ * are still ahead; every column those issues will fill stays nullable in
  * `migrations/0020_inbound_emails.sql` and untouched here.
+ *
+ * ── EM-4: RUNG 6 CREATES A LEAD AND DRAFTS AN ACKNOWLEDGEMENT (ISSUE #164) ──
+ * `recordInboundEmail` below still writes the `inbound_emails` row exactly as
+ * EM-1/EM-3 left it — parse, suppress-or-route, insert, guarded against a
+ * redelivery. What EM-4 adds is a second step, reached only when that insert
+ * genuinely won (never for a redelivery the guard already resolved) and the
+ * router's own decision was rung 6, `"lead"`: mint a lead via
+ * `createLead` (`src/leads.ts`) — "not a copy of it, not a variant: the *same
+ * function* `POST /start` calls" — draft its acknowledgement via
+ * `enqueueIntakeReply` (`src/notifications.ts`), and record both ids back onto
+ * the row that produced them (`routed_lead_id`, `outbox_id`). Doing this
+ * *after* the guarded insert, rather than before it, is what keeps a
+ * redelivery from minting a second lead: the insert either wins once (this is
+ * a genuinely new message; proceed) or loses (this is a redelivery; the
+ * function returns the existing row, lead and draft ids already attached,
+ * without calling `createLead`/`enqueueIntakeReply` a second time).
  *
  * ── WHY THIS IS NOT A REQUEST HANDLER ──────────────────────────────────────
  * Cloudflare Email Routing invokes the Worker's `email()` export directly.
@@ -120,6 +139,23 @@ export interface InboundEmailRecord {
   routedReason: string | null
   /** The candidate the router scored but did not pick, or `null` when there was never a second one. */
   routedRunnerUp: string | null
+  /**
+   * ── EM-4'S OWN LINK (ISSUE #164) ──────────────────────────────────────────
+   * The `leads.id` this row produced, set exactly when `routedKind === "lead"`
+   * — rung 6, "nobody we know". `null` for every other row: a `message` row
+   * links nowhere here (EM-5 owns `routed_submission_id`), an `unrouted` row
+   * is deliberately never given a lead ("inventing a fresh lead for someone
+   * who may already be a customer is exactly the split-brain CLAUDE.md's
+   * ownership rule warns about" — `src/inboundRouter.ts`'s own words), and a
+   * `suppressed`/`rate_limited` row was never routed at all.
+   */
+  routedLeadId: string | null
+  /**
+   * The `outbox.id` of the drafted acknowledgement this row produced, set
+   * alongside `routedLeadId` by the same EM-4 write. `null` whenever
+   * `routedLeadId` is — there is no lead to acknowledge, so nothing to draft.
+   */
+  outboxId: string | null
 }
 
 export interface RecordInboundEmailResult {
@@ -217,9 +253,49 @@ export async function recordInboundEmail(
     routedRung: decision?.rung ?? null,
     routedReason: decision?.reason ?? null,
     routedRunnerUp: decision?.runnerUp?.reason ?? null,
+    // Filled in below, after the insert, only for a genuinely new rung-6 row.
+    routedLeadId: null,
+    outboxId: null,
   }
 
-  return insertInboundEmail(env, record)
+  const inserted = await insertInboundEmail(env, record)
+
+  // A redelivery: the row (and, if it ever produced one, its lead and draft)
+  // already exist. Nothing left to do — see the module doc's "EM-4" section
+  // for why this check, not a second guard inside `createLeadAndDraftReply`,
+  // is what keeps a redelivery from minting a second lead.
+  if (inserted.duplicate) return inserted
+
+  if (decision?.kind === "lead") {
+    const linked = await createLeadAndDraftReply(env, inserted.record)
+    return { record: linked, duplicate: false }
+  }
+
+  return inserted
+}
+
+/**
+ * EM-4's own write (issue #164): mint the lead rung 6 decided on, draft its
+ * acknowledgement, and record both ids back onto the `inbound_emails` row
+ * that produced them. Only ever called once per inbound email — see
+ * `recordInboundEmail`'s own guard above.
+ */
+async function createLeadAndDraftReply(
+  env: Env,
+  record: InboundEmailRecord,
+): Promise<InboundEmailRecord> {
+  const lead = await createLead(env, {
+    summary: record.bodyText,
+    email: record.fromEmail,
+    name: record.fromName,
+  })
+  const outboxId = await enqueueIntakeReply(env, record.id, record.fromEmail, lead.reference)
+
+  await env.DB.prepare(`UPDATE inbound_emails SET routed_lead_id = ?, outbox_id = ? WHERE id = ?`)
+    .bind(lead.id, outboxId, record.id)
+    .run()
+
+  return { ...record, routedLeadId: lead.id, outboxId }
 }
 
 /**
@@ -236,6 +312,13 @@ export async function recordInboundEmail(
  * record it built and threw away, or the same message would report two
  * different ids. Same "read back rather than assuming the race was won" shape
  * `promoteLead` already uses.
+ *
+ * `routed_lead_id`/`outbox_id` are deliberately absent from the column list
+ * below — `record.routedLeadId`/`record.outboxId` are always `null` at this
+ * point (see `recordInboundEmail`), so leaving them out of the `INSERT` and
+ * off their column defaults reaches the same `NULL` with less to bind. EM-4's
+ * own `UPDATE` (`createLeadAndDraftReply`) is what ever sets them, strictly
+ * after this insert has already won.
  */
 async function insertInboundEmail(
   env: Env,
@@ -295,7 +378,8 @@ async function findByMessageId(
 const SELECT_COLUMNS = `SELECT id, message_id, from_email, from_name, to_email, subject,
          body_text, received_at, auth_result, disposition, suppression_reason,
          attachment_count, body_truncated,
-         routed_kind, routed_rung, routed_reason, routed_runner_up
+         routed_kind, routed_rung, routed_reason, routed_runner_up,
+         routed_lead_id, outbox_id
     FROM inbound_emails`
 
 /**
@@ -330,6 +414,8 @@ interface InboundEmailRow {
   routed_rung: number | null
   routed_reason: string | null
   routed_runner_up: string | null
+  routed_lead_id: string | null
+  outbox_id: string | null
 }
 
 function fromRow(row: InboundEmailRow): InboundEmailRecord {
@@ -351,6 +437,8 @@ function fromRow(row: InboundEmailRow): InboundEmailRecord {
     routedRung: row.routed_rung as RoutingRung | null,
     routedReason: row.routed_reason,
     routedRunnerUp: row.routed_runner_up,
+    routedLeadId: row.routed_lead_id,
+    outboxId: row.outbox_id,
   }
 }
 
