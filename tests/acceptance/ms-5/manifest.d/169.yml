@@ -1,0 +1,62 @@
+# ms-5 issue #169 — sealed acceptance manifest fragment (#2543: this issue's
+# own file; no other slice writes here, and this slice writes to no other
+# issue's manifest.d/<N>.yml).
+#
+# Ids are the `web-playwright` driver's node ids, exactly as
+# `coord.acceptance_drivers.parse_playwright_json_report` builds them:
+#
+#   [{project}] {file relative to testDir} › {describe path} › {test title}
+#
+# `testDir` is `./tests/acceptance` (see `playwright.acceptance.config.ts`).
+
+issues:
+  169:
+    - "[chromium] ms-5/169-em9-rate-limit-and-attachments.spec.ts › ms-5 issue 169 EM-9: rate-limit inbound drafts, and say out loud that attachments are dropped › a sender under the cap gets a recorded inbound row and a new draft"
+    - "[chromium] ms-5/169-em9-rate-limit-and-attachments.spec.ts › ms-5 issue 169 EM-9: rate-limit inbound drafts, and say out loud that attachments are dropped › a sender past the per-sender cap gets a recorded inbound row and no new draft, while their earlier messages in the same window still draft"
+    - "[chromium] ms-5/169-em9-rate-limit-and-attachments.spec.ts › ms-5 issue 169 EM-9: rate-limit inbound drafts, and say out loud that attachments are dropped › more than 20 drafts across all senders in the same window rate-limits the overflow, regardless of sender"
+    - "[chromium] ms-5/169-em9-rate-limit-and-attachments.spec.ts › ms-5 issue 169 EM-9: rate-limit inbound drafts, and say out loud that attachments are dropped › a message with an attachment records the count, drops the payload, and its draft's rendered body says the attachment was not received"
+    - "[chromium] ms-5/169-em9-rate-limit-and-attachments.spec.ts › ms-5 issue 169 EM-9: rate-limit inbound drafts, and say out loud that attachments are dropped › reply-attachments-dropped renders the count on /replies and /replies/:id, and is absent when there is none"
+
+# Recorded from `npm run test:acceptance -- ms-5/169` (after `npm ci` +
+# `npx playwright install chromium`), against this branch's checkout with
+# #161-#168 already landed (schema head 0023_inbound_promotion.sql, the
+# router, EM-4/EM-5/EM-6/EM-7/EM-8 all already implemented) but #169 itself
+# unimplemented (no rate limiting in the inbound path, no attachment-drop
+# sentence in the drafted body): 3 failed, 2 passed, 0 skipped.
+#
+# The three below were OBSERVED failing:
+#  - the per-sender-cap test: message #6 of a same-sender burst of 7 came
+#    back `disposition = "received"` where the contract's own cap (more than
+#    5 in the 5s window) requires `"rate_limited"` — no per-sender limiter
+#    exists yet.
+#  - the total-cap test: message #21 of a 21-sender burst came back
+#    `"received"` where the contract's own total cap (more than 20 in the 5s
+#    window) requires `"rate_limited"` — no total limiter exists yet.
+#  - the attachment test: the drafted body for a message with one attachment
+#    contained no mention of "attach" at all (`src/notifications.ts`'s "we
+#    can't take attachments yet" line, issue #169's own Files list, does not
+#    exist yet) — got only the ordinary EM-4/EM-5 acknowledgement text, with
+#    no disclosure that an attachment was received and dropped.
+#
+# Two ids are deliberately NOT listed as expected-red, per the
+# OBSERVED-not-INTENDED rule — both passed against the unimplemented state:
+#  - "a sender under the cap gets a recorded inbound row and a new draft" is
+#    a genuine control clause: an ordinary, single, under-every-cap message
+#    already gets recorded and drafted through #161/#164/#165's own
+#    already-landed write paths, with nothing #169-specific to be red about.
+#    It must keep passing once #169 lands (a normal sender must never trip
+#    the limiter it adds).
+#  - "reply-attachments-dropped renders the count..." passed VACUOUSLY: the
+#    contract's own schema table already credits `attachment_count` to
+#    "EM-1/EM-9" (EM-1's `postal-mime` parse already sets it), and EM-6's
+#    already-landed `/replies`/`/replies/:id` templates already render the
+#    `reply-attachments-dropped` hook conditionally on it — #169 does not
+#    have to add anything for this specific hook-rendering assertion to hold.
+#    It is kept in the suite as a ratchet (must keep passing), not struck,
+#    since it is still a real, contract-derived assertion — just not one
+#    #169 itself makes newly true.
+expected_red:
+  169:
+    - "[chromium] ms-5/169-em9-rate-limit-and-attachments.spec.ts › ms-5 issue 169 EM-9: rate-limit inbound drafts, and say out loud that attachments are dropped › a sender past the per-sender cap gets a recorded inbound row and no new draft, while their earlier messages in the same window still draft"
+    - "[chromium] ms-5/169-em9-rate-limit-and-attachments.spec.ts › ms-5 issue 169 EM-9: rate-limit inbound drafts, and say out loud that attachments are dropped › more than 20 drafts across all senders in the same window rate-limits the overflow, regardless of sender"
+    - "[chromium] ms-5/169-em9-rate-limit-and-attachments.spec.ts › ms-5 issue 169 EM-9: rate-limit inbound drafts, and say out loud that attachments are dropped › a message with an attachment records the count, drops the payload, and its draft's rendered body says the attachment was not received"
