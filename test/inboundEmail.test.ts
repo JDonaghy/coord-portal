@@ -7,6 +7,7 @@ import {
   type InboundEmailRecord,
 } from "../src/inboundEmail"
 import { inboundTestDoor } from "../src/routes/inboundTestDoor"
+import { PER_SENDER_MAX_DRAFTS } from "../src/rateLimit"
 import type { Env } from "../src/types"
 
 /**
@@ -145,6 +146,13 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
   const store: StoredRow[] = []
   const leads: StoredLead[] = []
   const outbox: StoredOutbox[] = []
+  // EM-9 (#169): `isInboundDraftRateLimited` (`src/rateLimit.ts`) writes and
+  // counts one row per draft attempt here, keyed on `from_email`/`at` exactly
+  // like the real `inbound_draft_attempts` table (0024). Modelled with real
+  // counting, not a stub that always answers "under budget", so a test that
+  // sends a genuine burst (see "EM-9 — rate limiting" below) exercises it
+  // honestly.
+  const draftAttempts: Array<{ from_email: string; at: string }> = []
   const norm = (sql: string) => sql.replace(/\s+/g, " ").trim()
 
   /** The `WHERE EXISTS (SELECT 1 FROM inbound_emails WHERE id = ?)` tail EM-4's own writes carry. */
@@ -238,10 +246,42 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
                 })
                 return { meta: { changes: 1 } }
               }
+              // EM-9 (#169): `isInboundDraftRateLimited`'s own insert+delete
+              // batch, mirrored on this fake table — see `draftAttempts` above.
+              if (statement.startsWith("INSERT INTO inbound_draft_attempts")) {
+                const [from_email, at] = args as [string, string]
+                draftAttempts.push({ from_email, at })
+                return { meta: { changes: 1 } }
+              }
+              if (statement.startsWith("DELETE FROM inbound_draft_attempts")) {
+                const [fromEmail, retentionStart] = args as [string, string]
+                for (let i = draftAttempts.length - 1; i >= 0; i--) {
+                  const row = draftAttempts[i]
+                  if (row !== undefined && row.from_email === fromEmail && row.at < retentionStart) {
+                    draftAttempts.splice(i, 1)
+                  }
+                }
+                return { meta: { changes: 0 } }
+              }
               throw new Error(`unrecognized run statement: ${statement}`)
             },
             async first<T>(): Promise<T | null> {
               if (isRouterRead(statement)) return null
+              // EM-9 (#169): the per-sender and total draft-rate-limit counts —
+              // see `isInboundDraftRateLimited` (`src/rateLimit.ts`). Told apart
+              // by whether the query also filters on `from_email`.
+              if (statement.includes("FROM inbound_draft_attempts") && statement.includes("COUNT(*)")) {
+                if (statement.includes("from_email = ?")) {
+                  const [fromEmail, windowStart] = args as [string, string]
+                  const count = draftAttempts.filter(
+                    (a) => a.from_email === fromEmail && a.at >= windowStart,
+                  ).length
+                  return { count } as unknown as T
+                }
+                const [windowStart] = args as [string]
+                const count = draftAttempts.filter((a) => a.at >= windowStart).length
+                return { count } as unknown as T
+              }
               if (!statement.includes("WHERE message_id = ?")) {
                 throw new Error(`unrecognized first statement: ${statement}`)
               }
@@ -269,10 +309,18 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
     },
   }
 
-  return { DB, ...vars, rows: store, leadRows: leads, outboxRows: outbox } as unknown as Env & {
+  return {
+    DB,
+    ...vars,
+    rows: store,
+    leadRows: leads,
+    outboxRows: outbox,
+    draftAttemptRows: draftAttempts,
+  } as unknown as Env & {
     rows: StoredRow[]
     leadRows: StoredLead[]
     outboxRows: StoredOutbox[]
+    draftAttemptRows: Array<{ from_email: string; at: string }>
   }
 }
 
@@ -361,6 +409,11 @@ function storedLeads(env: Env): StoredLead[] {
 
 function storedOutbox(env: Env): StoredOutbox[] {
   return (env as unknown as { outboxRows: StoredOutbox[] }).outboxRows
+}
+
+/** EM-9 (#169): every recorded draft-rate-limit attempt — see `fakeInboundEnv`'s `draftAttempts`. */
+function storedDraftAttempts(env: Env): Array<{ from_email: string; at: string }> {
+  return (env as unknown as { draftAttemptRows: Array<{ from_email: string; at: string }> }).draftAttemptRows
 }
 
 interface BlobOptions {
@@ -639,6 +692,135 @@ describe("size caps", () => {
     const { record: row } = await record(env, { body: "short and sweet" })
     expect(row.bodyTruncated).toBe(false)
     expect(row.bodyText).toBe("short and sweet")
+  })
+})
+
+/**
+ * Issue #169 (EM-9 of milestone #5): "Cap drafts created, per sender and in
+ * total, reusing the shape `src/rateLimit.ts` already has." What this file's
+ * own fake DB earns its keep on is the *wiring* in `recordInboundEmail` —
+ * that the cap is checked after suppression and before routing, that a
+ * tripped cap produces `disposition = 'rate_limited'` with no lead, no
+ * message and no draft, and that it does not touch a message the suppression
+ * rules already refused. The underlying D1 sliding-window count itself is
+ * `isRateLimited`'s own territory (`src/rateLimit.ts`) and, per this repo's
+ * "a mocked D1 only proves the stub does what I wrote it to do" convention
+ * (`test/rateLimit.test.ts`'s own module doc), is covered against real D1 by
+ * `e2e/inbound-rate-limit.spec.ts` and the sealed acceptance suite instead.
+ */
+describe("EM-9 — rate limiting drafts, per sender and in total (issue #169)", () => {
+  it("a sender under the cap gets a recorded row and a new draft — issue #169's own acceptance wording", async () => {
+    const env = fakeInboundEnv()
+    const { record: row } = await record(env)
+    expect(row.disposition).toBe("received")
+    expect(row.outboxId, "\"a sender under it gets both\"").not.toBeNull()
+  })
+
+  it("rate-limits a sender's own overflow message, while their earlier messages in the same burst still draft", async () => {
+    const env = fakeInboundEnv()
+    const burstSize = PER_SENDER_MAX_DRAFTS + 2 // two messages should overflow
+
+    const results: Array<{
+      disposition: InboundEmailRecord["disposition"]
+      outboxId: string | null
+      routedKind: string | null
+    }> = []
+    for (let i = 0; i < burstSize; i++) {
+      // eslint-disable-next-line no-await-in-loop -- ordering across the burst is the whole point
+      const { record: row } = await record(env, { messageId: `em9-sender-burst-${i}@sender.example.test` })
+      results.push({ disposition: row.disposition, outboxId: row.outboxId, routedKind: row.routedKind })
+    }
+
+    for (let i = 0; i < PER_SENDER_MAX_DRAFTS; i++) {
+      expect(results[i]?.disposition, `message #${i + 1} is within the per-sender cap`).toBe("received")
+      expect(results[i]?.outboxId, `message #${i + 1} earns a draft`).not.toBeNull()
+    }
+    for (let i = PER_SENDER_MAX_DRAFTS; i < burstSize; i++) {
+      expect(results[i]?.disposition, `message #${i + 1} exceeds the per-sender cap`).toBe("rate_limited")
+      expect(results[i]?.outboxId, "a rate-limited message earns no draft").toBeNull()
+      expect(results[i]?.routedKind, "a rate-limited message is never routed at all").toBeNull()
+    }
+
+    // Still recorded, "should not erase the evidence of itself" — #169's own words.
+    expect(storedRows(env)).toHaveLength(burstSize)
+    expect(storedOutbox(env)).toHaveLength(PER_SENDER_MAX_DRAFTS)
+    expect(storedLeads(env)).toHaveLength(PER_SENDER_MAX_DRAFTS)
+  })
+
+  it("does not spend the draft-rate-limit budget on a message the suppression rules already refused", async () => {
+    const env = fakeInboundEnv()
+    const burstSize = PER_SENDER_MAX_DRAFTS + 2
+
+    for (let i = 0; i < burstSize; i++) {
+      const { record: row } = await record(env, {
+        // eslint-disable-next-line no-await-in-loop -- ordering is the point
+        messageId: `em9-suppressed-burst-${i}@sender.example.test`,
+        extraHeaders: { "Auto-Submitted": "auto-replied" },
+      })
+      expect(row.disposition, "an auto-responder is suppressed, never rate-limited").toBe("suppressed")
+    }
+
+    expect(
+      storedDraftAttempts(env),
+      "a suppressed message was never going to draft anything, so it must not cost this budget",
+    ).toHaveLength(0)
+  })
+})
+
+/**
+ * Issue #169 (EM-9): "Dropped, and the reply says so." `attachmentCount` was
+ * already computed and stored by EM-1; this issue is the first thing that
+ * actually reads it back out on the way to a draft. See
+ * `test/notifications.test.ts`'s own coverage of `intakeReplyContent`'s and
+ * `routedReplyContent`'s attachment-disclosure copy for the templates in
+ * isolation — this describes the wiring that gets a real message's count to
+ * them.
+ */
+describe("EM-9 — attachments: dropped, counted, and disclosed in the draft (issue #169)", () => {
+  const attachmentBlob = [
+    "From: wren@sender.example.test",
+    "Subject: with an attachment",
+    "Message-ID: <em9-attach@sender.example.test>",
+    "MIME-Version: 1.0",
+    'Content-Type: multipart/mixed; boundary="bnd"',
+    "",
+    "--bnd",
+    'Content-Type: text/plain; charset="utf-8"',
+    "",
+    "See attached.",
+    "--bnd",
+    'Content-Type: text/plain; name="notes.txt"',
+    'Content-Disposition: attachment; filename="notes.txt"',
+    "",
+    "some notes",
+    "--bnd--",
+    "",
+  ].join("\r\n")
+
+  it("the drafted body says the attachment did not come through, without claiming it was kept", async () => {
+    const env = fakeInboundEnv()
+    const { record: row } = await recordInboundEmail(env, {
+      from: "wren@sender.example.test",
+      to: "intake@mail.example.test",
+      raw: attachmentBlob,
+    })
+    expect(row.attachmentCount).toBe(1)
+    expect(row.outboxId).not.toBeNull()
+
+    const draft = storedOutbox(env).find((o) => o.id === row.outboxId)
+    expect(draft?.body).toMatch(/attach/i)
+    expect(draft?.body).not.toMatch(/\b(saved|kept|available|download|retrievable)\b/i)
+    // #164's own rule holds for an attachment-bearing message too: never
+    // quote the sender's own words back to them.
+    expect(draft?.body).not.toContain("See attached.")
+  })
+
+  it("drafts no attachment disclosure at all when there is nothing to disclose", async () => {
+    const env = fakeInboundEnv()
+    const { record: row } = await record(env)
+    expect(row.attachmentCount).toBe(0)
+    const draft = storedOutbox(env).find((o) => o.id === row.outboxId)
+    expect(draft?.body).not.toMatch(/attach/i)
   })
 })
 

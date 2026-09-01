@@ -683,7 +683,11 @@ export async function postReplyRoute(request: Request, env: Env, id: string): Pr
  * lands entirely or not at all.
  */
 async function routeToProject(env: Env, view: ReplyView, picked: RoutingCandidate): Promise<void> {
-  const content = routedReplyContent(`/submissions/${picked.submissionId}`)
+  // EM-9 (#169): a re-route re-renders the draft "from the template" (the
+  // contract's own words), and the template's attachment disclosure is part
+  // of that render — a message that arrived with an attachment must not lose
+  // that sentence just because an operator pointed it at a different project.
+  const content = routedReplyContent(`/submissions/${picked.submissionId}`, view.inbound.attachmentCount)
   const retarget: InboundRetarget = {
     kind: "message",
     reason: `An operator attached this to "${picked.title}" (${picked.submissionReference}) by hand — the router's own rung ${rungOf(view.inbound)} decision did not stand.`,
@@ -737,8 +741,10 @@ async function routeToLead(env: Env, view: ReplyView): Promise<void> {
     leadId: lead.id,
   }
 
+  // EM-9 (#169): same "re-rendered from the template" reasoning as
+  // `routeToProject` above — the attachment disclosure survives becoming a lead.
   const statements = [
-    redraftReplyStatement(env, draft.id, intakeReplyContent(lead.reference)),
+    redraftReplyStatement(env, draft.id, intakeReplyContent(lead.reference, inbound.attachmentCount)),
     retargetInboundEmailStatement(env, inbound.id, retarget, pendingDraftGuard(draft.id, "AND")),
   ]
   if (existing === null) statements.push(leadCreationStatement(env, lead, pendingDraftGuard(draft.id)))

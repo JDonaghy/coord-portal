@@ -74,6 +74,95 @@ export async function isRateLimited(env: Env, ip: string): Promise<boolean> {
 }
 
 /**
+ * ── ISSUE #169 (EM-9 of milestone #5) — THE SAME SHAPE, FOR THE INBOUND MAILBOX ──
+ *
+ * "The abuse controls a mailbox needs and a form already has." `POST /start`
+ * has Turnstile plus this coarse cap; a mailbox cannot have Turnstile at all
+ * — Cloudflare Email Routing hands `email()` a message however fast an
+ * attacker can send one — so the cap above is the whole defense reused, not
+ * a new mechanism. Storage is `migrations/0024_inbound_draft_attempts.sql`,
+ * `start_attempts`'s own precedent: one row per attempt, a sliding window
+ * over `at`, no reset seam.
+ *
+ * ── TWO CAPS, ONE TABLE ──────────────────────────────────────────────────────
+ * EM-9's own text: "Cap drafts created, per sender and in total." Both caps
+ * share the same attempt log and the same window — a per-sender count (`AND
+ * from_email = ?`) and a total count (no such predicate) over the same rows
+ * — so there is exactly one place that decides what "recently" means, not
+ * two windows that could drift apart.
+ *
+ * ── WHY THE CALLER CHECKS THIS AFTER SUPPRESSION, NOT BEFORE ────────────────
+ * Unlike `isRateLimited` above, this budget is not spent by every inbound
+ * message — only by one that would otherwise earn a draft. A message
+ * `detectSuppression` (`src/inboundEmail.ts`) already refuses — an
+ * auto-responder, a bounce, a mailing list — was never going to draft
+ * anything regardless of this cap, and there is no `siteverify`-shaped
+ * external cost here that a suppressed message could still be inflating (the
+ * whole reason `isRateLimited` above spends its budget on *every* attempt,
+ * accepted or not). `src/inboundEmail.ts`'s own call site enforces the
+ * ordering; this function does not gate on disposition itself.
+ */
+const DRAFT_WINDOW_MS = 5_000
+
+/**
+ * More than this many drafts from one sender inside the window trips the
+ * cap. Exported so `test/inboundEmail.test.ts`'s own wiring tests (and, if a
+ * future e2e fixture needs it, `e2e/`) can size a burst off this value rather
+ * than a second, driftable copy of the number.
+ */
+export const PER_SENDER_MAX_DRAFTS = 5
+
+/** More than this many drafts across every sender inside the window trips the cap. */
+export const TOTAL_MAX_DRAFTS = 20
+
+/** Same retention reasoning as `isRateLimited`'s own hygiene delete, scoped the same way — per sender. */
+const DRAFT_RETENTION_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Records this draft attempt and reports whether `fromEmail` (or the mailbox
+ * as a whole) is over budget — including the attempt just recorded, so the
+ * (N+1)th message in a window is the one that trips it, matching
+ * `isRateLimited`'s own "the Nth request is the one" convention above.
+ *
+ * `fromEmail` is expected already normalised (lowercased, clamped) — the
+ * same value `inbound_emails.from_email` records — so this bucket and that
+ * column agree about what "the same sender" means without a second pass of
+ * normalisation here.
+ */
+export async function isInboundDraftRateLimited(env: Env, fromEmail: string): Promise<boolean> {
+  const nowMs = Date.now()
+  const now = new Date(nowMs).toISOString()
+  const windowStart = new Date(nowMs - DRAFT_WINDOW_MS).toISOString()
+  const retentionStart = new Date(nowMs - DRAFT_RETENTION_MS).toISOString()
+
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO inbound_draft_attempts (from_email, at) VALUES (?, ?)`).bind(fromEmail, now),
+    // Opportunistic hygiene, scoped to this sender for the same reason
+    // `isRateLimited`'s own delete is: a cheap, indexed delete rather than a
+    // table scan, at the cost of not pruning a sender who never comes back —
+    // acceptable for the same reason it is acceptable there.
+    env.DB.prepare(`DELETE FROM inbound_draft_attempts WHERE from_email = ? AND at < ?`).bind(
+      fromEmail,
+      retentionStart,
+    ),
+  ])
+
+  const perSender = await env.DB.prepare(
+    `SELECT COUNT(*) AS count FROM inbound_draft_attempts WHERE from_email = ? AND at >= ?`,
+  )
+    .bind(fromEmail, windowStart)
+    .first<{ count: number }>()
+
+  const total = await env.DB.prepare(
+    `SELECT COUNT(*) AS count FROM inbound_draft_attempts WHERE at >= ?`,
+  )
+    .bind(windowStart)
+    .first<{ count: number }>()
+
+  return (perSender?.count ?? 0) > PER_SENDER_MAX_DRAFTS || (total?.count ?? 0) > TOTAL_MAX_DRAFTS
+}
+
+/**
  * The caller's address, as best a Cloudflare Worker can know it.
  *
  * `CF-Connecting-IP` is the only IP surface a Worker has, set by the edge in
