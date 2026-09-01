@@ -1,0 +1,48 @@
+# ms-5 issue #168 — sealed acceptance manifest fragment (this issue's own,
+# per #2543 — no other slice writes to this file, and this file writes to no
+# other issue's).
+#
+# Ids are the `web-playwright` driver's node ids, exactly as
+# `coord.acceptance_drivers.parse_playwright_json_report` builds them:
+#
+#   [{project}] {file relative to testDir} › {describe path} › {test title}
+#
+# `testDir` is `./tests/acceptance` (see `playwright.acceptance.config.ts`), so
+# the file component is `ms-5/168-em8-reply-to.spec.ts`. Confirmed
+# character-for-character against `playwright test --reporter=json`'s own
+# output for this file, not typed by hand.
+
+issues:
+  168:
+    - "[chromium] ms-5/168-em8-reply-to.spec.ts › ms-5 issue 168 EM-8: converge reply routing on a plus-addressed Reply-To › every outbound notification carries a Reply-To bearing its own submission's reference, resolved independently per row"
+    - "[chromium] ms-5/168-em8-reply-to.spec.ts › ms-5 issue 168 EM-8: converge reply routing on a plus-addressed Reply-To › a reply delivered to that Reply-To address routes by rung 1 to that exact submission"
+    - "[chromium] ms-5/168-em8-reply-to.spec.ts › ms-5 issue 168 EM-8: converge reply routing on a plus-addressed Reply-To › an outbox row with no submission reference to bear sends with a Reply-To that is present-and-plausible or absent, never a malformed one"
+
+# Tests OBSERVED failing against the unimplemented state (checkout at schema
+# head 0023_inbound_promotion.sql — #161-#167 already landed, #168 itself
+# not: `wrangler.toml`'s `REPLY_TO` is still the flat, deployment-wide
+# `"jdonaghy@heurontech.com"` literal #52 left it as, and `src/drain.ts`
+# reads it once via `env.REPLY_TO` with no per-row resolution), recorded from
+# `npm run test:acceptance -- ms-5/168` (after `npm ci` +
+# `npx playwright install chromium`): 2 failed, 1 passed, 0 skipped.
+#
+# The first two ids below were watched to fail, both on the same underlying
+# signal — the recorded `replyTo` read back exactly
+# `"jdonaghy@heurontech.com"` (the flat configured value) where each test
+# expected a plus-addressed, per-submission one (`+SUB-XXXXXX@…`), because
+# #168 is the issue that makes `src/drain.ts` resolve it per row at all.
+#
+# The third id — the no-submission-reference fallback test — is NOT included
+# below. It PASSED against the unimplemented state: with `Reply-To` still
+# flat and deployment-wide (the pre-#168 shape), every row already sends
+# with exactly the "plain configured address, never malformed" behaviour
+# that test asserts — there is no per-row resolution yet to be absent-when-
+# it-should-be. This is a genuine control clause, not a gap: it must keep
+# passing once #168 lands (a row with nothing to derive a reference from
+# must still fall back cleanly), so it stays in the suite un-strengthened,
+# per the OBSERVED-not-INTENDED rule — it was not observed failing, so it is
+# not listed as expected-red.
+expected_red:
+  168:
+    - "[chromium] ms-5/168-em8-reply-to.spec.ts › ms-5 issue 168 EM-8: converge reply routing on a plus-addressed Reply-To › every outbound notification carries a Reply-To bearing its own submission's reference, resolved independently per row"
+    - "[chromium] ms-5/168-em8-reply-to.spec.ts › ms-5 issue 168 EM-8: converge reply routing on a plus-addressed Reply-To › a reply delivered to that Reply-To address routes by rung 1 to that exact submission"
