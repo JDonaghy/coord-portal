@@ -36,6 +36,8 @@ interface StoredRow {
   body: string
   cta_text: string
   cta_href: string
+  /** Issue #168's own column — see `QueuedRow.submission_id` in `src/drain.ts`. */
+  submission_id: string
   attempts: number
   status: string
   last_error: string | null
@@ -56,6 +58,7 @@ function seedRow(overrides: Partial<StoredRow> = {}): StoredRow {
     body: "We've put together a design. Take a look.",
     cta_text: "Review the design",
     cta_href: "/submissions/SUB-DRAIN01",
+    submission_id: "SUB-DRAIN1",
     attempts: 0,
     status: "queued",
     last_error: null,
@@ -181,6 +184,7 @@ function queuedRowFrom(stored: StoredRow): QueuedRow {
     body: stored.body,
     cta_text: stored.cta_text,
     cta_href: stored.cta_href,
+    submission_id: stored.submission_id,
     attempts: stored.attempts,
   }
 }
@@ -632,6 +636,115 @@ describe("processRow — the CTA link (issue #83)", () => {
     expect(captured?.ctaHref).toBeUndefined()
     expect(captured?.ctaText).toBeUndefined()
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("PUBLIC_BASE_URL"))
+  })
+})
+
+describe("processRow — Reply-To (issue #168, EM-8)", () => {
+  it("plus-addresses the configured REPLY_TO with this row's own submission reference", async () => {
+    const seeded = seedRow({ submission_id: "SUB-ABC123" })
+    const { DB } = fakeDrainDB([seeded])
+    const env = { DB, REPLY_TO: "intake@mail.example.test" } as unknown as Env
+
+    let captured: OutboundEmail | undefined
+    const provider: MailProvider = {
+      async send(email) {
+        captured = email
+        return { ok: true, providerMessageId: "fake-msg-replyto" }
+      },
+    }
+
+    await processRow(env, provider, queuedRowFrom(seeded))
+
+    expect(captured?.replyTo).toBe("intake+SUB-ABC123@mail.example.test")
+  })
+
+  it("resolves the plus-address independently per row, not once for the whole batch", async () => {
+    const rows = [
+      seedRow({ id: "outbox-1", to_email: "rota-a@example.test", submission_id: "SUB-AAAAAA" }),
+      seedRow({ id: "outbox-2", to_email: "rota-b@example.test", submission_id: "SUB-BBBBBB" }),
+    ]
+    const { DB } = fakeDrainDB(rows)
+    const env = { DB, MAIL_PROVIDER: "fake", REPLY_TO: "intake@mail.example.test" } as unknown as Env
+
+    const captured: OutboundEmail[] = []
+    const provider: MailProvider = {
+      async send(email) {
+        captured.push(email)
+        return { ok: true, providerMessageId: `fake-${captured.length}` }
+      },
+    }
+
+    for (const row of rows) {
+      await processRow(env, provider, queuedRowFrom(row))
+    }
+
+    expect(captured[0]?.replyTo).toBe("intake+SUB-AAAAAA@mail.example.test")
+    expect(captured[1]?.replyTo).toBe("intake+SUB-BBBBBB@mail.example.test")
+    expect(
+      captured[0]?.replyTo,
+      "a flat, read-once REPLY_TO (the pre-#168 shape) would make these equal",
+    ).not.toBe(captured[1]?.replyTo)
+  })
+
+  it("falls back to the plain configured address for a row with no submission reference to bear (e.g. an intake-reply draft)", async () => {
+    // `outbox.submission_id` for an `intake-reply` row is an `inbound_emails.id`
+    // (`inb_...`), never a `SUB-XXXXXX` reference — see `QueuedRow.submission_id`'s
+    // own doc in `src/drain.ts`. "Should not occur" per #168's own words, but
+    // this is the one case in this codebase today that actually produces it.
+    const seeded = seedRow({ submission_id: "inb_0123456789abcdef01234567" })
+    const { DB } = fakeDrainDB([seeded])
+    const env = { DB, REPLY_TO: "intake@mail.example.test" } as unknown as Env
+
+    let captured: OutboundEmail | undefined
+    const provider: MailProvider = {
+      async send(email) {
+        captured = email
+        return { ok: true, providerMessageId: "fake-msg-noref" }
+      },
+    }
+
+    await processRow(env, provider, queuedRowFrom(seeded))
+
+    expect(
+      captured?.replyTo,
+      "absent beats broken — the plain configured address, never a malformed plus-address",
+    ).toBe("intake@mail.example.test")
+  })
+
+  it("falls back to the plain configured address when REPLY_TO itself has no @ to insert a token before", async () => {
+    const seeded = seedRow({ submission_id: "SUB-ABC123" })
+    const { DB } = fakeDrainDB([seeded])
+    const env = { DB, REPLY_TO: "not-an-address" } as unknown as Env
+
+    let captured: OutboundEmail | undefined
+    const provider: MailProvider = {
+      async send(email) {
+        captured = email
+        return { ok: true, providerMessageId: "fake-msg-badreplyto" }
+      },
+    }
+
+    await processRow(env, provider, queuedRowFrom(seeded))
+
+    expect(captured?.replyTo).toBe("not-an-address")
+  })
+
+  it("sends no Reply-To header at all when REPLY_TO is unset, regardless of submission_id", async () => {
+    const seeded = seedRow({ submission_id: "SUB-ABC123" })
+    const { DB } = fakeDrainDB([seeded])
+    const env = { DB } as unknown as Env
+
+    let captured: OutboundEmail | undefined
+    const provider: MailProvider = {
+      async send(email) {
+        captured = email
+        return { ok: true, providerMessageId: "fake-msg-noreplyto" }
+      },
+    }
+
+    await processRow(env, provider, queuedRowFrom(seeded))
+
+    expect(captured?.replyTo).toBeUndefined()
   })
 })
 

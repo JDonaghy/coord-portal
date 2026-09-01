@@ -106,21 +106,33 @@ EMAIL_FROM = "Heuron Technology <notify@mail.heurontech.com>"
 # read-only in the dashboard precisely because Email Routing owns them, and
 # disabling the service to remove them removes the forward with it.
 #
-# So a customer reply reaches a human by EITHER path, depending on whether
-# their mail client honours this header:
+# DECIDED, issue #168 (EM-8, last of milestone #5, closes the open choice the
+# paragraph above used to leave open). Before #168, a customer reply reached a
+# human by EITHER of two paths depending on whether their mail client honoured
+# this header:
 #
-#   Reply-To honoured        → jdonaghy@heurontech.com (Zoho — this var)
+#   Reply-To honoured        → jdonaghy@heurontech.com (Zoho)
 #   Reply-To ignored, or a
 #   reply sent to `From`     → notify@mail.heurontech.com, forwarded onward by
 #                              the Email Routing rule described above
 #
-# Nothing is lost either way, but replies do scatter across two mailboxes with
-# no way to predict which. Pointing the routing rule at this same address would
-# converge them; that is a deliberate open choice, not an oversight.
+# Nothing was lost either way, but replies scattered across two mailboxes with
+# no way to predict which, and neither path fed EM-1 through EM-7's own
+# inbound pipeline — a human had to notice a reply and act on it by hand, and
+# EM-3 rung 1 (the plus-address token this pipeline already parses back out of
+# an envelope recipient) had nothing minted for it to ever match in
+# production.
 #
-# NOT a secret: it is printed in the headers of every mail sent, and a customer
-# reading their inbox can see it.
-REPLY_TO = "jdonaghy@heurontech.com"
+# #168 converges both paths onto ONE mailbox this Worker's own `email()`
+# export (`src/index.ts`) actually receives, and changes this var from a fixed
+# mailbox to a per-row TEMPLATE: `src/drain.ts`'s `resolveReplyTo` inserts
+# `+SUB-XXXXXX` into this address's local part at send time, one submission
+# reference per row, never stored. A reply to that address threads itself
+# straight back to the right submission via rung 1 — no human in the loop, no
+# guessing which of two inboxes it landed in. `jdonaghy@heurontech.com` is
+# unaffected by this change; it keeps working exactly as before for every
+# OTHER piece of correspondence a customer or anyone else sends there.
+REPLY_TO = "intake@mail.heurontech.com"
 
 # Issue #83: the portal's own public origin, so a notification email's call to
 # action can be made absolute before it reaches the mail provider. Without
