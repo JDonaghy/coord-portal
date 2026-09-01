@@ -7,6 +7,7 @@ import {
   type InboundEmailRecord,
   type InboundRetarget,
 } from "../inboundEmail"
+import { promoteInboundEmail } from "../inboundPromotion"
 import { getLead, leadCreationStatement, mintLead } from "../leads"
 import {
   approveReplyDraft,
@@ -77,12 +78,15 @@ import { isFormContentType } from "./submission"
  * (`src/notifications.ts`) for how the two actions that write *other* tables
  * carry the same predicate.
  *
- * ── THE FOURTH ACTION ────────────────────────────────────────────────────────
- * "Promote to a submission" is EM-7 (issue #167), not this issue. The form is
- * rendered here — the Gate-A contract pins its presence and its
- * `data-routed-kind` rule on this screen — but `POST /replies/:id/promote`
- * has no handler yet and gets the same 404 every other unsupported method on
- * this surface does, until EM-7 lands it.
+ * ── THE FOURTH ACTION (ISSUE #167, EM-7) ─────────────────────────────────────
+ * "Promote to a submission" — `POST /replies/:id/promote`, `postReplyPromote`
+ * below. It hands off to `promoteInboundEmail` (`src/inboundPromotion.ts`),
+ * which does the actual work in the same idempotent, single-`DB.batch()`
+ * shape `promoteLead` (`src/leads.ts`) already established for the stranger
+ * case. This route's own job is just the guard rail: no promote path exists
+ * here for `routed_kind = 'lead'` — that stranger's own promotion path is
+ * `/leads/:id/promote`, unchanged — so this handler no-ops for it rather than
+ * minting a second submission through a second door.
  */
 
 const REPLIES_PATH = "/replies"
@@ -90,17 +94,18 @@ const REPLY_PATH = /^\/replies\/([^/?#]+)$/
 const REPLY_APPROVE_PATH = /^\/replies\/([^/?#]+)\/approve$/
 const REPLY_DISCARD_PATH = /^\/replies\/([^/?#]+)\/discard$/
 const REPLY_ROUTE_PATH = /^\/replies\/([^/?#]+)\/route$/
+const REPLY_PROMOTE_PATH = /^\/replies\/([^/?#]+)\/promote$/
 const REPLIES_PREFIX = /^\/replies(\/|$)/
 
 /**
  * What `handlePages` needs to know about a `/replies…` URL, or `null`.
  *
  * `{ kind: "other" }` is the catch-all for every `/replies…` path this route
- * does not answer — EM-7's `/promote`, a typo, a method this surface has no
- * handler for. Owned here rather than left to fall through to
- * `env.ASSETS.fetch`, for the same reason `matchLeadsPath` claims every
- * `/leads…` path: falling through would hand an unauthenticated caller the
- * static site's own response for a path this contract says is operator-only.
+ * does not answer — a typo, a method this surface has no handler for. Owned
+ * here rather than left to fall through to `env.ASSETS.fetch`, for the same
+ * reason `matchLeadsPath` claims every `/leads…` path: falling through would
+ * hand an unauthenticated caller the static site's own response for a path
+ * this contract says is operator-only.
  */
 export function matchRepliesPath(
   pathname: string,
@@ -110,6 +115,7 @@ export function matchRepliesPath(
   | { kind: "approve"; id: string }
   | { kind: "discard"; id: string }
   | { kind: "route"; id: string }
+  | { kind: "promote"; id: string }
   | { kind: "other" }
   | null {
   if (pathname === REPLIES_PATH) return { kind: "index" }
@@ -122,6 +128,9 @@ export function matchRepliesPath(
 
   const route = pathname.match(REPLY_ROUTE_PATH)
   if (route?.[1]) return { kind: "route", id: route[1] }
+
+  const promote = pathname.match(REPLY_PROMOTE_PATH)
+  if (promote?.[1]) return { kind: "promote", id: promote[1] }
 
   const detail = pathname.match(REPLY_PATH)
   if (detail?.[1]) return { kind: "detail", id: detail[1] }
@@ -527,9 +536,8 @@ function routingOption(candidate: RoutingCandidate): string {
  * two buttons for one act with no way to tell which is authoritative is worse
  * than one button in the other place.
  *
- * `POST /replies/:id/promote` is deliberately not implemented by this issue —
- * see this module's own "THE FOURTH ACTION" note. Until EM-7 lands it, the
- * POST gets the same 404 every other unsupported method on this surface does.
+ * `POST /replies/:id/promote` is `postReplyPromote` below — see this module's
+ * own "THE FOURTH ACTION" note.
  */
 function promoteForm(inbound: InboundEmailRecord, action: string): string {
   if (kindOf(inbound) === "lead") return ""
@@ -736,6 +744,46 @@ async function routeToLead(env: Env, view: ReplyView): Promise<void> {
   if (existing === null) statements.push(leadCreationStatement(env, lead, pendingDraftGuard(draft.id)))
 
   await env.DB.batch(statements)
+}
+
+// ── POST /replies/:id/promote ────────────────────────────────────────────────
+
+/**
+ * **Promote to a submission** — issue #167 (EM-7). Hands off to
+ * `promoteInboundEmail` (`src/inboundPromotion.ts`) for the actual write; see
+ * this module's own "THE FOURTH ACTION" note for why a `lead`-routed row is
+ * refused here rather than forwarded.
+ *
+ * Guarded the same way the other three actions are (this module's own "EVERY
+ * WRITE IS GUARDED" note): `promoteInboundEmail` no-ops for a row that is
+ * already promoted, or whose drafted reply is no longer `pending` — a
+ * double-click, a retry, two concurrent promotes, or a promote attempted after
+ * a discard all converge on "nothing changes, redirect anyway", never an
+ * error. No form body is read beyond the same content-type check every other
+ * action on this surface applies — the promote form carries nothing but its
+ * button, the same as discard's.
+ *
+ * Answers 303 back to `/replies` either way, for the identical reason
+ * `postReplyApprove` does: a successful promote has nowhere else to go, and a
+ * guarded no-op is not a person's mistake to be shown an error for.
+ */
+export async function postReplyPromote(request: Request, env: Env, id: string): Promise<Response> {
+  const operator = await readOperator(request, env)
+  if (!operator) return leadsNotFound()
+
+  const context = await replyContext(env, id)
+  if (context === null) return alreadyHandled()
+
+  if ((await readForm(request)) === null) return leadsNotFound()
+
+  // The stranger case has its own promotion path (`/leads/:id/promote`) —
+  // see `promoteForm`'s own absence rule. A POST that reached here anyway
+  // (a hand-rolled request, not a click on a rendered button) moves nothing.
+  if (kindOf(context.inbound) !== "lead") {
+    await promoteInboundEmail(env, context.inbound)
+  }
+
+  return seeOther(REPLIES_PATH)
 }
 
 // ── SHARED BITS ──────────────────────────────────────────────────────────────

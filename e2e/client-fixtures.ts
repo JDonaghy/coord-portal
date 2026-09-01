@@ -164,3 +164,44 @@ export function readSubmissionStatus(reference: string): string {
   if (!row) throw new Error(`no submission with reference ${reference}`)
   return row.status
 }
+
+/**
+ * One `submissions` row, in full — for issue #167 (EM-7)'s own e2e coverage,
+ * which has to check `project_id`, `outcome`, `audience` and `done_definition`
+ * together (what promotion produced) and there is no HTTP surface an operator
+ * or customer reads all four back through at once.
+ */
+export interface StoredSubmissionRow {
+  id: string
+  reference: string
+  status: string
+  customer_email: string | null
+  outcome: string
+  audience: string
+  done_definition: string
+  project_id: string | null
+}
+
+export function readSubmissionRow(reference: string): StoredSubmissionRow {
+  const output = execute(
+    `SELECT id, reference, status, customer_email, outcome, audience, done_definition, project_id
+       FROM submissions WHERE reference = ${sqlString(reference)}`,
+  )
+  const [{ results }] = JSON.parse(output) as [{ results: StoredSubmissionRow[] }]
+  const row = results[0]
+  if (!row) throw new Error(`no submission with reference ${reference}`)
+  return row
+}
+
+/**
+ * How many `submissions` rows exist for one customer email — issue #167's own
+ * "promoting adds exactly one" assertion, scoped to a run's own unique
+ * synthetic sender so it holds against this suite's shared, accumulating
+ * database (see this file's own module comment, and `e2e/leads.spec.ts`'s
+ * identical concern).
+ */
+export function countSubmissionsForEmail(email: string): number {
+  const output = execute(`SELECT COUNT(*) as n FROM submissions WHERE customer_email = ${sqlString(email)}`)
+  const [{ results }] = JSON.parse(output) as [{ results: Array<{ n: number }> }]
+  return Number(results[0]?.n ?? -1)
+}

@@ -225,6 +225,20 @@ export interface InboundEmailRecord {
    * `rate_limited`).
    */
   outboxId: string | null
+  /**
+   * ── EM-7'S OWN LINK (ISSUE #167) ───────────────────────────────────────────
+   * When an operator promoted this message to a submission — the escape hatch
+   * for a reply that turned out to be a new ask. `null` until promoted; see
+   * `src/inboundPromotion.ts`'s `promoteInboundEmail`, the only writer.
+   * `promotedAt IS NULL` is the whole lifecycle, exactly as `leads.promoted_at`
+   * is for a lead (`migrations/0007_lead_promotion.sql`) — there is no
+   * separate status column to disagree with it.
+   */
+  promotedAt: string | null
+  /** The `sub_…` URL id of what promotion produced, or `null`. */
+  promotedSubmissionId: string | null
+  /** The `SUB-XXXXXX` reference of what promotion produced, or `null`. */
+  promotedSubmissionReference: string | null
 }
 
 export interface RecordInboundEmailResult {
@@ -357,6 +371,12 @@ export async function recordInboundEmail(
     routedProjectId: target?.projectId ?? null,
     routedSubmissionId: target?.submissionReference ?? null,
     outboxId: draft?.id ?? null,
+    // Nothing promotes a message the instant it arrives — EM-7's action is an
+    // operator's later, deliberate click. Every freshly-recorded row starts
+    // unpromoted, the same way a freshly-minted lead starts unpromoted too.
+    promotedAt: null,
+    promotedSubmissionId: null,
+    promotedSubmissionReference: null,
   }
 
   return writeInboundEmail(env, record, lead, inboundMessage, draft)
@@ -545,7 +565,8 @@ const SELECT_COLUMNS = `SELECT id, message_id, from_email, from_name, to_email, 
          body_text, received_at, auth_result, disposition, suppression_reason,
          attachment_count, body_truncated,
          routed_kind, routed_rung, routed_reason, routed_runner_up,
-         routed_lead_id, routed_project_id, routed_submission_id, outbox_id
+         routed_lead_id, routed_project_id, routed_submission_id, outbox_id,
+         promoted_at, promoted_submission_id, promoted_submission_reference
     FROM inbound_emails`
 
 /**
@@ -747,6 +768,9 @@ interface InboundEmailRow {
   routed_project_id: string | null
   routed_submission_id: string | null
   outbox_id: string | null
+  promoted_at: string | null
+  promoted_submission_id: string | null
+  promoted_submission_reference: string | null
 }
 
 function fromRow(row: InboundEmailRow): InboundEmailRecord {
@@ -772,6 +796,9 @@ function fromRow(row: InboundEmailRow): InboundEmailRecord {
     routedProjectId: row.routed_project_id,
     routedSubmissionId: row.routed_submission_id,
     outboxId: row.outbox_id,
+    promotedAt: row.promoted_at,
+    promotedSubmissionId: row.promoted_submission_id,
+    promotedSubmissionReference: row.promoted_submission_reference,
   }
 }
 
