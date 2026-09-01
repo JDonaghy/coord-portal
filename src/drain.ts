@@ -117,6 +117,16 @@ export interface QueuedRow {
   /** The call to action this row was queued with (issue #83) — see `resolveCtaHref`. */
   cta_text: string
   cta_href: string
+  /**
+   * `outbox.submission_id` — see `resolveReplyTo` (issue #168, EM-8). For
+   * every row `recordNotificationForStatus` (`src/notifications.ts`) ever
+   * writes, this is the customer-visible `SUB-XXXXXX` reference. It is NOT
+   * that for an `intake-reply` row (`acknowledgementStatement`, same file),
+   * which repurposes this column for an `inbound_emails.id` instead — see
+   * `resolveReplyTo`'s own doc for why that is exactly the "row with no
+   * submission reference" case #168 asks to degrade gracefully, not crash on.
+   */
+  submission_id: string
   attempts: number
 }
 
@@ -143,6 +153,51 @@ function resolveCtaHref(env: Env, href: string): string | null {
 }
 
 /**
+ * `SUB-XXXXXX` — the exact shape `generateSubmissionReference` (`src/ids.ts`)
+ * mints and `src/inboundRouter.ts`'s rung 1 already parses back out of a
+ * plus-addressed local part. Deliberately the same alphabet that module's own
+ * `REFERENCE_PATTERN` uses (`[A-Z0-9]`, not narrowed to hex) and for the same
+ * reason given there: this is the *format* the reference is pinned to, not an
+ * accident of today's minting implementation.
+ */
+const SUBMISSION_REFERENCE_PATTERN = /^SUB-[A-Z0-9]{6}$/
+
+/**
+ * `env.REPLY_TO`, plus-addressed with this row's own submission reference —
+ * issue #168 (EM-8 of milestone #5). "Point `REPLY_TO` at a plus-addressed
+ * intake mailbox, so a customer replying to any notification threads itself":
+ * `intake+SUB-XXXXXX@mail.heurontech.com`, resolved per row at send time,
+ * exactly where `resolveCtaHref` above already resolves `PUBLIC_BASE_URL` per
+ * row and for the same reason — `env.REPLY_TO` is a property of the
+ * deployment (`wrangler.toml`'s own comment on this var), not of the row, so
+ * it is read fresh on every send rather than stored.
+ *
+ * `outbox.submission_id` carries that reference for every row this module has
+ * ever sent from `recordNotificationForStatus` — but issue #164/#165's
+ * `intake-reply` rows repurpose the same column for an `inbound_emails.id`
+ * instead (see `QueuedRow.submission_id`'s own doc), which is not a
+ * `SUB-XXXXXX` reference at all. `SUBMISSION_REFERENCE_PATTERN` is the one
+ * thing standing between that and a plus-address minted from the wrong kind
+ * of string — #168's own words: "A row with no submission reference (should
+ * not occur) sends with the plain configured address rather than a malformed
+ * one — absent beats broken, the same rule `replyTo` and `html` already
+ * follow at that seam." A malformed `env.REPLY_TO` itself (no `@` to insert
+ * the token before) gets the identical treatment for the identical reason:
+ * the unmodified configured address, never a guess.
+ */
+function resolveReplyTo(env: Env, submissionId: string): string | undefined {
+  if (!env.REPLY_TO) return undefined
+  if (!SUBMISSION_REFERENCE_PATTERN.test(submissionId)) return env.REPLY_TO
+
+  const at = env.REPLY_TO.indexOf("@")
+  if (at < 0) return env.REPLY_TO
+
+  const localPart = env.REPLY_TO.slice(0, at)
+  const domain = env.REPLY_TO.slice(at)
+  return `${localPart}+${submissionId}${domain}`
+}
+
+/**
  * Claims `queued` rows and drives each one attempt closer to `sent` or
  * `failed`. Never throws past its own attempt bookkeeping — a provider call
  * that rejects or errors is exactly the case this function exists to record,
@@ -159,7 +214,7 @@ export async function drainOutbox(env: Env): Promise<void> {
   const leaseThreshold = new Date(Date.now() - CLAIM_LEASE_MS).toISOString()
 
   const { results } = await env.DB.prepare(
-    `SELECT id, to_email, from_email, subject, body, cta_text, cta_href, attempts
+    `SELECT id, to_email, from_email, subject, body, cta_text, cta_href, submission_id, attempts
        FROM outbox
       WHERE status = 'queued'
         AND approval_state IN ('not_required', 'approved')
@@ -212,10 +267,13 @@ export async function processRow(env: Env, provider: MailProvider, row: QueuedRo
   const attempts = row.attempts + 1
 
   // `replyTo` is read from config at send time rather than stored per row
-  // (#52). The reply destination is a property of the deployment, not of the
-  // decision that queued the row — a row queued before the var changed should
-  // still send to wherever replies go *now*, and a stored copy would make an
-  // address change require a migration instead of a config edit.
+  // (#52), then plus-addressed with this row's own submission reference
+  // (#168, EM-8 — see `resolveReplyTo`). The reply destination is a property
+  // of the deployment, not of the decision that queued the row — a row queued
+  // before the var changed should still send to wherever replies go *now*,
+  // and a stored copy would make an address change require a migration
+  // instead of a config edit. Only the per-row *token* is specific to this
+  // send; the mailbox it is minted against is still deployment config.
   //
   // The CTA's absolute href is resolved here too, same reasoning (#83): a
   // property of the deployment, read at send time, never stored. `null` means
@@ -237,7 +295,7 @@ export async function processRow(env: Env, provider: MailProvider, row: QueuedRo
     from: row.from_email,
     subject: row.subject,
     body: row.body,
-    replyTo: env.REPLY_TO,
+    replyTo: resolveReplyTo(env, row.submission_id),
     ...(ctaHref ? { ctaText: row.cta_text, ctaHref } : {}),
   })
 

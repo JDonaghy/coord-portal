@@ -152,10 +152,25 @@ export interface Env {
    * reply path is a header instead: `Reply-To`, pointed at a mailbox that
    * already works.
    *
+   * #168 (EM-8, milestone #5) turned this from a fixed mailbox into a
+   * per-send TEMPLATE: `src/drain.ts`'s `resolveReplyTo` plus-addresses this
+   * value with the row's own `SUB-XXXXXX` submission reference at send time
+   * (`intake+SUB-XXXXXX@…`) — the same token `src/inboundRouter.ts`'s rung 1
+   * already parses back out of an envelope recipient, so a reply threads
+   * itself to the right submission with no human in the loop. This var itself
+   * still names only the base mailbox (`wrangler.toml`'s own comment on this
+   * var has the production value and the reasoning for converging on it); the
+   * `+SUB-XXXXXX` token is resolved fresh per row, never stored, for the same
+   * reason `PUBLIC_BASE_URL` below is.
+   *
    * Unset ⇒ no `Reply-To` header at all, which is the honest degradation: a
    * reply then bounces off a domain with no MX and the sender learns their
    * message went nowhere. That is strictly better than the alternative #52
-   * exists to prevent — silent acceptance into a black hole.
+   * exists to prevent — silent acceptance into a black hole. A row whose
+   * `outbox.submission_id` is not a `SUB-XXXXXX` reference (should not occur —
+   * see `src/drain.ts`'s `QueuedRow.submission_id`) degrades the same way:
+   * this configured address, unmodified, rather than a malformed plus-address
+   * built from the wrong kind of string.
    */
   REPLY_TO?: string
   /**

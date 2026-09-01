@@ -359,6 +359,43 @@ test("the drain hands the provider an absolute, followable link to the submissio
 })
 
 /**
+ * Issue #168 (EM-8, milestone #5): "point `REPLY_TO` at a plus-addressed
+ * intake mailbox, so a customer replying to any notification threads
+ * itself." `src/drain.ts`'s `resolveReplyTo` builds this per row from
+ * `env.REPLY_TO` and `outbox.submission_id` — this test drives it through the
+ * real Worker rather than the unit fake, so a mismatch between the SQL this
+ * module's SELECT names and the column the migrations actually created (the
+ * same gap the #162 block above calls out for `approval_state`) fails here
+ * too, not only in `test/drain.test.ts`.
+ */
+test("the drain plus-addresses Reply-To with this row's own submission reference (#168)", async ({
+  page,
+  request,
+}) => {
+  const email = uniqueEmail("e2e-drain-reply-to")
+  const target = await seedSubmission(page, email)
+  expect((await push(request, target.reference, 1, { status: "shipped" })).outcome).toBe("applied")
+  await awaitOutbox(page, email, 1)
+
+  await runDrain(request)
+  const [sent] = await readOutbox(page, email)
+  expect(sent?.status).toBe("sent")
+
+  const res = await request.get("/__outbound")
+  expect(res.ok(), "GET /__outbound must exist under MAIL_PROVIDER=fake").toBe(true)
+  const body = (await res.json()) as { emails: Array<{ to: string; replyTo?: string }> }
+  const mine = body.emails.filter((e) => e.to === email)
+  expect(mine, `the provider must have been handed exactly one email for ${email}`).toHaveLength(1)
+  const replyTo = mine[0]?.replyTo
+
+  expect(replyTo, "#168: every outbound notification must carry a Reply-To").toBeTruthy()
+  expect(
+    replyTo,
+    `${replyTo} must carry ${target.reference} as a plus-addressed local part ("intake+SUB-XXXXXX@…")`,
+  ).toMatch(new RegExp(`\\+${target.reference}@`))
+})
+
+/**
  * ── ISSUE #162 (EM-2): THE APPROVAL GATE ────────────────────────────────────
  *
  * `migrations/0021_outbox_approval.sql` adds `outbox.approval_state` — a
