@@ -1,0 +1,43 @@
+-- 0023_inbound_promotion — issue #167 (EM-7 of milestone #5, epic #160): "the
+-- escape hatch" — promoting an inbound email that is really a new ask into a
+-- submission, in one click.
+--
+-- `migrations/0020_inbound_emails.sql` already carries `promoted_at` and
+-- `promoted_submission_id` — added there, unused, in anticipation of exactly
+-- this issue (see that migration's own "NO FOREIGN KEYS" note, which already
+-- names `promoted_submission_id` alongside `routed_lead_id` et al.). What was
+-- missing is the third column `migrations/0007_lead_promotion.sql` gives a
+-- lead's own promotion record: the customer-visible `SUB-XXXXXX` reference an
+-- operator can read out without a join. This migration adds only that.
+--
+--   promoted_at                     already exists (0020) — ISO-8601, NULL
+--                                    until promoted.
+--   promoted_submission_id          already exists (0020) — the `sub_…` URL
+--                                    id of what promotion produced.
+--   promoted_submission_reference   NEW — the `SUB-XXXXXX` reference,
+--                                    mirroring `leads.promoted_submission_reference`.
+--
+-- Same lifecycle rule 0007 states for leads: `promoted_at IS NULL` is the
+-- whole story — NULL is "not yet promoted", non-NULL is "promoted" — and it
+-- is the idempotency key. `src/inboundPromotion.ts`'s `promoteInboundEmail`
+-- claims a row with `... WHERE id = ? AND promoted_at IS NULL` inside the same
+-- `DB.batch()` that inserts the submission (via `createSubmissionStatements`,
+-- `src/submissions.ts` — the same function `POST /intake` and `promoteLead`
+-- both use), so a double-click, a retry, or two genuinely concurrent promotes
+-- all converge on one submission. Do not add a code path that writes these
+-- columns unguarded.
+--
+-- No foreign key to `submissions`, matching 0020's own "no foreign keys"
+-- posture and 0007's identical choice for `leads`: the reference is the
+-- durable handle, and an inbound email must stay readable as a record of what
+-- arrived even if what it produced is later removed.
+--
+-- Nothing here is bridge-visible beyond the ordinary `submission.created`
+-- event `createSubmissionStatements` already emits for every submission this
+-- portal ever creates — byte-identical in shape to one `/intake` or
+-- `promoteLead` produces, because it is the same code. The daemon never
+-- learns an email was involved.
+ALTER TABLE inbound_emails ADD COLUMN promoted_submission_reference TEXT;
+
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '0023')
+  ON CONFLICT(key) DO UPDATE SET value = excluded.value;

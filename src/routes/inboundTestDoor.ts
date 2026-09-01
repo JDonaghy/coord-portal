@@ -149,6 +149,17 @@ function asJson(record: InboundEmailRecord): Record<string, unknown> {
     // draft, EM-5's routed draft, or EM-5's neutral unrouted draft.
     outbox_id: record.outboxId,
     outboxId: record.outboxId,
+    // EM-7 (issue #167): whether — and into what — an operator has since
+    // promoted this row to a submission. `null` on all three until they do;
+    // `GET /__email`'s read-back (this function's other caller) is how
+    // `e2e/`'s own coverage observes the promotion this door itself cannot
+    // trigger (that is `/replies/:id/promote`'s job, behind operator auth).
+    promoted_at: record.promotedAt,
+    promotedAt: record.promotedAt,
+    promoted_submission_id: record.promotedSubmissionId,
+    promotedSubmissionId: record.promotedSubmissionId,
+    promoted_submission_reference: record.promotedSubmissionReference,
+    promotedSubmissionReference: record.promotedSubmissionReference,
   }
 }
 

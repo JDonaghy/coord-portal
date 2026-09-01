@@ -27,6 +27,7 @@ import {
   matchRepliesPath,
   postReplyApprove,
   postReplyDiscard,
+  postReplyPromote,
   postReplyRoute,
   repliesInbox,
   replyDetail,
@@ -130,7 +131,8 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
   // drain will ever carry it. Owned here for every method on any `/replies…`
   // path, same reasoning as `/deliveries` just above and `/leads…` below;
   // `matchRepliesPath`'s own `"other"` catch-all is what makes that true for
-  // EM-7's not-yet-implemented `/promote` as well. See `routes/replies.ts`.
+  // any path this route does not answer. `/promote` (#167, EM-7) is the
+  // fourth action. See `routes/replies.ts`.
   const repliesMatch = matchRepliesPath(pathname)
   if (repliesMatch) {
     if (repliesMatch.kind === "index" && request.method === "GET") {
@@ -147,6 +149,9 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
     }
     if (repliesMatch.kind === "route" && request.method === "POST") {
       return postReplyRoute(request, env, repliesMatch.id)
+    }
+    if (repliesMatch.kind === "promote" && request.method === "POST") {
+      return postReplyPromote(request, env, repliesMatch.id)
     }
     return leadsNotFound()
   }
