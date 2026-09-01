@@ -80,6 +80,10 @@ issues:
     - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › \"Change route\" to an operator-chosen project, then promote, lands the new submission in that chosen project"
     - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › a stranger's inbound email (already a lead) has no promote path here, and a direct POST creates no submission"
     - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › a discarded draft cannot be promoted afterward — the pending guard blocks it"
+  168:
+    - "[chromium] ms-5/168-em8-reply-to.spec.ts › ms-5 issue 168 EM-8: converge reply routing on a plus-addressed Reply-To › every outbound notification carries a Reply-To bearing its own submission's reference, resolved independently per row"
+    - "[chromium] ms-5/168-em8-reply-to.spec.ts › ms-5 issue 168 EM-8: converge reply routing on a plus-addressed Reply-To › a reply delivered to that Reply-To address routes by rung 1 to that exact submission"
+    - "[chromium] ms-5/168-em8-reply-to.spec.ts › ms-5 issue 168 EM-8: converge reply routing on a plus-addressed Reply-To › an outbox row with no submission reference to bear sends with a Reply-To that is present-and-plausible or absent, never a malformed one"
 
 # Tests OBSERVED failing against the unimplemented state, recorded per issue at
 # the moment the slice was authored.
@@ -209,3 +213,31 @@ expected_red:
     - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › promoting an inbound email produces exactly one submission.created event, shaped like an ordinary intake"
     - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › promoting the same inbound email twice — a retry and two concurrent attempts — converges on one submission"
     - "[chromium] ms-5/167-em7-promote-inbound.spec.ts › ms-5 issue 167 EM-7: promote an inbound email to a submission, in one click › \"Change route\" to an operator-chosen project, then promote, lands the new submission in that chosen project"
+#
+# #168 recorded from `npm run test:acceptance -- ms-5/168` (after `npm ci` +
+# `npx playwright install chromium`), against a checkout at schema head
+# 0023_inbound_promotion.sql (#161-#167 already landed; #168 itself not:
+# `wrangler.toml`'s `REPLY_TO` is still the flat, deployment-wide
+# `"jdonaghy@heurontech.com"` literal #52 left it as, and `src/drain.ts`
+# reads it once via `env.REPLY_TO` with no per-row resolution): 2 failed, 1
+# passed, 0 skipped.
+#
+# The first two ids below were watched to fail, both on the same underlying
+# signal — the recorded `replyTo` read back exactly
+# `"jdonaghy@heurontech.com"` (the flat configured value) where each test
+# expected a plus-addressed, per-submission one (`+SUB-XXXXXX@…`), because
+# #168 is the issue that makes `src/drain.ts` resolve it per row at all.
+#
+# The third id — the no-submission-reference fallback test — is NOT included
+# below. It PASSED against the unimplemented state: with `Reply-To` still
+# flat and deployment-wide (the pre-#168 shape), every row already sends
+# with exactly the "plain configured address, never malformed" behaviour
+# that test asserts — there is no per-row resolution yet to be absent-when-
+# it-should-be. This is a genuine control clause, not a gap: it must keep
+# passing once #168 lands (a row with nothing to derive a reference from
+# must still fall back cleanly), so it stays in the suite un-strengthened,
+# per the OBSERVED-not-INTENDED rule — it was not observed failing, so it is
+# not listed as expected-red.
+  168:
+    - "[chromium] ms-5/168-em8-reply-to.spec.ts › ms-5 issue 168 EM-8: converge reply routing on a plus-addressed Reply-To › every outbound notification carries a Reply-To bearing its own submission's reference, resolved independently per row"
+    - "[chromium] ms-5/168-em8-reply-to.spec.ts › ms-5 issue 168 EM-8: converge reply routing on a plus-addressed Reply-To › a reply delivered to that Reply-To address routes by rung 1 to that exact submission"
