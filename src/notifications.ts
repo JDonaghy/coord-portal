@@ -394,6 +394,41 @@ export interface EmailContent {
 const SIGNATURE = "\n\n— John, Heuron Technology"
 
 /**
+ * ── ISSUE #169 (EM-9) — "SAY OUT LOUD THAT ATTACHMENTS ARE DROPPED" ─────────
+ *
+ * Storing customer files is a real feature with its own decisions — R2
+ * layout, retention, size caps, scanning, who may read them — and out of
+ * scope for this milestone. What is in scope, and what this function is, is
+ * the failure mode a silent drop produces: a customer who attached a
+ * screenshot and got a cheerful acknowledgement will assume the business has
+ * it. `src/inboundEmail.ts` never stores the attachment payload — only the
+ * count (`attachment_count`) — so this is the one place that count reaches
+ * the sender at all, alongside `reply-attachments-dropped` (EM-6,
+ * `src/routes/replies.ts`) putting the same count in front of the operator.
+ *
+ * Appended, never woven into the templates' own opening line, so both
+ * `intakeReplyContent` and `routedReplyContent` below share one copy rather
+ * than each inventing its own — the same "one constant, not three drifting
+ * copies" reasoning `SIGNATURE` itself already gives.
+ *
+ * Deliberately does not claim the attachment was kept, saved, or is
+ * retrievable (Gate-A contract § "Attachments") — only that it did not come
+ * through, and that a person can be told directly if it matters. It also
+ * never repeats anything the sender wrote (there is nothing here to repeat:
+ * the only sender-controlled input is the count itself, an integer, not
+ * text).
+ */
+function attachmentDisclosure(attachmentCount: number): string {
+  if (attachmentCount <= 0) return ""
+  const plural = attachmentCount === 1 ? "attachment" : "attachments"
+  const pronoun = attachmentCount === 1 ? "it" : "them"
+  return (
+    `\n\nOne more thing — this mailbox can't take attachments yet, so the ${attachmentCount} ${plural} ` +
+    `you sent didn't come through and I don't have ${pronoun}. If it matters, let me know and I'll find another way.`
+  )
+}
+
+/**
  * The copy for each of the three sending states — illustrative, not pinned:
  * the Gate-A contract pins the email's `data-testid` hooks (§ Emails 11-13)
  * but, per its own note on `verdict-pill`-style copy elsewhere, not the exact
@@ -516,14 +551,14 @@ const INTAKE_REPLY_REVISION = 0
  * home, exactly where `/start`'s own receipt already sends a "back home"
  * click.
  */
-export function intakeReplyContent(leadReference: string): EmailContent {
+export function intakeReplyContent(leadReference: string, attachmentCount = 0): EmailContent {
   return {
     subject: "Got it — thanks for reaching out — Heuron Technology",
     preheader: `Reference ${leadReference}`,
     body:
       `Thanks for reaching out — got it, and I'll follow up soon. There's nothing to sign into and ` +
       `nothing to check back on; if you want to follow up yourself, just quote ${leadReference} in ` +
-      `your reply.${SIGNATURE}`,
+      `your reply.${SIGNATURE}${attachmentDisclosure(attachmentCount)}`,
     ctaText: "Back home",
     ctaHref: "/",
   }
@@ -581,8 +616,15 @@ export function intakeReplyStatement(
   toEmail: string,
   leadReference: string,
   guard: CreateGuard,
+  attachmentCount = 0,
 ): DraftedIntakeReply {
-  return acknowledgementStatement(env, inboundEmailId, toEmail, intakeReplyContent(leadReference), guard)
+  return acknowledgementStatement(
+    env,
+    inboundEmailId,
+    toEmail,
+    intakeReplyContent(leadReference, attachmentCount),
+    guard,
+  )
 }
 
 /**
@@ -616,11 +658,13 @@ export function intakeReplyStatement(
  * `ctaHref`, and even that is portal-derived (a submission's own internal id,
  * never anything the sender wrote).
  */
-export function routedReplyContent(ctaHref: string | null): EmailContent {
+export function routedReplyContent(ctaHref: string | null, attachmentCount = 0): EmailContent {
   return {
     subject: "Got it — thanks for your message — Heuron Technology",
     preheader: "Message received",
-    body: `Thanks for getting in touch — I've received your message and will follow up soon.${SIGNATURE}`,
+    body:
+      `Thanks for getting in touch — I've received your message and will follow up soon.${SIGNATURE}` +
+      attachmentDisclosure(attachmentCount),
     ctaText: ctaHref !== null ? "View your project" : "Back home",
     ctaHref: ctaHref ?? "/",
   }
@@ -641,8 +685,15 @@ export function routedReplyStatement(
   toEmail: string,
   ctaHref: string | null,
   guard: CreateGuard,
+  attachmentCount = 0,
 ): DraftedIntakeReply {
-  return acknowledgementStatement(env, inboundEmailId, toEmail, routedReplyContent(ctaHref), guard)
+  return acknowledgementStatement(
+    env,
+    inboundEmailId,
+    toEmail,
+    routedReplyContent(ctaHref, attachmentCount),
+    guard,
+  )
 }
 
 /**

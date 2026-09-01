@@ -11,6 +11,7 @@ import {
 import { leadCreationStatement, mintLead, type Lead } from "./leads"
 import { messageCreationStatement, mintMessage, type Message } from "./messages"
 import { intakeReplyStatement, routedReplyStatement, type DraftedIntakeReply } from "./notifications"
+import { isInboundDraftRateLimited } from "./rateLimit"
 import type { CreateGuard } from "./submissions"
 import type { Env } from "./types"
 
@@ -20,9 +21,40 @@ import type { Env } from "./types"
  * One real message in, one `inbound_emails` row out. This module's own scope
  * sentence used to be "routes nothing and replies to nothing" — #161's,
  * before EM-3 (routing, issue #163), EM-4 (drafting rung 6's stranger case,
- * issue #164) and EM-5 (a known thread, issue #165) all landed here. EM-9
- * (rate limits) is still ahead; every column that issue will fill stays
- * nullable in `migrations/0020_inbound_emails.sql` and untouched here.
+ * issue #164), EM-5 (a known thread, issue #165) and EM-9 (rate limits and
+ * attachment disclosure, issue #169) all landed here.
+ *
+ * ── EM-9: RATE-LIMITING DRAFTS, WITHOUT ERASING THE EVIDENCE (ISSUE #169) ───
+ * "The abuse controls a mailbox needs and a form already has." `POST /start`
+ * has Turnstile plus a coarse per-IP cap; a mailbox cannot have Turnstile —
+ * there is no connection here to challenge, only a message Cloudflare Email
+ * Routing has already accepted — so the cap `isInboundDraftRateLimited`
+ * (`src/rateLimit.ts`) enforces, per sender and in total over a shared
+ * sliding window, is the whole defense. It runs *after* `detectSuppression`
+ * below, never before: a message the suppression rules already refuse was
+ * never going to draft anything regardless of this cap, and unlike
+ * `POST /start`'s own `siteverify` call there is no external cost here a
+ * suppressed message could still be inflating.
+ *
+ * A rate-limited message is recorded exactly like an ordinary one — subject,
+ * body, attachment count, everything EM-1 already captures — with
+ * `disposition = 'rate_limited'` and `decision` left `null`, the same "never
+ * routed at all" treatment a `suppressed` row gets. The distinction from
+ * `suppressed` is why: a `rate_limited` row was refused for a reason about
+ * *volume*, not about *this message*, and #169's own words are the test —
+ * "a flood should fill a queue we can inspect, not an inbox we cannot
+ * recall, and it should not erase the evidence of itself."
+ *
+ * ── EM-9: ATTACHMENTS, DROPPED AND DISCLOSED (ISSUE #169) ───────────────────
+ * Storing a customer's file is a real feature with its own decisions — R2
+ * layout, retention, size caps, scanning — out of scope here. What ships
+ * instead: `attachmentCount` below (from `parsed.attachments.length`, the
+ * same count EM-1 always computed, now actually used) travels to
+ * `draftFor` and from there into `intakeReplyContent`/`routedReplyContent`
+ * (`src/notifications.ts`), which append a sentence saying the attachment
+ * did not come through — never that it was kept, saved, or is retrievable.
+ * The same count is what `reply-attachments-dropped` (`src/routes/replies.ts`,
+ * landed ahead of this issue in EM-6) shows an operator.
  *
  * ── EM-5: A KNOWN SENDER'S MESSAGE JOINS ITS OWN THREAD (ISSUE #165) ────────
  * When the router's decision is `"message"` (rungs 1-5 — a plus-addressed
@@ -307,14 +339,24 @@ export async function recordInboundEmail(
 
   const authResult = parseDmarcVerdict(headerValues(parsed, "authentication-results"))
   const suppressionReason = detectSuppression(env, parsed, message, fromEmail)
+  const attachmentCount = parsed.attachments.length
+
+  // EM-9 (#169): spent only by a message that would otherwise earn a draft —
+  // never by one `detectSuppression` already refused. See this module's own
+  // doc, "RATE-LIMITING DRAFTS", for why the ordering (after suppression,
+  // before routing) is deliberate.
+  const rateLimited =
+    suppressionReason === null ? await isInboundDraftRateLimited(env, fromEmail) : false
 
   // Suppressed mail is recorded but never routed — #161's own rule, and the
   // reason the router runs *here* rather than unconditionally inside
   // `insertInboundEmail`: a machine's auto-reply must not be resolved to a
   // person, given a draft, or shown to an operator as a routing decision that
-  // was never really made.
+  // was never really made. A rate-limited message gets the identical
+  // treatment, for the identical reason: #169's own words, "it just does not
+  // earn a reply".
   const decision =
-    suppressionReason === null
+    suppressionReason === null && !rateLimited
       ? await routeInboundMessage(env, { fromEmail, toEmail, subject, bodyText: body.text, authResult })
       : null
 
@@ -345,7 +387,7 @@ export async function recordInboundEmail(
           body: body.text,
         })
 
-  const draft = draftFor(env, id, fromEmail, decision, lead, target, guard)
+  const draft = draftFor(env, id, fromEmail, decision, lead, target, attachmentCount, guard)
 
   const record: InboundEmailRecord = {
     id,
@@ -357,9 +399,9 @@ export async function recordInboundEmail(
     bodyText: body.text,
     receivedAt: new Date().toISOString(),
     authResult,
-    disposition: suppressionReason === null ? "received" : "suppressed",
+    disposition: suppressionReason !== null ? "suppressed" : rateLimited ? "rate_limited" : "received",
     suppressionReason,
-    attachmentCount: parsed.attachments.length,
+    attachmentCount,
     bodyTruncated: body.truncated,
     routedKind: decision?.kind ?? null,
     routedRung: decision?.rung ?? null,
@@ -398,18 +440,26 @@ function draftFor(
   decision: RoutingDecision | null,
   lead: Lead | null,
   target: RoutingTarget | null,
+  attachmentCount: number,
   guard: CreateGuard,
 ): DraftedIntakeReply | null {
   if (decision === null) return null
   if (decision.kind === "lead" && lead !== null) {
-    return intakeReplyStatement(env, inboundEmailId, toEmail, lead.reference, guard)
+    return intakeReplyStatement(env, inboundEmailId, toEmail, lead.reference, guard, attachmentCount)
   }
   if (decision.kind === "message" && target !== null) {
-    return routedReplyStatement(env, inboundEmailId, toEmail, `/submissions/${target.submissionId}`, guard)
+    return routedReplyStatement(
+      env,
+      inboundEmailId,
+      toEmail,
+      `/submissions/${target.submissionId}`,
+      guard,
+      attachmentCount,
+    )
   }
   // `"unrouted"` — rung 6's ambiguous case. No submission was confidently
   // attached to, so there is nothing behind Access to send this sender to yet.
-  return routedReplyStatement(env, inboundEmailId, toEmail, null, guard)
+  return routedReplyStatement(env, inboundEmailId, toEmail, null, guard, attachmentCount)
 }
 
 /**

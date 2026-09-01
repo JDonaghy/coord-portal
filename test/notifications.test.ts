@@ -373,6 +373,31 @@ describe("intakeReplyContent", () => {
       expect(value, field).not.toMatch(forbidden)
     }
   })
+
+  // ── issue #169 (EM-9): "say out loud that attachments are dropped" ────────
+
+  it("says nothing about attachments when none arrived — the default", () => {
+    const content = intakeReplyContent("LEAD-AAAAAA")
+    expect(content.body).not.toMatch(/attach/i)
+  })
+
+  it("discloses a dropped attachment, without claiming it was kept", () => {
+    const content = intakeReplyContent("LEAD-AAAAAA", 1)
+    expect(content.body).toMatch(/attach/i)
+    expect(content.body).toMatch(/\b1\b/)
+    expect(content.body).not.toMatch(/\b(saved|kept|available|download|retrievable)\b/i)
+  })
+
+  it("pluralises correctly for more than one attachment", () => {
+    const content = intakeReplyContent("LEAD-AAAAAA", 3)
+    expect(content.body).toContain("3 attachments")
+    expect(content.body).not.toContain("1 attachment ")
+  })
+
+  it("still ends with the disclosure, after the signature, when an attachment was dropped", () => {
+    const content = intakeReplyContent("LEAD-AAAAAA", 1)
+    expect(content.body).toMatch(/— John, Heuron Technology\n\nOne more thing/)
+  })
 })
 
 describe("intakeReplyStatement", () => {
@@ -557,6 +582,30 @@ describe("routedReplyContent — issue #165 (EM-5 of milestone #5)", () => {
         expect(content.body).not.toContain(status)
       }
     }
+  })
+
+  // ── issue #169 (EM-9): "say out loud that attachments are dropped" ────────
+  // Same disclosure `intakeReplyContent`'s own tests cover, for both of this
+  // template's outcomes (a matched thread, and the neutral unrouted case).
+
+  it("says nothing about attachments when none arrived — the default, matched or unrouted", () => {
+    expect(routedReplyContent("/submissions/sub_000001").body).not.toMatch(/attach/i)
+    expect(routedReplyContent(null).body).not.toMatch(/attach/i)
+  })
+
+  it("discloses a dropped attachment without claiming it was kept, matched or unrouted", () => {
+    for (const content of [
+      routedReplyContent("/submissions/sub_000001", 1),
+      routedReplyContent(null, 1),
+    ]) {
+      expect(content.body).toMatch(/attach/i)
+      expect(content.body).not.toMatch(/\b(saved|kept|available|download|retrievable)\b/i)
+    }
+  })
+
+  it("pluralises correctly for more than one attachment", () => {
+    const content = routedReplyContent("/submissions/sub_000001", 2)
+    expect(content.body).toContain("2 attachments")
   })
 })
 

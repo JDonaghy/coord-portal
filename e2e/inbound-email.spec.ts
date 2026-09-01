@@ -39,7 +39,14 @@ interface BlobOptions {
 
 function blob(options: BlobOptions): string {
   const headers = [
-    `From: ${options.from ?? "Wren Alcott <wren@sender.example.test>"}`,
+    // Issue #169 (EM-9): a real per-sender draft cap now lives behind
+    // `POST /__email`, and this suite's own `playwright.config.ts` runs with
+    // `fullyParallel: true` — several of this file's own tests can be inside
+    // the same 5-second window at once. The default sender is therefore
+    // unique to each `blob()` call, not a single shared literal, so this
+    // file's own concurrency cannot trip a cap meant for a genuine flood.
+    // Tests that assert on the sender address pass `from` explicitly.
+    `From: ${options.from ?? `Wren Alcott <wren-${tag()}@sender.example.test>`}`,
     `To: ${options.to ?? "intake@mail.example.test"}`,
     `Subject: ${options.subject ?? "About the booking screen"}`,
     "Date: Tue, 25 Aug 2026 09:14:00 +0000",
@@ -104,7 +111,14 @@ test("a plain message lands as exactly one row with the parsed fields", async ({
 
   const result = await deliver(
     request,
-    blob({ messageId, to: "hello@mail.example.test", subject: "About the booking screen" }),
+    blob({
+      messageId,
+      to: "hello@mail.example.test",
+      subject: "About the booking screen",
+      // Explicit, not the (now per-call-unique) default — this test asserts
+      // on the literal parsed `from_email` below.
+      from: "Wren Alcott <wren@sender.example.test>",
+    }),
     { to: envelopeTo, from: "wren@sender.example.test" },
   )
 
@@ -141,7 +155,8 @@ test("the DMARC verdict a forwarding hop stamped is recorded in auth_result", as
   const raw = [
     "Authentication-Results: mx.cloudflare.example; dmarc=fail header.from=sender.example.test",
     "Authentication-Results: mx.forwarder.example.test; dmarc=pass header.from=sender.example.test",
-    "From: Wren Alcott <wren@sender.example.test>",
+    // Own, unique sender — see `blob()`'s own note on issue #169's per-sender cap.
+    `From: Wren Alcott <wren-${tag()}@sender.example.test>`,
     "To: intake@mail.example.test",
     "Subject: About the booking screen",
     `Message-ID: <${messageId}>`,
@@ -277,7 +292,8 @@ test("an oversized body is stored truncated and flagged, never dropped silently"
 test("an attachment is counted and its payload is not stored", async ({ request }) => {
   const messageId = `attach-${tag()}@sender.example.test`
   const raw = [
-    "From: Wren Alcott <wren@sender.example.test>",
+    // Own, unique sender — see `blob()`'s own note on issue #169's per-sender cap.
+    `From: Wren Alcott <wren-${tag()}@sender.example.test>`,
     "To: intake@mail.example.test",
     "Subject: with an attachment",
     `Message-ID: <${messageId}>`,
