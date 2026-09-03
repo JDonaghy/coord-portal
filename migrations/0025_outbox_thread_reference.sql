@@ -1,0 +1,41 @@
+-- 0025_outbox_thread_reference — issue #196: an `intake-reply` row never gets
+-- a plus-addressed Reply-To, because `src/drain.ts`'s `resolveReplyTo` has
+-- only `outbox.submission_id` to read a reference from, and #164/#165's
+-- `intake-reply` rows repurpose that exact column to carry an
+-- `inbound_emails.id` instead (`INTAKE_REPLY_REVISION`'s own doc,
+-- `src/notifications.ts`). The reference EM-8 needs was available all along —
+-- the router had already resolved it onto `inbound_emails.routed_submission_id`
+-- — it just had nowhere on the `outbox` row to land.
+--
+-- ── OPTION B, PER THE ISSUE'S OWN RECOMMENDATION ────────────────────────────
+-- The issue lays out two fixes: (A) join out to `inbound_emails` at send time,
+-- or (B) carry the reference on the row itself. This migration takes B: a new
+-- nullable column, written by `acknowledgementStatement` at draft time from
+-- whatever `SUB-XXXXXX` reference the router actually resolved (`null` when it
+-- didn't — the lead case and the unrouted case), and read by `resolveReplyTo`
+-- in preference to `submission_id`. That keeps `src/drain.ts`'s functions pure
+-- functions of the row they were handed — no join, no `inbound_emails` read
+-- inside the drain — which is the property `resolveCtaHref`/`resolveReplyTo`
+-- were already built around (see `src/drain.ts`'s own module doc).
+--
+-- ── WHY A NEW COLUMN, NOT A REINTERPRETATION OF `submission_id` ─────────────
+-- `submission_id` already carries two incompatible meanings for an
+-- `intake-reply` row (a real `SUB-XXXXXX` reference for a `recordNotificationForStatus`
+-- row, an `inbound_emails.id` for an `acknowledgementStatement` row) — that
+-- overload is a large part of why this bug exists. Adding a third, narrower
+-- meaning to the same column would keep stacking readers that all have to
+-- know which case they are in. A dedicated column says exactly one thing:
+-- "the SUB-XXXXXX reference a reply to this row should thread to, or nothing".
+--
+-- ── NULLABLE, NO BACKFILL ────────────────────────────────────────────────────
+-- Every row written before this migration — every ordinary
+-- `recordNotificationForStatus` send and every `intake-reply` draft written
+-- before this fix — has nothing here, and `resolveReplyTo`'s existing
+-- fallback (the plain configured address) is exactly correct for those: a row
+-- with a genuine `SUB-XXXXXX` reference already sitting in `submission_id`
+-- keeps working through the same fallback path unchanged, and a row with
+-- neither degrades exactly the way it always has ("absent beats broken").
+ALTER TABLE outbox ADD COLUMN thread_reference TEXT;
+
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '0025')
+  ON CONFLICT(key) DO UPDATE SET value = excluded.value;

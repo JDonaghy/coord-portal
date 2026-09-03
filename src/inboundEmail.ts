@@ -453,13 +453,18 @@ function draftFor(
       inboundEmailId,
       toEmail,
       `/submissions/${target.submissionId}`,
+      // Issue #196 (EM-8's own follow-up): the `SUB-XXXXXX` reference this
+      // draft's own Reply-To should plus-address to, distinct from the
+      // internal `target.submissionId` the CTA link above resolves against.
+      target.submissionReference,
       guard,
       attachmentCount,
     )
   }
   // `"unrouted"` — rung 6's ambiguous case. No submission was confidently
-  // attached to, so there is nothing behind Access to send this sender to yet.
-  return routedReplyStatement(env, inboundEmailId, toEmail, null, guard, attachmentCount)
+  // attached to, so there is nothing behind Access to send this sender to
+  // yet, and no reference to thread a reply to either.
+  return routedReplyStatement(env, inboundEmailId, toEmail, null, null, guard, attachmentCount)
 }
 
 /**

@@ -123,10 +123,23 @@ export interface QueuedRow {
    * writes, this is the customer-visible `SUB-XXXXXX` reference. It is NOT
    * that for an `intake-reply` row (`acknowledgementStatement`, same file),
    * which repurposes this column for an `inbound_emails.id` instead — see
-   * `resolveReplyTo`'s own doc for why that is exactly the "row with no
-   * submission reference" case #168 asks to degrade gracefully, not crash on.
+   * `thread_reference` below for how that row still gets a working Reply-To
+   * (issue #196), and `resolveReplyTo`'s own doc for the "genuinely no
+   * reference at all" case this column's mismatch used to be conflated with.
    */
   submission_id: string
+  /**
+   * `outbox.thread_reference` (`migrations/0025_outbox_thread_reference.sql`,
+   * issue #196) — the `SUB-XXXXXX` reference an `intake-reply` row's own
+   * Reply-To should plus-address to, written at draft time
+   * (`acknowledgementStatement`, `src/notifications.ts`) from whatever the
+   * router actually resolved. `null` for every row `recordNotificationForStatus`
+   * writes (that path never sets this column at all — `submission_id` already
+   * carries the real reference for those), and for an `intake-reply` row with
+   * no submission behind it (a stranger's lead, or rung 6's unrouted case) —
+   * see `resolveReplyTo` for why both read the same as "no reference to bear".
+   */
+  thread_reference: string | null
   attempts: number
 }
 
@@ -176,25 +189,45 @@ const SUBMISSION_REFERENCE_PATTERN = /^SUB-[A-Z0-9]{6}$/
  * ever sent from `recordNotificationForStatus` — but issue #164/#165's
  * `intake-reply` rows repurpose the same column for an `inbound_emails.id`
  * instead (see `QueuedRow.submission_id`'s own doc), which is not a
- * `SUB-XXXXXX` reference at all. `SUBMISSION_REFERENCE_PATTERN` is the one
- * thing standing between that and a plus-address minted from the wrong kind
- * of string — #168's own words: "A row with no submission reference (should
- * not occur) sends with the plain configured address rather than a malformed
- * one — absent beats broken, the same rule `replyTo` and `html` already
- * follow at that seam." A malformed `env.REPLY_TO` itself (no `@` to insert
- * the token before) gets the identical treatment for the identical reason:
- * the unmodified configured address, never a guess.
+ * `SUB-XXXXXX` reference at all.
+ *
+ * ── ISSUE #196: `thread_reference` TAKES PRIORITY, WHEN IT HAS ONE ───────────
+ * The very first `intake-reply` sent in production went out with the bare
+ * configured address — no plus-address at all — because `submission_id`
+ * *never* names a real reference for that email type, so every one of them
+ * fell straight into the fallback below. `outbox.thread_reference`
+ * (`migrations/0025_outbox_thread_reference.sql`) is where
+ * `acknowledgementStatement` (`src/notifications.ts`) now writes the router's
+ * actual `SUB-XXXXXX` reference for a matched thread, so this reads that
+ * first and only falls back to `submission_id` when it is absent — which
+ * covers both every pre-#196 row (nothing was ever written there) and every
+ * ordinary `recordNotificationForStatus` row (which never sets it either,
+ * because `submission_id` already holds the real reference for those).
+ *
+ * `SUBMISSION_REFERENCE_PATTERN` is the one thing standing between whichever
+ * of the two strings is picked and a plus-address minted from the wrong kind
+ * of string — #168's own words, still true for the cases that remain:
+ * "A row with no submission reference sends with the plain configured
+ * address rather than a malformed one — absent beats broken, the same rule
+ * `replyTo` and `html` already follow at that seam." That is now the genuine
+ * "should not occur" case #168 described (a stranger's lead, rung 6's
+ * unrouted case, or a hand-edited row) rather than the 100%-of-`intake-reply`
+ * case it was in practice before this fix. A malformed `env.REPLY_TO` itself
+ * (no `@` to insert the token before) gets the identical treatment for the
+ * identical reason: the unmodified configured address, never a guess.
  */
-function resolveReplyTo(env: Env, submissionId: string): string | undefined {
+function resolveReplyTo(env: Env, row: Pick<QueuedRow, "submission_id" | "thread_reference">): string | undefined {
   if (!env.REPLY_TO) return undefined
-  if (!SUBMISSION_REFERENCE_PATTERN.test(submissionId)) return env.REPLY_TO
+
+  const reference = row.thread_reference ?? row.submission_id
+  if (!SUBMISSION_REFERENCE_PATTERN.test(reference)) return env.REPLY_TO
 
   const at = env.REPLY_TO.indexOf("@")
   if (at < 0) return env.REPLY_TO
 
   const localPart = env.REPLY_TO.slice(0, at)
   const domain = env.REPLY_TO.slice(at)
-  return `${localPart}+${submissionId}${domain}`
+  return `${localPart}+${reference}${domain}`
 }
 
 /**
@@ -214,7 +247,7 @@ export async function drainOutbox(env: Env): Promise<void> {
   const leaseThreshold = new Date(Date.now() - CLAIM_LEASE_MS).toISOString()
 
   const { results } = await env.DB.prepare(
-    `SELECT id, to_email, from_email, subject, body, cta_text, cta_href, submission_id, attempts
+    `SELECT id, to_email, from_email, subject, body, cta_text, cta_href, submission_id, thread_reference, attempts
        FROM outbox
       WHERE status = 'queued'
         AND approval_state IN ('not_required', 'approved')
@@ -295,7 +328,7 @@ export async function processRow(env: Env, provider: MailProvider, row: QueuedRo
     from: row.from_email,
     subject: row.subject,
     body: row.body,
-    replyTo: resolveReplyTo(env, row.submission_id),
+    replyTo: resolveReplyTo(env, row),
     ...(ctaHref ? { ctaText: row.cta_text, ctaHref } : {}),
   })
 

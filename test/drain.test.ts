@@ -38,6 +38,8 @@ interface StoredRow {
   cta_href: string
   /** Issue #168's own column — see `QueuedRow.submission_id` in `src/drain.ts`. */
   submission_id: string
+  /** Issue #196's own column — see `QueuedRow.thread_reference` in `src/drain.ts`. */
+  thread_reference: string | null
   attempts: number
   status: string
   last_error: string | null
@@ -59,6 +61,7 @@ function seedRow(overrides: Partial<StoredRow> = {}): StoredRow {
     cta_text: "Review the design",
     cta_href: "/submissions/SUB-DRAIN01",
     submission_id: "SUB-DRAIN1",
+    thread_reference: null,
     attempts: 0,
     status: "queued",
     last_error: null,
@@ -185,6 +188,7 @@ function queuedRowFrom(stored: StoredRow): QueuedRow {
     cta_text: stored.cta_text,
     cta_href: stored.cta_href,
     submission_id: stored.submission_id,
+    thread_reference: stored.thread_reference,
     attempts: stored.attempts,
   }
 }
@@ -686,12 +690,14 @@ describe("processRow — Reply-To (issue #168, EM-8)", () => {
     ).not.toBe(captured[1]?.replyTo)
   })
 
-  it("falls back to the plain configured address for a row with no submission reference to bear (e.g. an intake-reply draft)", async () => {
+  it("falls back to the plain configured address for a row with no reference to bear at all (a stranger's lead, or rung 6's unrouted case)", async () => {
     // `outbox.submission_id` for an `intake-reply` row is an `inbound_emails.id`
     // (`inb_...`), never a `SUB-XXXXXX` reference — see `QueuedRow.submission_id`'s
-    // own doc in `src/drain.ts`. "Should not occur" per #168's own words, but
-    // this is the one case in this codebase today that actually produces it.
-    const seeded = seedRow({ submission_id: "inb_0123456789abcdef01234567" })
+    // own doc in `src/drain.ts`. Before issue #196, this was 100% of
+    // `intake-reply` rows; now it is only the genuine "should not occur"
+    // case #168 described — `thread_reference` null too, because
+    // `acknowledgementStatement` had no real reference to write there either.
+    const seeded = seedRow({ submission_id: "inb_0123456789abcdef01234567", thread_reference: null })
     const { DB } = fakeDrainDB([seeded])
     const env = { DB, REPLY_TO: "intake@mail.example.test" } as unknown as Env
 
@@ -709,6 +715,50 @@ describe("processRow — Reply-To (issue #168, EM-8)", () => {
       captured?.replyTo,
       "absent beats broken — the plain configured address, never a malformed plus-address",
     ).toBe("intake@mail.example.test")
+  })
+
+  it("issue #196: plus-addresses an intake-reply row using thread_reference, not the inbound_emails id sitting in submission_id", async () => {
+    // The production bug this closes: an `intake-reply` row's `submission_id`
+    // is an `inbound_emails.id`, never a `SUB-XXXXXX` reference — but
+    // `acknowledgementStatement` (`src/notifications.ts`) now also writes the
+    // real reference into `thread_reference` whenever the router resolved
+    // one, and `resolveReplyTo` must prefer that over `submission_id`.
+    const seeded = seedRow({
+      submission_id: "inb_39a50f69718d88d4fc505f01",
+      thread_reference: "SUB-5601FF",
+    })
+    const { DB } = fakeDrainDB([seeded])
+    const env = { DB, REPLY_TO: "intake@mail.example.test" } as unknown as Env
+
+    let captured: OutboundEmail | undefined
+    const provider: MailProvider = {
+      async send(email) {
+        captured = email
+        return { ok: true, providerMessageId: "fake-msg-threadref" }
+      },
+    }
+
+    await processRow(env, provider, queuedRowFrom(seeded))
+
+    expect(captured?.replyTo).toBe("intake+SUB-5601FF@mail.example.test")
+  })
+
+  it("issue #196: prefers thread_reference over submission_id when a row somehow carries both", async () => {
+    const seeded = seedRow({ submission_id: "SUB-AAAAAA", thread_reference: "SUB-BBBBBB" })
+    const { DB } = fakeDrainDB([seeded])
+    const env = { DB, REPLY_TO: "intake@mail.example.test" } as unknown as Env
+
+    let captured: OutboundEmail | undefined
+    const provider: MailProvider = {
+      async send(email) {
+        captured = email
+        return { ok: true, providerMessageId: "fake-msg-threadref-priority" }
+      },
+    }
+
+    await processRow(env, provider, queuedRowFrom(seeded))
+
+    expect(captured?.replyTo).toBe("intake+SUB-BBBBBB@mail.example.test")
   })
 
   it("falls back to the plain configured address when REPLY_TO itself has no @ to insert a token before", async () => {
