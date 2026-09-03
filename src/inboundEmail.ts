@@ -634,6 +634,59 @@ export async function listInboundEmails(env: Env, limit = 200): Promise<InboundE
 }
 
 /**
+ * The observable fact behind `checks.intake` in `GET /api/health`
+ * (`src/routes/health.ts`) — issue #197, #160's own ops step 4: "add the
+ * forward to the health checks. The failure mode is silence, and silence is
+ * what a working intake mailbox already looks like." `d1`/`r2` prove the
+ * Worker's own bindings answer; neither proves a single message has ever
+ * reached `email()` — which is exactly the gap that let #161-#169 ship,
+ * deploy, and report a green health check next to a catch-all that was still
+ * `enabled: false` with no rule pointed at this Worker.
+ *
+ * Both fields cover every row in `inbound_emails` regardless of
+ * `disposition` — a `suppressed` or `rate_limited` row still proves a message
+ * reached this Worker, which is the only question this answers: is the pipe
+ * open at all, not whether any one message was answered.
+ *
+ * This table is portal-owned, so the query lives here rather than in
+ * `src/routes/health.ts` — the same reason every other read against
+ * `inbound_emails` (`listInboundEmails`, `findByMessageId`, …) lives in this
+ * module and not its caller.
+ *
+ * Deliberately returns the plain facts and nothing else: no verdict, no
+ * threshold, no `ok`. `probeIntake` (`src/routes/health.ts`) is the one
+ * place that turns this into a health-check shape, and its own doc says why
+ * it never derives `ok` from staleness — a quiet week is not an outage for a
+ * business this size, and asserting a threshold here would reproduce #197's
+ * own failure one level up.
+ */
+export interface IntakeHealthSnapshot {
+  /** `MAX(received_at)` over every recorded row, or `null` if none exists. */
+  lastReceivedAt: string | null
+  /** Count of rows whose `received_at` falls inside the trailing `windowDays`. */
+  recentCount: number
+}
+
+export async function getIntakeHealthSnapshot(
+  env: Env,
+  windowDays: number,
+): Promise<IntakeHealthSnapshot> {
+  const windowStart = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString()
+  const row = await env.DB.prepare(
+    `SELECT
+       (SELECT MAX(received_at) FROM inbound_emails) AS last_received_at,
+       (SELECT COUNT(*) FROM inbound_emails WHERE received_at >= ?) AS recent_count`,
+  )
+    .bind(windowStart)
+    .first<{ last_received_at: string | null; recent_count: number }>()
+
+  return {
+    lastReceivedAt: row?.last_received_at ?? null,
+    recentCount: row?.recent_count ?? 0,
+  }
+}
+
+/**
  * The inbound row one drafted reply answers — the read behind `/replies/:id`
  * (issue #166, EM-6).
  *

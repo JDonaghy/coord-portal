@@ -14,17 +14,47 @@ export interface FakeEnvOptions {
   schemaVersion?: string | null
   d1Throws?: Error
   r2Throws?: Error
+  /** issue #197 — `GET /api/health`'s `checks.intake` probe, backed by `getIntakeHealthSnapshot`. */
+  intakeLastReceivedAt?: string | null
+  intakeRecentCount?: number
+  intakeThrows?: Error
 }
 
 export function fakeEnv(options: FakeEnvOptions = {}): Env {
-  const { schemaVersion = "0001", d1Throws, r2Throws } = options
+  const {
+    schemaVersion = "0001",
+    d1Throws,
+    r2Throws,
+    intakeLastReceivedAt = null,
+    intakeRecentCount = 0,
+    intakeThrows,
+  } = options
 
   const DB = {
-    prepare(_sql: string) {
+    prepare(sql: string) {
+      // `getIntakeHealthSnapshot` (`src/inboundEmail.ts`) is the only query
+      // this fake issues against `inbound_emails` — distinguished by table
+      // name so `d1Throws`/`schemaVersion` keep governing the `schema_meta`
+      // probe exactly as before, and every other existing caller of
+      // `fakeEnv()` (none of which touch `inbound_emails`) sees no change.
+      const isIntakeQuery = sql.includes("inbound_emails")
+      const first = async <T>(): Promise<T | null> => {
+        if (isIntakeQuery) {
+          if (intakeThrows) throw intakeThrows
+          return { last_received_at: intakeLastReceivedAt, recent_count: intakeRecentCount } as T
+        }
+        if (d1Throws) throw d1Throws
+        return schemaVersion === null ? null : ({ value: schemaVersion } as T)
+      }
       return {
-        async first<T>(): Promise<T | null> {
-          if (d1Throws) throw d1Throws
-          return schemaVersion === null ? null : ({ value: schemaVersion } as T)
+        // `probeD1` (`src/routes/health.ts`) calls `first()` unbound;
+        // `getIntakeHealthSnapshot` (`src/inboundEmail.ts`) binds a window
+        // start first. Both read the same fake data either way — this fake
+        // has no bound parameters to honour, only `intakeThrows`/the fixed
+        // `intake*` fields above.
+        first,
+        bind(..._args: unknown[]) {
+          return { first }
         },
       }
     },
