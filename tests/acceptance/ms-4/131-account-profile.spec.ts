@@ -70,6 +70,24 @@ import { expect, test, type Browser, type Page } from "@playwright/test"
  * section, every email, name, phone number and address below is invented and
  * sits on RFC 6761's reserved `.test` TLD. The phone numbers use the +1 555-01xx
  * fictional range; the addresses name no real place.
+ *
+ * ── AMENDMENT 1 (2026-09-02) — account-nav surface correction ───────────────
+ *
+ * Requested by the operator after this slice was originally sealed, and applied
+ * to `contract.md` by an independent mock-author agent without sight of this
+ * file's implementation. It supersedes only where `nav-account` and
+ * `identity-email` render and when they are visible: both move from *always
+ * visible, flat in the main nav row* to *present in the DOM inside a new
+ * `account-menu` disclosure's panel, visible only once that menu is open*.
+ * Their text, attributes and `href`s are unchanged. The amendment's own text
+ * (contract.md § "Amendment 1", warning box) names exactly two assertions in
+ * this file it breaks — `"the profile is reachable from every authenticated
+ * customer screen"` and `"adding the profile entry disturbs nothing on the
+ * existing customer topbar"` — both re-authored below to open the menu before
+ * asserting visibility. Every other test in this file only ever asserts
+ * `identity-email`/`nav-account` with `toContainText`/`toHaveAttribute`, which
+ * do not require visibility and so needed no change; the amendment's own grep
+ * says as much and this rewrite double-checked it directly.
  */
 
 const ACCESS_HEADER = "Cf-Access-Authenticated-User-Email"
@@ -184,14 +202,14 @@ const ACCOUNT_HOOKS = [
   "account-save-button",
 ]
 
-/** The customer topbar hooks ms-1 pins, which #131 must leave exactly alone. */
-const EXISTING_TOPBAR = [
-  "brand-home",
-  "nav-dashboard",
-  "nav-new",
-  "nav-outbox",
-  "identity-email",
-]
+/**
+ * The customer topbar hooks ms-1 pins that stay flat, always-visible, and
+ * untouched by both #131 and Amendment 1. `identity-email` is deliberately
+ * absent from this list and handled on its own in the ratchet test below:
+ * Amendment 1 moves it into the account-menu panel, present in the DOM but
+ * visible only once that menu is open.
+ */
+const EXISTING_TOPBAR = ["brand-home", "nav-dashboard", "nav-new", "nav-outbox"]
 
 test.describe("ms-4 issue 131 client self-service profile", () => {
   /**
@@ -310,25 +328,64 @@ test.describe("ms-4 issue 131 client self-service profile", () => {
   })
 
   /**
-   * Contract: `/account` "adds one nav entry to the existing customer
-   * `topbar()`: `nav-account` (text 'My profile'), additive the same way issue
-   * #14 added `nav-outbox`". `topbar()` is shared, so the entry appears on every
-   * authenticated customer screen — which is what makes the page discoverable
-   * without the operator sending a link.
+   * Contract § "Client self-service profile" + Amendment 1 § "Account menu":
+   * `nav-account` (text 'My profile', `href="/account"`) lives inside the
+   * `account-menu` disclosure's panel on the shared customer `topbar()`, so it
+   * reaches every authenticated customer screen — which is what makes the page
+   * discoverable without the operator sending a link. Amendment 1 moved the
+   * hook off the flat nav row into that panel: present in the DOM everywhere,
+   * visible only once the menu is open (§ "Visibility pinning"). This is one of
+   * the two tests the amendment's own warning box names as broken by that
+   * move — re-authored here to open the menu before asserting visibility,
+   * rather than asserting on the pre-amendment flat rendering.
    */
   test("the profile is reachable from every authenticated customer screen", async ({
     browser,
     baseURL,
   }) => {
-    const context = await asCustomer(browser, baseURL, "nadia.nav.131@example.test")
+    const email = "nadia.nav.131@example.test"
+    const context = await asCustomer(browser, baseURL, email)
     const page = await context.newPage()
 
     for (const screen of ["/intake", "/submissions", "/outbox", "/account"]) {
       await page.goto(screen)
+
+      const menu = page.getByTestId("account-menu")
+      await expect(
+        menu,
+        `contract § 'Account menu': the trigger sits on the shared customer topbar(), so it ` +
+          `renders on ${screen} too`,
+      ).toBeVisible()
+      await expect(
+        menu,
+        "contract: the trigger's text is the first two characters of the signed-in email's " +
+          "local-part, uppercased",
+      ).toHaveText("NA")
+      await expect(
+        menu,
+        "…and the accessible name spells out the full signed-in address",
+      ).toHaveAttribute("aria-label", `Account menu (${email})`)
+      await expect(
+        menu,
+        `closed by default on a fresh load of ${screen} — no mock in this amendment shows a ` +
+          "freshly-rendered screen with the menu already open",
+      ).toHaveAttribute("aria-expanded", "false")
+
       const entry = page.getByTestId("nav-account")
       await expect(
         entry,
-        `\`nav-account\` sits on the shared customer topbar(), so it renders on ${screen} too`,
+        `Amendment 1: nav-account is present in the DOM on ${screen}, inside the account-menu panel`,
+      ).toBeAttached()
+      await expect(
+        entry,
+        `Amendment 1 § 'Visibility pinning': nav-account is not visible on ${screen} while the ` +
+          "menu is closed",
+      ).toBeHidden()
+
+      await menu.click()
+      await expect(
+        entry,
+        `Amendment 1: opening the menu on ${screen} makes nav-account visible`,
       ).toBeVisible()
       await expect(entry, "contract: text 'My profile'").toHaveText("My profile")
       await expect(entry, "…linking to #131's route").toHaveAttribute("href", "/account")
@@ -336,8 +393,10 @@ test.describe("ms-4 issue 131 client self-service profile", () => {
 
     // Mock 06, and the same convention every other topbar mock in this repo
     // renders (ms-1's `nav-dashboard`/`nav-new`, ms-3's `nav-deliveries`): the
-    // entry for the screen you are on marks itself as current.
+    // entry for the screen you are on marks itself as current. Amendment 1
+    // moves the element's container and visibility, not this attribute.
     await page.goto("/account")
+    await page.getByTestId("account-menu").click()
     await expect(
       page.getByTestId("nav-account"),
       "mock 06 renders `aria-current=\"page\"` on the entry for the screen being shown, the same " +
@@ -712,6 +771,17 @@ test.describe("ms-4 issue 131 client self-service profile", () => {
    * The most plausible way to get that wrong is not "the entry is missing" —
    * the nav test above catches that — it is "the entry arrived and displaced
    * something". This is what notices.
+   *
+   * Amendment 1 § "Account menu" narrows what "unchanged" means for
+   * `identity-email` specifically: it keeps its text and meaning, but moves
+   * from *always visible in the main row* to *present in the DOM inside the
+   * account-menu panel, visible only once that menu is open*. This is the
+   * second of the two tests the amendment's own warning box names as broken
+   * by that move — re-authored below to check for the hook's presence and
+   * then open the menu before asserting visibility, rather than asserting
+   * `.toBeVisible()` against the pre-amendment flat rendering. `brand-home`,
+   * `nav-dashboard`, `nav-new` and `nav-outbox` are untouched by the amendment
+   * and still checked exactly as before.
    */
   test("adding the profile entry disturbs nothing on the existing customer topbar", async ({
     browser,
@@ -729,10 +799,23 @@ test.describe("ms-4 issue 131 client self-service profile", () => {
           `ms-1's ${hook} keeps exactly its meaning and rendering on ${screen} — #131 only adds`,
         ).toBeVisible()
       }
+
+      const identity = page.getByTestId("identity-email")
       await expect(
-        page.getByTestId("identity-email"),
-        `…and ${screen} still names the signed-in customer`,
-      ).toContainText(email)
+        identity,
+        `…and ${screen} still carries the signed-in customer's identity in the DOM`,
+      ).toBeAttached()
+      await expect(
+        identity,
+        `Amendment 1: identity-email is not visible on ${screen} while the account menu is closed`,
+      ).toBeHidden()
+
+      await page.getByTestId("account-menu").click()
+      await expect(
+        identity,
+        `…and opening the menu on ${screen} reveals it again`,
+      ).toBeVisible()
+      await expect(identity, `…and it still names the signed-in customer`).toContainText(email)
     }
 
     await context.close()
