@@ -194,9 +194,10 @@ test.describe("an operator's nav", () => {
       await expect(page.getByTestId("nav-group-divider")).toHaveCount(1)
       await expect(page.getByTestId("nav-group-operator-label")).toHaveText("Operator")
 
-      if (currentHook === "nav-account") {
-        await openAccountMenu(page)
-      }
+      // No pre-open here: `nav-account`'s aria-current doesn't require the
+      // panel visible, and `expectSignOut` below opens the menu itself.
+      // Opening it twice would toggle the native <details> back closed
+      // before that assertion runs.
       await expect(page.getByTestId(currentHook)).toHaveAttribute("aria-current", "page")
       // Exactly one nav entry is ever "current".
       await expect(page.locator('[aria-current="page"]')).toHaveCount(1)

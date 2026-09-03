@@ -180,7 +180,7 @@ function operatorNavGroup(current: string): string {
  */
 function accountMenu(email: string | null, panelBody: string): string {
   const identity = email ? escapeHtml(email) : "unknown"
-  const local = (email ?? "unknown").split("@")[0] ?? ""
+  const local = email ? (email.split("@")[0] ?? "") : ""
   const initials = escapeHtml((local.slice(0, 2) || "??").toUpperCase())
 
   return `<details class="account-menu">
