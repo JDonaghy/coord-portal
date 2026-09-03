@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   MAX_BODY_TEXT_CHARS,
+  getIntakeHealthSnapshot,
   listInboundEmails,
   parseDmarcVerdict,
   recordInboundEmail,
@@ -272,6 +273,19 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
             },
             async first<T>(): Promise<T | null> {
               if (isRouterRead(statement)) return null
+              // Issue #197: `getIntakeHealthSnapshot`'s own query — the newest
+              // `received_at` over every row, and a count within a caller-given
+              // window, both regardless of `disposition` (a suppressed or
+              // rate-limited row still proves the pipe is open).
+              if (statement.includes("last_received_at") && statement.includes("recent_count")) {
+                const [windowStart] = args as [string]
+                const lastReceivedAt =
+                  store.length === 0
+                    ? null
+                    : store.reduce((max, s) => (s.received_at > max ? s.received_at : max), store[0]!.received_at)
+                const recentCount = store.filter((s) => s.received_at >= windowStart).length
+                return { last_received_at: lastReceivedAt, recent_count: recentCount } as unknown as T
+              }
               // EM-9 (#169): the per-sender and total draft-rate-limit counts —
               // see `isInboundDraftRateLimited` (`src/rateLimit.ts`). Told apart
               // by whether the query also filters on `from_email`.
@@ -1030,6 +1044,47 @@ describe("listInboundEmails", () => {
     const rows: InboundEmailRecord[] = await listInboundEmails(env)
     expect(rows).toHaveLength(2)
     expect(rows[0]?.subject).toBe("second")
+  })
+})
+
+/**
+ * Issue #197 (#160's own ops step 4, never done): "add the forward to the
+ * health checks." `getIntakeHealthSnapshot` is the query `checks.intake`
+ * (`src/routes/health.ts`) is built on — this file's own subject, so the
+ * behaviour of the query itself belongs here rather than in `test/health.test.ts`,
+ * which covers the endpoint's wiring and shape instead.
+ */
+describe("getIntakeHealthSnapshot — issue #197", () => {
+  it("reports null and zero when nothing has ever arrived", async () => {
+    const env = fakeInboundEnv()
+    const snapshot = await getIntakeHealthSnapshot(env, 7)
+    expect(snapshot.lastReceivedAt).toBeNull()
+    expect(snapshot.recentCount).toBe(0)
+  })
+
+  it("counts every disposition, not only `received` — a suppressed or rate-limited row still proves the pipe is open", async () => {
+    const env = fakeInboundEnv()
+    await record(env, {
+      messageId: "intake-suppressed@sender.example.test",
+      extraHeaders: { "Auto-Submitted": "auto-replied" },
+    })
+    await record(env, { messageId: "intake-received@sender.example.test" })
+
+    const snapshot = await getIntakeHealthSnapshot(env, 7)
+    expect(snapshot.recentCount).toBe(2)
+    expect(snapshot.lastReceivedAt).not.toBeNull()
+  })
+
+  it("excludes rows older than the window from the count, but still reports the all-time latest timestamp", async () => {
+    const env = fakeInboundEnv()
+    await record(env, { messageId: "intake-old@sender.example.test" })
+    const rows = storedRows(env)
+    const oldTimestamp = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+    rows[0]!.received_at = oldTimestamp
+
+    const snapshot = await getIntakeHealthSnapshot(env, 7)
+    expect(snapshot.recentCount, "outside the 7-day window").toBe(0)
+    expect(snapshot.lastReceivedAt, "MAX(received_at) is not windowed").toBe(oldTimestamp)
   })
 })
 
