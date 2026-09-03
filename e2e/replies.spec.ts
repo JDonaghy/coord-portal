@@ -109,6 +109,8 @@ interface RecordedEmail {
   subject: string
   text: string
   html?: string
+  /** Issue #168/#196's own field — see `e2e/drain.spec.ts`'s identically-shaped read-back. */
+  replyTo?: string
 }
 
 /** What the recording fake was actually handed for one recipient — `src/routes/outbound.ts`. */
@@ -393,7 +395,61 @@ test.describe("issue #166 — /replies, the approval gate becomes operable", () 
     expect(sent[0]?.html ?? "", "the re-rendered CTA points at the project an operator chose").toContain(
       `/submissions/${betaSubmission.id}`,
     )
+    // Issue #196: re-routing rewrites `thread_reference` too, not only the
+    // CTA — a reply to this acknowledgement must thread onto the project an
+    // operator actually picked, not the tie it started as unrouted with.
+    expect(
+      sent[0]?.replyTo,
+      `Reply-To must carry ${betaSubmission.reference} — the submission this row was re-routed to`,
+    ).toMatch(new RegExp(`\\+${betaSubmission.reference}@`))
     await page.context().close()
+  })
+
+  test("issue #196 (EM-8's own follow-up): a routed intake-reply carries the matched submission's own plus-addressed Reply-To", async ({
+    request,
+    browser,
+    baseURL,
+  }) => {
+    // The exact production shape the bug report traced: a known client's
+    // message lands on their project's thread (rung 3), the router resolves
+    // a real `SUB-XXXXXX` reference for it, and the drafted acknowledgement
+    // must be able to carry that reference in its own Reply-To once
+    // approved — not the bare, unthreadable configured address.
+    const clientEmail = uniqueEmail("em8-reply-to")
+    const client = insertClientRow(clientEmail)
+    const project = insertProjectRow({ clientId: client, customerEmail: clientEmail, name: "EM-8 Thread Project" })
+    const submission = insertSubmissionRow({ customerEmail: clientEmail, projectId: project })
+
+    const door = await deliver(request, {
+      from: clientEmail,
+      dmarc: "pass",
+      subject: "Any update on this?",
+      body: "Just checking in on progress.",
+    })
+    expect(door.routed_kind).toBe("message")
+    expect(door.routed_rung).toBe(3)
+    const draft = door.outbox_id ?? ""
+    expect(draft.length).toBeGreaterThan(0)
+
+    const operator = await contextFor(browser, baseURL, DEV_OPERATOR)
+    const approve = await operator.request.post(`/replies/${draft}/approve`, { form: {} })
+    expect(approve.status()).toBe(200)
+    await operator.close()
+
+    await runDrain(request)
+
+    const sent = await sentTo(request, clientEmail)
+    expect(sent, "exactly one send for the approved draft").toHaveLength(1)
+    expect(
+      sent[0]?.replyTo,
+      "#196: every intake-reply row routed to a real submission must carry a Reply-To — the exact " +
+        "case that used to fall through to the bare configured address, because outbox.submission_id " +
+        "holds this row's inbound_emails id, not a SUB-XXXXXX reference",
+    ).toBeTruthy()
+    expect(
+      sent[0]?.replyTo,
+      `${sent[0]?.replyTo} must carry ${submission.reference} as a plus-addressed local part ("intake+SUB-XXXXXX@…")`,
+    ).toMatch(new RegExp(`\\+${submission.reference}@`))
   })
 
   test("re-routing an ambiguous row to a lead mints the same inert row /start would have", async ({

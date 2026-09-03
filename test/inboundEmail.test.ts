@@ -82,6 +82,8 @@ interface StoredOutbox {
   cta_href: string
   queued_at: string
   approval_state: string
+  /** Issue #196's own column — see `QueuedRow.thread_reference` in `src/drain.ts`. */
+  thread_reference: string | null
 }
 
 /**
@@ -209,6 +211,7 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
                   cta_href,
                   coord_revision,
                   queued_at,
+                  thread_reference,
                   guardInboundId,
                 ] = args as [
                   string,
@@ -222,6 +225,7 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
                   string,
                   number,
                   string,
+                  string | null,
                   string,
                 ]
                 if (!inboundRowExists(guardInboundId)) return { meta: { changes: 0 } }
@@ -243,6 +247,7 @@ function fakeInboundEnv(vars: Partial<Env> = {}): Env {
                   cta_href,
                   queued_at,
                   approval_state: "pending",
+                  thread_reference,
                 })
                 return { meta: { changes: 1 } }
               }

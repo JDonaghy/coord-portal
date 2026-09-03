@@ -618,12 +618,20 @@ export function intakeReplyStatement(
   guard: CreateGuard,
   attachmentCount = 0,
 ): DraftedIntakeReply {
+  // `leadReference` is a `LEAD-XXXXXX` reference, never a `SUB-XXXXXX` one —
+  // there is no submission behind a stranger's draft (`intakeReplyContent`'s
+  // own doc) — so this writes no `thread_reference` at all (issue #196). A
+  // stranger's own reply-to still degrades to the plain configured address,
+  // exactly as it did before this fix; #196 only closes the gap for the
+  // routed cases below, which are the ones a real `SUB-XXXXXX` reference
+  // actually exists for.
   return acknowledgementStatement(
     env,
     inboundEmailId,
     toEmail,
     intakeReplyContent(leadReference, attachmentCount),
     guard,
+    null,
   )
 }
 
@@ -678,12 +686,22 @@ export function routedReplyContent(ctaHref: string | null, attachmentCount = 0):
  * `(submission_id = inboundEmailId, coord_revision = INTAKE_REPLY_REVISION)`
  * pair — an inbound email produces at most one draft regardless of which of
  * EM-3's outcomes it reached, so one idempotency key serves all of them.
+ *
+ * `submissionReference` (issue #196, EM-8's own follow-up) is the router's
+ * `SUB-XXXXXX` reference for the matched thread — `RoutingTarget.submissionReference`
+ * (`src/inboundRouter.ts`), the same value `inbound_emails.routed_submission_id`
+ * records — separate from `ctaHref`, which carries the *internal* submission
+ * id for the link, not the customer-facing reference a plus-address is built
+ * from. `null` for the unrouted case, same as `ctaHref`: rung 6 never
+ * confidently attached to a submission, so there is no reference to thread a
+ * reply to either.
  */
 export function routedReplyStatement(
   env: Env,
   inboundEmailId: string,
   toEmail: string,
   ctaHref: string | null,
+  submissionReference: string | null,
   guard: CreateGuard,
   attachmentCount = 0,
 ): DraftedIntakeReply {
@@ -693,6 +711,7 @@ export function routedReplyStatement(
     toEmail,
     routedReplyContent(ctaHref, attachmentCount),
     guard,
+    submissionReference,
   )
 }
 
@@ -704,6 +723,16 @@ export function routedReplyStatement(
  * than executed, why `guard` is required (not optional, unlike
  * `messageCreationStatement`'s), and why `(submission_id, coord_revision)`
  * is this draft's idempotency key.
+ *
+ * `threadReference` (issue #196) writes `outbox.thread_reference`
+ * (`migrations/0025_outbox_thread_reference.sql`) — the `SUB-XXXXXX`
+ * reference, if any, `src/drain.ts`'s `resolveReplyTo` should plus-address a
+ * reply to this row with, carried separately from `submission_id` because
+ * this INSERT already repurposes that column for `inboundEmailId`
+ * (`INTAKE_REPLY_REVISION`'s own doc). `null` for a draft with nothing real
+ * to thread to (a stranger's lead, or rung 6's unrouted case) — the drain's
+ * existing "absent beats broken" fallback handles that exactly as it always
+ * has.
  */
 function acknowledgementStatement(
   env: Env,
@@ -711,14 +740,15 @@ function acknowledgementStatement(
   toEmail: string,
   content: EmailContent,
   guard: CreateGuard,
+  threadReference: string | null,
 ): DraftedIntakeReply {
   const id = generateOutboxId()
   const now = new Date().toISOString()
 
   const statement = env.DB.prepare(
     `INSERT INTO outbox
-       (id, submission_id, email_type, to_email, from_email, subject, preheader, body, cta_text, cta_href, coord_revision, queued_at, approval_state)
-     SELECT ?, ?, 'intake-reply', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending'
+       (id, submission_id, email_type, to_email, from_email, subject, preheader, body, cta_text, cta_href, coord_revision, queued_at, approval_state, thread_reference)
+     SELECT ?, ?, 'intake-reply', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?
      ${guard.clause}
      ON CONFLICT (submission_id, coord_revision) DO NOTHING`,
   ).bind(
@@ -733,6 +763,7 @@ function acknowledgementStatement(
     content.ctaHref,
     INTAKE_REPLY_REVISION,
     now,
+    threadReference,
     ...guard.bindings,
   )
 
@@ -962,13 +993,37 @@ export async function discardReplyDraft(env: Env, id: string, decidedBy: string)
  * lead" branch, the `leads` row) it belongs with — the same reason
  * `intakeReplyStatement` above is returned rather than executed. Guarded on
  * the same `pending` predicate every other write here is.
+ *
+ * `threadReference` (issue #196) rewrites `thread_reference` right alongside
+ * every other content column, for the same reason `cta_href` is rewritten
+ * here rather than left alone: a re-route that moved the call-to-action but
+ * left yesterday's Reply-To token behind would let a customer's reply thread
+ * onto the *wrong* submission, or (re-routed to "lead") onto one that no
+ * longer applies at all. `src/routes/replies.ts` passes the newly-picked
+ * submission's own reference for a re-route to a project, and `null` for a
+ * re-route to "lead" — mirroring exactly what `routedReplyStatement` /
+ * `intakeReplyStatement` would have written had the draft been created fresh
+ * with this same outcome.
  */
-export function redraftReplyStatement(env: Env, id: string, content: EmailContent): D1PreparedStatement {
+export function redraftReplyStatement(
+  env: Env,
+  id: string,
+  content: EmailContent,
+  threadReference: string | null,
+): D1PreparedStatement {
   return env.DB.prepare(
     `UPDATE outbox
-        SET subject = ?, preheader = ?, body = ?, cta_text = ?, cta_href = ?
+        SET subject = ?, preheader = ?, body = ?, cta_text = ?, cta_href = ?, thread_reference = ?
       WHERE id = ? AND ${PENDING_REPLY_PREDICATE}`,
-  ).bind(content.subject, content.preheader, content.body, content.ctaText, content.ctaHref, id)
+  ).bind(
+    content.subject,
+    content.preheader,
+    content.body,
+    content.ctaText,
+    content.ctaHref,
+    threadReference,
+    id,
+  )
 }
 
 /**

@@ -412,7 +412,12 @@ describe("intakeReplyStatement", () => {
    * `DB.batch()` (`writeInboundEmail`, `src/inboundEmail.ts`).
    */
   function fakeOutboxDb() {
-    const rows: Array<{ id: string; submission_id: string; coord_revision: number }> = []
+    const rows: Array<{
+      id: string
+      submission_id: string
+      coord_revision: number
+      thread_reference: string | null
+    }> = []
     const recordedInboundIds = new Set<string>()
     const DB = {
       prepare(sql: string) {
@@ -421,7 +426,7 @@ describe("intakeReplyStatement", () => {
             return {
               async run() {
                 if (sql.includes("INSERT INTO outbox")) {
-                  const [id, submission_id, , , , , , , , coord_revision] = args as [
+                  const [id, submission_id, , , , , , , , coord_revision, , thread_reference] = args as [
                     string,
                     string,
                     string,
@@ -432,6 +437,8 @@ describe("intakeReplyStatement", () => {
                     string,
                     string,
                     number,
+                    string,
+                    string | null,
                   ]
                   const guardInboundId = args[args.length - 1] as string
                   if (!recordedInboundIds.has(guardInboundId)) return { meta: { changes: 0 } }
@@ -439,7 +446,7 @@ describe("intakeReplyStatement", () => {
                     (r) => r.submission_id === submission_id && r.coord_revision === coord_revision,
                   )
                   if (collides) return { meta: { changes: 0 } }
-                  rows.push({ id, submission_id, coord_revision })
+                  rows.push({ id, submission_id, coord_revision, thread_reference })
                   return { meta: { changes: 1 } }
                 }
                 throw new Error(`unrecognized run statement: ${sql}`)
@@ -479,6 +486,10 @@ describe("intakeReplyStatement", () => {
     expect(rows[0]?.id, "the id is known before the statement runs, so a caller can record it").toBe(
       draft.id,
     )
+    expect(
+      rows[0]?.thread_reference,
+      "issue #196: a lead is not a submission — there is no SUB-XXXXXX reference to thread to",
+    ).toBeNull()
   })
 
   it("drafts nothing when the inbound_emails row it belongs to never landed — the batch guard", async () => {
@@ -612,7 +623,13 @@ describe("routedReplyContent — issue #165 (EM-5 of milestone #5)", () => {
 describe("routedReplyStatement — issue #165 (EM-5 of milestone #5)", () => {
   /** Same fake shape `intakeReplyStatement`'s own describe block above uses. */
   function fakeOutboxDb() {
-    const rows: Array<{ id: string; submission_id: string; coord_revision: number; cta_href: string }> = []
+    const rows: Array<{
+      id: string
+      submission_id: string
+      coord_revision: number
+      cta_href: string
+      thread_reference: string | null
+    }> = []
     const recordedInboundIds = new Set<string>()
     const DB = {
       prepare(sql: string) {
@@ -621,25 +638,28 @@ describe("routedReplyStatement — issue #165 (EM-5 of milestone #5)", () => {
             return {
               async run() {
                 if (sql.includes("INSERT INTO outbox")) {
-                  const [id, submission_id, , , , , , , cta_href, coord_revision] = args as [
-                    string,
-                    string,
-                    string,
-                    string,
-                    string,
-                    string,
-                    string,
-                    string,
-                    string,
-                    number,
-                  ]
+                  const [id, submission_id, , , , , , , cta_href, coord_revision, , thread_reference] =
+                    args as [
+                      string,
+                      string,
+                      string,
+                      string,
+                      string,
+                      string,
+                      string,
+                      string,
+                      string,
+                      number,
+                      string,
+                      string | null,
+                    ]
                   const guardInboundId = args[args.length - 1] as string
                   if (!recordedInboundIds.has(guardInboundId)) return { meta: { changes: 0 } }
                   const collides = rows.some(
                     (r) => r.submission_id === submission_id && r.coord_revision === coord_revision,
                   )
                   if (collides) return { meta: { changes: 0 } }
-                  rows.push({ id, submission_id, coord_revision, cta_href })
+                  rows.push({ id, submission_id, coord_revision, cta_href, thread_reference })
                   return { meta: { changes: 1 } }
                 }
                 throw new Error(`unrecognized run statement: ${sql}`)
@@ -668,6 +688,7 @@ describe("routedReplyStatement — issue #165 (EM-5 of milestone #5)", () => {
       "inb_matched1",
       "known@example.test",
       "/submissions/sub_abc123",
+      "SUB-ABC123",
       guardOn("inb_matched1"),
     )
     await draft.statement.run()
@@ -676,17 +697,32 @@ describe("routedReplyStatement — issue #165 (EM-5 of milestone #5)", () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]?.submission_id).toBe("inb_matched1")
     expect(rows[0]?.cta_href).toBe("/submissions/sub_abc123")
+    expect(
+      rows[0]?.thread_reference,
+      "issue #196: the matched submission's own SUB-XXXXXX reference, for resolveReplyTo",
+    ).toBe("SUB-ABC123")
   })
 
   it("drafts a neutral row (no submission link) for the unrouted case", async () => {
     const { env, rows, recordedInboundIds } = fakeOutboxDb()
     recordedInboundIds.add("inb_unrouted1")
 
-    const draft = routedReplyStatement(env, "inb_unrouted1", "known@example.test", null, guardOn("inb_unrouted1"))
+    const draft = routedReplyStatement(
+      env,
+      "inb_unrouted1",
+      "known@example.test",
+      null,
+      null,
+      guardOn("inb_unrouted1"),
+    )
     await draft.statement.run()
 
     expect(rows).toHaveLength(1)
     expect(rows[0]?.cta_href).toBe("/")
+    expect(
+      rows[0]?.thread_reference,
+      "rung 6 never confidently attached to a submission — nothing to thread to",
+    ).toBeNull()
   })
 
   it("drafts nothing when the inbound_emails row it belongs to never landed — the batch guard", async () => {
@@ -697,6 +733,7 @@ describe("routedReplyStatement — issue #165 (EM-5 of milestone #5)", () => {
       "inb_never",
       "known@example.test",
       "/submissions/sub_abc123",
+      "SUB-ABC123",
       guardOn("inb_never"),
     )
     const result = await draft.statement.run()
@@ -714,6 +751,7 @@ describe("routedReplyStatement — issue #165 (EM-5 of milestone #5)", () => {
       "inb_dup555",
       "known@example.test",
       "/submissions/sub_abc123",
+      "SUB-ABC123",
       guardOn("inb_dup555"),
     )
     const second = routedReplyStatement(
@@ -721,6 +759,7 @@ describe("routedReplyStatement — issue #165 (EM-5 of milestone #5)", () => {
       "inb_dup555",
       "known@example.test",
       "/submissions/sub_abc123",
+      "SUB-ABC123",
       guardOn("inb_dup555"),
     )
     await first.statement.run()

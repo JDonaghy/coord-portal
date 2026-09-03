@@ -697,7 +697,10 @@ async function routeToProject(env: Env, view: ReplyView, picked: RoutingCandidat
   }
 
   await env.DB.batch([
-    redraftReplyStatement(env, view.draft.id, content),
+    // Issue #196: the re-routed draft's Reply-To must thread to the
+    // newly-picked submission, not whatever (or nothing) the previous route
+    // left behind.
+    redraftReplyStatement(env, view.draft.id, content, picked.submissionReference),
     retargetInboundEmailStatement(
       env,
       view.inbound.id,
@@ -744,7 +747,14 @@ async function routeToLead(env: Env, view: ReplyView): Promise<void> {
   // EM-9 (#169): same "re-rendered from the template" reasoning as
   // `routeToProject` above — the attachment disclosure survives becoming a lead.
   const statements = [
-    redraftReplyStatement(env, draft.id, intakeReplyContent(lead.reference, inbound.attachmentCount)),
+    // Issue #196: a lead is not a submission — no reference to thread a
+    // reply to, same as `intakeReplyStatement` writes for a fresh draft.
+    redraftReplyStatement(
+      env,
+      draft.id,
+      intakeReplyContent(lead.reference, inbound.attachmentCount),
+      null,
+    ),
     retargetInboundEmailStatement(env, inbound.id, retarget, pendingDraftGuard(draft.id, "AND")),
   ]
   if (existing === null) statements.push(leadCreationStatement(env, lead, pendingDraftGuard(draft.id)))
