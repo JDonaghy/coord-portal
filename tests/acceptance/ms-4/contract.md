@@ -10,6 +10,59 @@ established.
 
 Driver: `web-playwright`. Medium: static HTML, no build step, no framework, no live data.
 
+## Amendment 1 (2026-09-02) — account-nav surface correction
+
+**Requested by the operator, applied by an independent mock-author agent amending this
+already-merged Gate-A contract, without sight of any ms-4 implementation.** This amendment
+touches only the account-nav surface (`nav-account`, `identity-email`, `signout-link`, the
+`topbar()` header shape) — every other section of this contract is untouched and still governs.
+Superseded wording is left in place below, marked, rather than deleted, so this document still
+records what was actually approved at ms-4's original Gate A.
+
+> **⚠ This amendment, as requested, breaks two already-sealed acceptance assertions.**
+> `tests/acceptance/ms-4/131-account-profile.spec.ts` was authored (Gate B) against the
+> *original* wording superseded below, and asserts:
+> - test `"the profile is reachable from every authenticated customer screen"` —
+>   `page.getByTestId("nav-account")` `.toBeVisible()` on `/intake`, `/submissions`, `/outbox`,
+>   `/account`, with the menu never opened;
+> - test `"adding the profile entry disturbs nothing on the existing customer topbar"` —
+>   `EXISTING_TOPBAR` (which includes `identity-email`) asserted `.toBeVisible()` on `/intake`,
+>   `/submissions`, `/outbox`.
+>
+> Both hooks move, by this amendment's own § "Visibility pinning" below, from *visible while the
+> menu is closed* to *present in the DOM, visible only once the menu is open*. Playwright's
+> `toBeVisible()` follows CSS/attribute visibility (a closed `<details>`'s non-`summary` children
+> are not visible), so both tests will fail against an implementation that follows this amendment,
+> unchanged. This mock-author agent has no access to `tests/acceptance/ms-4/*.spec.ts` content
+> beyond what `grep` on file paths already reveals structurally, and is not permitted to edit
+> sealed test files under any circumstance (repo `CLAUDE.md`: "You must never create, edit or
+> delete anything under `tests/acceptance/`" — a rule this agent's own instructions echo). That
+> means this is not a mock-author's problem to silently route around: the coordinator needs to
+> decide whether the independent `test-author` re-authors `131-account-profile.spec.ts`'s two
+> affected tests against this amendment (the normal path for a Gate-A change reaching a milestone
+> whose Gate B already ran), or whether this amendment is rejected as incompatible with work
+> already sealed. Proceeding to implement this amendment without first resolving that will produce
+> a build that is correct against this contract and red against the sealed suite simultaneously —
+> flagged here, not resolved here.
+>
+> By contrast, `129-lead-promotion-client-link.spec.ts`, `130-reassign-project.spec.ts` and
+> `132-start-work-override.spec.ts` (the other three already-sealed ms-4 specs) contain no
+> `.toBeVisible()` assertion on `identity-email`, `nav-leads`, or `brand-home` — their mentions of
+> `identity-email` are prose comments explaining an env-var fallback, not DOM assertions — so the
+> operator-screen changes below (new account menu, nav grouping) do not, on the same grep, appear
+> to conflict with anything already sealed. "Does not appear to conflict" is this agent's own
+> reading of test source it is not blocked from *finding* (file names, `grep` hits) but has never
+> been asked to read in full for its own sake; it is not a guarantee.
+
+### WHY (operator's own words, recorded verbatim per this amendment's own request)
+
+As built, ms-4 pins `nav-account` as an always-visible flat link sitting in the same list as
+destination links, with `identity-email` and `signout-link` on a third header row. In use this
+reads as clutter, and because `header.topbar` is a wrapping flexbox capped at 44rem, the number of
+links changes the wrap and the `brand-home` element visibly moves between customer screens (9
+links, nav wraps to line 2) and operator screens (5 links, nav shares line 1). The operator
+reported both as disorienting. This amendment supersedes the "visible" pinning only.
+
 This milestone sits on top of ms-1 (the authenticated customer portal) and ms-2 (public lead
 intake + operator promotion, `tests/acceptance/ms-2/contract.md`), both built. Nothing here
 reopens either contract; every extension to an ms-2 screen is called out explicitly below, and
@@ -42,6 +95,15 @@ Five open issues, four of which change something a browser can see:
 | `04-lead-promoted-work-started.html` | Same lead as 02, after the operator used "Start work" | `GET /leads/:id`, `data-status="promoted"`, attached submission now `planned` |
 | `05-lead-reassign-open.html` | Same lead as 02, reassignment panel expanded | `GET /leads/:id`, `data-status="promoted"`, `reassign-toggle` checked |
 | `06-account-profile.html` | Signed-in client editing their own profile | `GET /account` |
+| `07-account-menu-open.html` | **Amendment 1.** Same lead/state as mock 02, account menu opened | `GET /leads/:id`, `data-status="promoted"`, `account-menu` `[open]` |
+
+**Amendment 1** also re-renders the header of mocks 01–06 in place (three-slot layout, account
+menu) — see "Account menu" below. Mocks 01–05 additionally now render the full, current operator
+nav (`nav-leads`/`nav-deliveries`/`nav-replies`/`nav-requests`/`nav-clients`, all five already
+pinned by ms-3's and ms-5's own, separately-sealed contracts) instead of `nav-leads` alone, because
+otherwise there is nothing for this amendment's "brand-home does not reflow" claim to demonstrate
+— this contract does not redefine any of those four hooks, only reuses them for visual accuracy,
+the same latitude the original ms-4 contract took reusing ms-2's `lead-detail` hooks byte-for-byte.
 
 **Not re-rendered, described in prose instead:** `GET /leads/:id`, `data-status="new"`, **no**
 client match. This is byte-identical to `tests/acceptance/ms-2/mocks/05-lead-detail.html` —
@@ -213,10 +275,18 @@ gap and should flag it rather than invent an answer either.
 
 `GET /account`, behind the same customer Access application ms-1's `/submissions*` already sits
 behind (`resolveSiteIdentity` — same identity mechanism, no new auth code, per CLAUDE.md and
-#131's own wording). Adds one nav entry to the existing customer `topbar()`
-(`src/render.ts`): `nav-account` (text "My profile"), additive the same way issue #14 added
-`nav-outbox` — every other `topbar()` hook (`brand-home`, `nav-dashboard`, `nav-new`,
-`nav-outbox`, `identity-email`) is unchanged.
+#131's own wording).
+
+> **Superseded by Amendment 1 (2026-09-02) — kept verbatim for the record, do not implement this
+> paragraph as written; see "Account menu" below instead.** Original text: "Adds one nav entry to
+> the existing customer `topbar()` (`src/render.ts`): `nav-account` (text 'My profile'), additive
+> the same way issue #14 added `nav-outbox` — every other `topbar()` hook (`brand-home`,
+> `nav-dashboard`, `nav-new`, `nav-outbox`, `identity-email`) is unchanged." What is superseded is
+> narrow: `nav-account` and `identity-email` no longer render as always-visible flat elements in
+> the main nav row. Their text, attributes, and `href`s are unchanged; only where they live and
+> when they are visible changes. `nav-dashboard`, `nav-new`, `nav-outbox` and `brand-home`
+> themselves are still unchanged, still in the main nav row, exactly as this superseded paragraph
+> said.
 
 - `account-form` (`method="POST" action="/account"`)
 - `account-email` — `<input readonly>`, the caller's own Access email, never editable here
@@ -234,6 +304,124 @@ all follow it), `POST /account` redirecting to `GET /account` with the new value
 reflected in the same fields is the pinned behavior; no distinct confirmation banner is pinned by
 this contract (a worker may add one additively, the same latitude ms-2's contract left for its
 own unpinned surfaces).
+
+## Account menu (Amendment 1, 2026-09-02) — mocks 01–07
+
+Replaces the flat `nav-account` entry / bare `identity-email` span / third-row `signout-link` on
+every authenticated screen (customer **and**, newly, operator) with one right-aligned disclosure.
+Mechanism: `<details>`/`<summary>`, no script, per this amendment's own constraint and this repo's
+established zero-JS convention for disclosures (`src/render.ts`'s `.composer-toggle`, and this
+contract's own `reassign-toggle`, § "Reassignment" above — both checkbox-based rather than
+`<details>`-based, but the same "no JavaScript" spirit).
+
+### Header shape — one three-slot layout, every authenticated screen
+
+`header.topbar`: brand (left) — nav (center, flexible) — account menu (right). `brand-home` is the
+flex row's first child with `flex: 0 0 auto`; the nav sits in the middle with `flex: 1 1 auto` and
+wraps internally, so a change in how many links the nav holds changes only the nav's own internal
+wrapping, never `brand-home`'s position in the row. This is this amendment's fix for the
+`brand-home`-reflow complaint in "WHY" above.
+
+### The trigger and its panel
+
+- `account-menu` — the `<summary>` element. Shows initials derived from the signed-in address:
+  **the first two characters of the email's local-part (before `@`), uppercased** — e.g.
+  `dana@example.test` → `DA`, `ops@example.test` → `OP`. This exact rule is pinned so the
+  independent test-author can compute the expected initials from a fixture email without reading
+  any implementation. Carries `aria-label="Account menu ({email})"` (accessible name, e.g.
+  `aria-label="Account menu (dana@example.test)"`) and a static `aria-expanded` reflecting the
+  state the mock depicts (`"false"` when the enclosing `<details>` has no `open` attribute,
+  `"true"` when it does — mock 07 is the one file in this contract showing `"true"`).
+- The panel is the `<details>` element's other children (a `<div>` with no additional structure
+  pinned beyond order and contents below). Not itself given a `data-testid` by this contract; a
+  worker may add one.
+- Panel contents, in this order:
+  1. `identity-email` — text exactly `signed in as {email}`, unchanged from every prior mention in
+     this contract and in ms-1's contract.
+  2. `nav-account` — text exactly `My profile`, `href="/account"`, **customer screens only** (see
+     "Operator screens" below for why it is absent there). Keeps `aria-current="page"` when the
+     current route is `/account` (mock 06/07's customer case — note mock 07 itself is an operator
+     screen and so does not show `nav-account` at all; no mock in this amendment shows
+     `nav-account` with `aria-current="page"` inside an *open* panel, because mock 06 shows the
+     panel closed and mock 07 shows an operator screen. This contract does not add an eighth mock
+     for that combination — a worker/tester can derive it by composing 06's markup with 07's
+     `open` state; flagged as a gap in mock coverage, not in the pinning itself, the same posture
+     the original contract took toward its own "not re-rendered" no-match screen).
+  3. `signout-link` — text exactly `Sign out`, `href="/cdn-cgi/access/logout"` (this exact hook,
+     text and href already exist, pinned by `tests/acceptance/ms-5/contract.md` for the operator
+     topbar; this amendment reuses it rather than redefining it, and additionally pins it onto the
+     customer topbar for the first time).
+
+### Visibility pinning — this is the actual amendment
+
+`nav-account` and `identity-email` are pinned as **present in the DOM** with exactly the text and
+attributes above on every authenticated screen, and **visible once the menu is open** — no longer
+visible while the menu is closed. `signout-link` is pinned the same way on the customer topbar
+(new there); it already had this "visible only when its enclosing UI is open" character nowhere —
+ms-5's operator topbar rendered it flat and always-visible, and this amendment additionally moves
+*that* rendering behind the same disclosure, on operator screens, per "Operator screens" below. See
+the Amendment-1 warning box at the top of this document for which already-sealed test file this
+displaces. Every other hook this contract or any prior one pins keeps its existing pinning
+untouched — in particular `account-form` and its four fields are still always visible on `/account`
+itself; only the *topbar's* account/identity/signout hooks move.
+
+### Operator screens (mocks 01–05, 07) — newly gain the account menu
+
+Per this amendment's own item 4, `/leads`, `/deliveries`, `/replies`, `/requests`, `/clients` (and,
+within this contract's own scope, `/leads/:id`) gain the same right-aligned `account-menu`. Its
+panel on an operator screen contains **`identity-email` and `signout-link` only — not
+`nav-account`.** This is this amendment's own resolution of a gap the request left open, flagged as
+an inference rather than read from the request's text: `nav-account`'s `href="/account"` is
+pinned, by this contract's own "Route surface" table above, as a **customer**-gated route
+(`GET /account | customer`); the amendment request specifies the panel's contents "in this order:
+identity-email, nav-account, signout-link" generically and separately says the whole menu "appears
+on operator screens too," without saying whether an operator should see a link to a route their
+own Access application cannot serve. Putting a `nav-account` link in front of an operator that
+403s (or worse, silently redirects into the customer Access app) the moment they click it would be
+a worse outcome than the clutter this amendment sets out to fix, so this contract omits it there.
+A worker who disagrees and wants an operator-equivalent profile page is proposing new scope, not
+implementing this amendment.
+
+### Operator nav grouping (item 5) — a request this contract cannot satisfy as literally written
+
+The request asks that "operator links... are visually separated from the customer links by a
+divider and a group label, so the two sets stop reading as one undifferentiated list." On every
+operator screen this contract or `ms-3`'s/`ms-5`'s already-sealed contracts render, **there are no
+customer links to separate from** — `nav-dashboard`, `nav-new`, `nav-new-cta` and `nav-outbox` are
+explicitly pinned absent from operator screens (this amendment's own "CONSTRAINTS" section restates
+that, quoting ms-2 issue 33 and ms-3 issue 55), and customer/operator sit behind two different
+Cloudflare Access applications that never render in the same document. There is, today, nothing on
+either side of the requested divider but the five operator links themselves. This contract does not
+silently invent a customer-link presence that the architecture forbids in order to make the
+request's premise true. What it pins instead, as its own resolution: a `nav-group-divider` element
+and a `nav-group-operator-label` element (visible text "Operator") precede the five operator links
+as a self-contained, labeled group — satisfying the literal structural ask (a divider, then a
+label, then the links) while flagging that, under the current architecture, the divider currently
+separates the group from nothing. If a future milestone ever renders customer and operator links in
+the same document, this structure is already in place for that; until then, this is this
+contract's best-effort compliance with a request whose stated premise ("the two sets... reading as
+one undifferentiated list") does not describe anything this contract or its predecessors ever
+built. The five links keep their existing meaning and destinations exactly as ms-3's and ms-5's
+contracts pin them — this amendment does not touch `nav-deliveries`, `nav-replies`, `nav-requests`
+or `nav-clients` beyond wrapping them in this group.
+
+### Keyboard behavior — Escape does not close the panel in these mocks, and this contract flags why
+
+The amendment request pins both "no framework and no build step" plus `<details>`/`<summary>` "is
+the expected mechanism," **and** "Keyboard-operable, Escape closes." Native `<details>` is
+keyboard-operable for free (the `<summary>` is a real, focusable, `Enter`/`Space`-activated
+control) but does **not** close on `Escape` without script — there is no CSS selector for a
+keypress. Every existing disclosure in this repo (`.composer-toggle`, this contract's own
+`reassign-toggle`) is a checkbox-based, zero-script pattern for exactly this reason, and no mock in
+any `tests/acceptance/*/mocks/` directory in this repo contains a `<script>` tag. This contract
+does not resolve the conflict by quietly adding an inline script — that would be a real, first-of-
+its-kind departure from this repo's established no-JS-mock convention, and is a call for whoever
+owns that convention, not a mock-author agent. **Mocks 01–07 render the JS-free variant: keyboard-
+operable via native `<details>` semantics, `Escape` does not close the panel.** An implementer who
+adds a small inline vanilla-JS `keydown` listener to satisfy "Escape closes" is not violating this
+contract's rendered surface (a script-enhanced `<details>` still passes every `data-testid`/text/
+attribute assertion this contract pins), but is making a convention decision this contract
+explicitly declines to make on their behalf. Flagged as Note 7 below.
 
 ### A gap #131 leaves open, resolved here (flagged, not mandated)
 
@@ -309,6 +497,13 @@ repeated here.)
 `nav-account` (on the shared customer `topbar()`), `account-form`, `account-email`,
 `account-phone-field`, `account-cc-emails-field`, `account-address-field`, `account-save-button`
 
+**Amendment 1 (2026-09-02), every authenticated screen (mocks 01–07) — supersedes where
+`nav-account`/`identity-email`/`signout-link` render and when they are visible, per "Account menu"
+above:** `account-menu` (the `<summary>` trigger, `aria-expanded`, `aria-label`), `nav-group-divider`,
+`nav-group-operator-label` (operator screens only). `nav-account`, `identity-email` and
+`signout-link` are not new hooks — they keep the names, text and `href`s already pinned above and
+by `ms-5`'s contract — only their container and visibility change.
+
 ## Synthetic data
 
 Every name, email, lead summary, project title and reference in `mocks/` is invented, per
@@ -348,3 +543,24 @@ of its own — never real contact information.
    addressed by #130. A double-submitted reassignment landing twice is presumably harmless (moving
    a submission to project X twice is still just "at project X"), but this contract does not pin
    that as a guarantee — a worker who adds a guard anyway is not violating anything here.
+7. **Amendment 1 (2026-09-02) breaks two already-sealed assertions** in
+   `tests/acceptance/ms-4/131-account-profile.spec.ts` (`nav-account`/`identity-email` pinned
+   `.toBeVisible()` with the menu never opened) — see the warning box at the top of this document.
+   This is a coordination problem between Gate A and an already-run Gate B, not something this
+   amendment resolves; the coordinator must decide whether the sealed spec is re-authored or this
+   amendment is rejected before any implementer starts work against it.
+8. **Amendment 1's "divider separating operator links from customer links" (item 5) describes a
+   state that cannot occur** under this repo's architecture — customer and operator sit behind two
+   different Access applications and their nav links never render in the same document (this
+   amendment's own "CONSTRAINTS" section says as much). This contract renders a labeled,
+   divider-prefixed group of the five operator links as its best-effort, forward-compatible
+   reading — see "Operator nav grouping" above — but does not claim this satisfies the request's
+   stated rationale, because nothing today produces the "undifferentiated list" the request
+   describes.
+9. **Amendment 1 asks for `Escape`-closes behavior from a JS-free `<details>` disclosure**, which
+   is not achievable in CSS alone. Mocks render the JS-free variant (no `Escape` handling); see
+   "Keyboard behavior" above. Whether to break this repo's zero-JS-mock convention with a small
+   inline script is a call this contract leaves to whoever owns that convention.
+10. **The operator's account-menu panel omits `nav-account`**, unlike the customer's — this
+    contract's own inference, not stated by the amendment request, because `nav-account`'s target
+    route is customer-gated. See "Operator screens" under "Account menu" above.

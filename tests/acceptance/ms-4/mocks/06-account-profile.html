@@ -7,9 +7,12 @@
 <!-- MOCK — Gate-A screen state: issue #131's self-service client profile.
      Route: GET /account, behind the existing customer Access application —
      same topbar() component every other authenticated customer screen uses
-     (src/render.ts), with one new nav entry (nav-account) added the same
-     additive way nav-outbox was for issue #14. Email is read-only: it is the
-     Access identity, not a field this form can change (#131's own wording).
+     (src/render.ts). UPDATED by Amendment 1 (2026-09-02): nav-account no
+     longer sits flat in the nav row — it now lives inside the account-menu
+     disclosure panel (see contract.md "Account menu"), closed by default in
+     this mock; open state is 07-account-menu-open.html. Email is read-only:
+     it is the Access identity, not a field this form can change (#131's own
+     wording).
      phone / ccEmails / address are the only writable columns the migration
      implementing this milestone's #128 adds to clients (a future
      migrations/00NN file — #128 pins the schema, not the migration's
@@ -19,18 +22,46 @@
      "add" half of "add/edit" in the same screenshot as the "edit" half. -->
 <link rel="stylesheet" href="../../../../public/tokens.css">
 <style>
+  /* ── Amendment 1 (2026-09-02): three-slot header (brand / nav / account
+     menu). nav-account, identity-email and signout-link move off the flat
+     nav row into the account menu's disclosure panel — present in the DOM,
+     visible once the menu is open. See contract.md "Account menu". ── */
   header.topbar {
-    display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1.25rem;
-    max-width: 40rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    display: flex; align-items: flex-start; gap: 1rem;
+    max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
     border-bottom: 1px solid var(--line);
   }
-  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
-  header.topbar nav { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-right: auto; }
+  header.topbar .brand {
+    flex: 0 0 auto; padding-top: 0.35rem;
+    font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1);
+  }
+  header.topbar nav {
+    flex: 1 1 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem;
+    padding-top: 0.4rem;
+  }
   header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
   header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
-  header.topbar .identity {
+  header.topbar .account-menu { flex: 0 0 auto; position: relative; }
+  header.topbar .account-menu summary {
+    list-style: none; cursor: pointer; width: 2.15rem; height: 2.15rem; border-radius: 999px;
+    background: var(--surface-2); border: 1px solid var(--line-strong); color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: var(--step--1);
+  }
+  header.topbar .account-menu summary::-webkit-details-marker { display: none; }
+  header.topbar .account-menu[open] summary { outline: 2px solid var(--accent); outline-offset: 1px; }
+  header.topbar .account-menu .account-menu-panel {
+    position: absolute; right: 0; top: calc(100% + 0.5rem); z-index: 10;
+    display: grid; gap: 0.6rem; min-width: 12rem; padding: 0.75rem 0.9rem;
+    background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-md);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.14);
+  }
+  header.topbar .account-menu .identity {
     color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono);
   }
+  header.topbar .account-menu .account-menu-panel a { color: var(--text); text-decoration: none; font-size: var(--step--1); }
+  header.topbar .account-menu .account-menu-panel a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  header.topbar .account-menu .account-menu-panel a.signout { color: var(--text-dim); }
 
   main { max-width: 40rem; }
 
@@ -65,9 +96,19 @@
     <a href="/submissions" data-testid="nav-dashboard">My requests</a>
     <a href="/intake" data-testid="nav-new">New request</a>
     <a href="/outbox" data-testid="nav-outbox">Sent emails</a>
-    <a href="/account" aria-current="page" data-testid="nav-account">My profile</a>
   </nav>
-  <span class="identity" data-testid="identity-email">signed in as dana@example.test</span>
+  <!-- Amendment 1: menu closed in this mock — nav-account/identity-email/
+       signout-link are present in the DOM below but not visible until the
+       menu is open (native <details> semantics, no script). See
+       07-account-menu-open.html for the open state. -->
+  <details class="account-menu">
+    <summary data-testid="account-menu" aria-label="Account menu (dana@example.test)" aria-expanded="false">DA</summary>
+    <div class="account-menu-panel">
+      <span class="identity" data-testid="identity-email">signed in as dana@example.test</span>
+      <a href="/account" aria-current="page" data-testid="nav-account">My profile</a>
+      <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>
+    </div>
+  </details>
 </header>
 <main>
   <div class="page-head">

@@ -4,11 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LEAD-9F21C4 — coord-portal</title>
-<!-- MOCK — Gate-A screen state: lead detail AFTER promotion, issue #129's
-     "match found" branch, carried through to the outcome the operator
-     actually sees. Same route as 01 (GET /leads/:id), data-status="promoted"
-     — not a distinct URL, same convention ms-2's 06-lead-promoted.html
-     already established. New here, beyond ms-2's contract:
+<!-- MOCK — Amendment 1 (2026-09-02) screen state: byte-identical to
+     02-lead-promoted-existing-client.html except the account menu is open
+     (<details open>, aria-expanded="true"), to make the disclosure panel's
+     contents — identity-email and signout-link, present-but-hidden in
+     every other mock in this contract — actually viewable somewhere. This
+     is the one mock in this contract demonstrating the open state; see
+     contract.md's "Account menu" section for why no eighth mock exists
+     showing an *open* panel on the *customer* /account screen (06) too.
+     Same route as 02 (GET /leads/:id), data-status="promoted". Everything
+     below the header is unchanged from mock 02 — new here, beyond
+     ms-2's contract, is only what mock 02 already documents:
 
        - client-attachment: the "this went to an existing client" statement
          issue #129 calls out by name ("the rendered response after
@@ -153,8 +159,8 @@
     <a href="/requests" data-testid="nav-requests">Requests</a>
     <a href="/clients" data-testid="nav-clients">Clients</a>
   </nav>
-  <details class="account-menu">
-    <summary data-testid="account-menu" aria-label="Account menu (ops@example.test)" aria-expanded="false">OP</summary>
+  <details class="account-menu" open>
+    <summary data-testid="account-menu" aria-label="Account menu (ops@example.test)" aria-expanded="true">OP</summary>
     <div class="account-menu-panel">
       <span class="identity" data-testid="identity-email">signed in as ops@example.test</span>
       <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>
