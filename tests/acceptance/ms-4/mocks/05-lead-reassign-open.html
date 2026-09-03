@@ -36,16 +36,48 @@
      the rest of the page is untouched, not dimmed or removed. -->
 <link rel="stylesheet" href="../../../../public/tokens.css">
 <style>
+  /* ── Amendment 1 (2026-09-02): three-slot header (brand / nav / account
+     menu), account menu replaces the flat nav-account + identity-email +
+     signout-link. See contract.md "Account menu". ── */
   header.topbar {
-    display: flex; align-items: center; gap: 1.25rem;
-    max-width: 40rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    display: flex; align-items: flex-start; gap: 1rem;
+    max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
     border-bottom: 1px solid var(--line);
   }
-  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
-  header.topbar nav { display: flex; gap: 1rem; margin-right: auto; }
+  header.topbar .brand {
+    flex: 0 0 auto; padding-top: 0.35rem;
+    font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1);
+  }
+  header.topbar nav {
+    flex: 1 1 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem;
+    padding-top: 0.4rem;
+  }
   header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
   header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
-  header.topbar .identity { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  header.topbar nav .nav-group-divider { width: 1px; align-self: stretch; background: var(--line); }
+  header.topbar nav .nav-group-operator-label {
+    color: var(--text-faint); font-size: var(--step--2); text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  header.topbar .account-menu { flex: 0 0 auto; position: relative; }
+  header.topbar .account-menu summary {
+    list-style: none; cursor: pointer; width: 2.15rem; height: 2.15rem; border-radius: 999px;
+    background: var(--surface-2); border: 1px solid var(--line-strong); color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: var(--step--1);
+  }
+  header.topbar .account-menu summary::-webkit-details-marker { display: none; }
+  header.topbar .account-menu[open] summary { outline: 2px solid var(--accent); outline-offset: 1px; }
+  header.topbar .account-menu .account-menu-panel {
+    position: absolute; right: 0; top: calc(100% + 0.5rem); z-index: 10;
+    display: grid; gap: 0.6rem; min-width: 12rem; padding: 0.75rem 0.9rem;
+    background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-md);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.14);
+  }
+  header.topbar .account-menu .identity {
+    color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono);
+  }
+  header.topbar .account-menu .account-menu-panel a { color: var(--text); text-decoration: none; font-size: var(--step--1); }
+  header.topbar .account-menu .account-menu-panel a.signout { color: var(--text-dim); }
 
   main { max-width: 40rem; }
   .back-link { font-size: var(--step--1); display: inline-block; margin-bottom: 1rem; }
@@ -138,9 +170,21 @@
 <header class="topbar">
   <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
   <nav aria-label="primary">
+    <span class="nav-group-divider" data-testid="nav-group-divider" aria-hidden="true"></span>
+    <span class="nav-group-operator-label" data-testid="nav-group-operator-label">Operator</span>
     <a href="/leads" aria-current="page" data-testid="nav-leads">Leads</a>
+    <a href="/deliveries" data-testid="nav-deliveries">Deliveries</a>
+    <a href="/replies" data-testid="nav-replies">Replies</a>
+    <a href="/requests" data-testid="nav-requests">Requests</a>
+    <a href="/clients" data-testid="nav-clients">Clients</a>
   </nav>
-  <span class="identity" data-testid="identity-email">signed in as ops@example.test</span>
+  <details class="account-menu">
+    <summary data-testid="account-menu" aria-label="Account menu (ops@example.test)" aria-expanded="false">OP</summary>
+    <div class="account-menu-panel">
+      <span class="identity" data-testid="identity-email">signed in as ops@example.test</span>
+      <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>
+    </div>
+  </details>
 </header>
 <main data-testid="lead-detail" data-status="promoted">
   <a class="back-link" href="/leads" data-testid="back-to-leads">&larr; Leads</a>
