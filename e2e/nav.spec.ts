@@ -8,7 +8,8 @@ import { expect, test, type Browser, type Page } from "@playwright/test"
  * `tests/acceptance/`; per CLAUDE.md this repo still ships its own black-box
  * coverage for behaviour-changing work.
  *
- * SCOPE. Two things:
+ * SCOPE. Two things, both reshaped by Amendment 1 (2026-09-02, ms-4's Gate-A
+ * contract § "Account menu") without changing what they're testing FOR:
  *
  *   1. Every screen behind Access carries a sign-out link
  *      (`signout-link`, `href="/cdn-cgi/access/logout"`) — Cloudflare Access
@@ -17,7 +18,10 @@ import { expect, test, type Browser, type Page } from "@playwright/test"
  *      `wrangler dev`); what this suite CAN and does assert is that the
  *      control exists, everywhere it needs to, with the exact href Access
  *      documents for team-domain logout. This includes `/leads` and
- *      `/deliveries` — `operatorTopbar()` carries it too.
+ *      `/deliveries` — `operatorTopbar()` carries it too. Before the
+ *      amendment this was a flat, always-visible link; after it, the link is
+ *      present in the DOM but visible only once the `account-menu` disclosure
+ *      is opened — so every check below opens the menu first.
  *   2. The customer screens' header (`src/render.ts`'s `topbar()`) now
  *      appends the operator nav (Leads, Deliveries) when the caller is an
  *      operator, so an operator can reach `/leads`/`/deliveries` from any
@@ -36,6 +40,11 @@ import { expect, test, type Browser, type Page } from "@playwright/test"
  *      unilaterally, so this suite pins the one-directional behaviour that
  *      actually shipped, not the fully bidirectional one the issue opened
  *      with.
+ *
+ * Amendment 1 also gave `/leads`, `/deliveries` and their operator siblings
+ * their own `account-menu`, and grouped the five operator links behind
+ * `nav-group-divider` / `nav-group-operator-label` — both covered below,
+ * alongside the pre-existing scope.
  *
  * `/start` is deliberately untouched (issue #41) and out of scope here —
  * `e2e/start.spec.ts` already pins that no authenticated-portal hook,
@@ -61,7 +70,7 @@ const DEV_OPERATOR = "ops@example.test"
 
 const LOGOUT_HREF = "/cdn-cgi/access/logout"
 
-const CUSTOMER_NAV_HOOKS = ["nav-dashboard", "nav-new", "nav-outbox", "nav-account"]
+const CUSTOMER_NAV_HOOKS = ["nav-dashboard", "nav-new", "nav-outbox"]
 const OPERATOR_NAV_HOOKS = ["nav-leads", "nav-deliveries"]
 
 function nonce(): string {
@@ -76,7 +85,21 @@ async function contextFor(browser: Browser, baseURL: string | undefined, email: 
   return browser.newContext({ baseURL, extraHTTPHeaders: { [ACCESS_HEADER]: email } })
 }
 
+/**
+ * Amendment 1: the trigger is always visible, but its panel — and everything
+ * in it, `nav-account`/`identity-email`/`signout-link` included — is present
+ * in the DOM and hidden until the menu opens. Every check below that needs
+ * panel contents opens the menu first, the same way the sealed
+ * `131-account-profile.spec.ts` slice was re-authored to.
+ */
+async function openAccountMenu(page: Page): Promise<void> {
+  const menu = page.getByTestId("account-menu")
+  await expect(menu).toBeVisible()
+  await menu.click()
+}
+
 async function expectSignOut(page: Page) {
+  await openAccountMenu(page)
   const signOut = page.getByTestId("signout-link")
   await expect(signOut).toBeVisible()
   await expect(signOut).toHaveAttribute("href", LOGOUT_HREF)
@@ -91,7 +114,15 @@ test.describe("a non-operator customer's nav", () => {
 
     for (const path of ["/submissions", "/intake", "/outbox", "/account"]) {
       await page.goto(path)
-      await expect(page.getByTestId("identity-email")).toHaveText(`signed in as ${email}`)
+
+      // Amendment 1: identity-email and nav-account are in the DOM but
+      // hidden until the menu opens.
+      const identity = page.getByTestId("identity-email")
+      await expect(identity).toBeAttached()
+      await expect(identity).toBeHidden()
+      const navAccount = page.getByTestId("nav-account")
+      await expect(navAccount).toBeAttached()
+      await expect(navAccount).toBeHidden()
 
       for (const hook of CUSTOMER_NAV_HOOKS) {
         await expect(page.getByTestId(hook)).toHaveCount(1)
@@ -104,8 +135,13 @@ test.describe("a non-operator customer's nav", () => {
       }
       await expect(page.getByText("Leads", { exact: true })).toHaveCount(0)
       await expect(page.getByText("Deliveries", { exact: true })).toHaveCount(0)
+      await expect(page.getByTestId("nav-group-divider")).toHaveCount(0)
+      await expect(page.getByTestId("nav-group-operator-label")).toHaveCount(0)
 
-      await expectSignOut(page)
+      await openAccountMenu(page)
+      await expect(identity).toHaveText(`signed in as ${email}`)
+      await expect(navAccount).toBeVisible()
+      await expect(page.getByTestId("signout-link")).toHaveAttribute("href", LOGOUT_HREF)
     }
   })
 
@@ -137,24 +173,42 @@ test.describe("an operator's nav", () => {
       ["/account", "nav-account"],
     ] as const) {
       await page.goto(path)
-      await expect(page.getByTestId("identity-email")).toHaveText(`signed in as ${DEV_OPERATOR}`)
 
       // Every customer link AND every operator link, on every customer
       // screen — the one-directional merge this issue actually shipped.
-      for (const hook of [...CUSTOMER_NAV_HOOKS, ...OPERATOR_NAV_HOOKS]) {
+      // `nav-account` lives in the account-menu panel now (Amendment 1); the
+      // other four are still flat in the nav row.
+      for (const hook of [
+        "nav-dashboard",
+        "nav-new",
+        "nav-outbox",
+        "nav-leads",
+        "nav-deliveries",
+      ]) {
         await expect(page.getByTestId(hook)).toHaveCount(1)
+      }
+      await expect(page.getByTestId("nav-account")).toHaveCount(1)
+      // Amendment 1 item 5: the operator links appended to the customer nav
+      // are grouped, because on this screen there really are customer links
+      // on the other side of the divider.
+      await expect(page.getByTestId("nav-group-divider")).toHaveCount(1)
+      await expect(page.getByTestId("nav-group-operator-label")).toHaveText("Operator")
+
+      if (currentHook === "nav-account") {
+        await openAccountMenu(page)
       }
       await expect(page.getByTestId(currentHook)).toHaveAttribute("aria-current", "page")
       // Exactly one nav entry is ever "current".
       await expect(page.locator('[aria-current="page"]')).toHaveCount(1)
 
+      await expect(page.getByTestId("identity-email")).toHaveText(`signed in as ${DEV_OPERATOR}`)
       await expectSignOut(page)
     }
 
     await context.close()
   })
 
-  test("/leads and /deliveries stay on their own operator-only nav, with sign-out but no customer links", async ({
+  test("/leads and /deliveries stay on their own operator-only nav, with an account menu but no customer links", async ({
     browser,
     baseURL,
   }) => {
@@ -166,7 +220,6 @@ test.describe("an operator's nav", () => {
       ["/deliveries", "nav-deliveries"],
     ] as const) {
       await page.goto(path)
-      await expect(page.getByTestId("identity-email")).toHaveText(`signed in as ${DEV_OPERATOR}`)
       await expect(page.getByTestId("brand-home")).toBeVisible()
 
       for (const hook of OPERATOR_NAV_HOOKS) {
@@ -177,9 +230,18 @@ test.describe("an operator's nav", () => {
       for (const hook of CUSTOMER_NAV_HOOKS) {
         await expect(page.getByTestId(hook)).toHaveCount(0)
       }
+      // Amendment 1's own resolution: an operator's account menu never links
+      // to `/account` — a customer-gated route their own Access application
+      // cannot serve.
+      await expect(page.getByTestId("nav-account")).toHaveCount(0)
+      await expect(page.getByTestId("nav-group-divider")).toHaveCount(1)
+      await expect(page.getByTestId("nav-group-operator-label")).toHaveText("Operator")
+
       await expect(page.getByTestId(currentHook)).toHaveAttribute("aria-current", "page")
 
+      await expect(page.getByTestId("identity-email")).toBeHidden()
       await expectSignOut(page)
+      await expect(page.getByTestId("identity-email")).toHaveText(`signed in as ${DEV_OPERATOR}`)
     }
 
     await context.close()
@@ -196,6 +258,28 @@ test.describe("an operator's nav", () => {
     await page.getByTestId("nav-leads").click()
     await expect(page).toHaveURL(/\/leads$/)
     await expect(page.getByTestId("nav-leads")).toHaveAttribute("aria-current", "page")
+
+    await context.close()
+  })
+
+  /**
+   * Amendment 1's account-menu trigger: initials derived from the signed-in
+   * address, and the accessible name spelling out the full address — pinned
+   * exactly this way (contract.md § "Account menu") so it can be checked
+   * without reading `accountMenu()`'s implementation.
+   */
+  test("the account-menu trigger shows initials and names the full address", async ({
+    browser,
+    baseURL,
+  }) => {
+    const context = await contextFor(browser, baseURL, DEV_OPERATOR)
+    const page = await context.newPage()
+
+    await page.goto("/leads")
+    const menu = page.getByTestId("account-menu")
+    await expect(menu).toHaveText("OP")
+    await expect(menu).toHaveAttribute("aria-label", `Account menu (${DEV_OPERATOR})`)
+    await expect(menu).toHaveAttribute("aria-expanded", "false")
 
     await context.close()
   })
