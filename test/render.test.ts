@@ -18,22 +18,42 @@ import { operatorTopbar, page, publicHeader, publicPage, topbar } from "../src/r
  * `label[for=projectScope]`, so intake was never submitted and every
  * `[mobile]` spec that posts the intake form timed out.
  *
+ * Amendment 1 (2026-09-02) changed the fix's shape, not its goal. Before the
+ * amendment, `header.topbar` itself had to wrap because the identity span sat
+ * in-flow, next to the nav links, and a long email plus a full link row could
+ * not both fit un-wrapped on a phone. After the amendment, `identity-email`
+ * lives inside `account-menu`'s panel, which is `position: absolute` — out of
+ * `header.topbar`'s flow entirely while closed, contributing nothing to the
+ * row's width. So the row itself no longer needs to wrap; what still has to
+ * (and does) is the *nav*, whose own link count is exactly what varies
+ * between a 9-link customer screen and a 5-link operator one — and the
+ * identity span still needs to shrink and break mid-token once the panel
+ * opens, the same load-bearing reason as before.
+ *
  * Nothing in `e2e/` asserts "the document does not overflow sideways", so
- * deleting `flex-wrap` here would go green everywhere except a real phone and
- * the mobile CI project. These four declarations are the fix; this test is the
- * tripwire on them.
+ * deleting these declarations would go green everywhere except a real phone
+ * and the mobile CI project. These are the fix; this test is the tripwire on
+ * them.
  */
 const TOPBAR_INVARIANTS: Array<[string, RegExp]> = [
-  ["the header itself wraps", /header\.topbar\s*\{[^}]*flex-wrap:\s*wrap/],
   ["the nav wraps", /header\.topbar nav\s*\{[^}]*flex-wrap:\s*wrap/],
+  // The account-menu panel must stay out of the header row's flow — this is
+  // what lets `header.topbar` itself skip `flex-wrap` entirely now.
+  [
+    "the account-menu panel is taken out of flow",
+    /header\.topbar \.account-menu \.account-menu-panel\s*\{[^}]*position:\s*absolute/,
+  ],
   // A flex item's automatic minimum size is its min-content size, which for an
   // unbreakable token is the whole token — `min-width: 0` is what lets the
   // identity shrink at all, and `overflow-wrap: anywhere` is what gives it a
   // break opportunity inside an email address (which contains no space).
-  ["the identity may shrink", /header\.topbar \.identity\s*\{[^}]*min-width:\s*0/],
+  [
+    "the identity may shrink",
+    /header\.topbar \.account-menu \.identity\s*\{[^}]*min-width:\s*0/,
+  ],
   [
     "the identity may break mid-token",
-    /header\.topbar \.identity\s*\{[^}]*overflow-wrap:\s*anywhere/,
+    /header\.topbar \.account-menu \.identity\s*\{[^}]*overflow-wrap:\s*anywhere/,
   ],
 ]
 
@@ -47,7 +67,7 @@ describe("the shared page shell", () => {
     },
   )
 
-  it("never lets the topbar be a nowrap row again", () => {
+  it("never pins header.topbar itself to a literal nowrap — the row relies on the nav wrapping and the account-menu panel being out of flow instead", () => {
     expect(shell).not.toMatch(/header\.topbar\s*\{[^}]*flex-wrap:\s*nowrap/)
   })
 
@@ -141,6 +161,82 @@ describe("topbar", () => {
       expect(deliveries).toContain('data-testid="nav-deliveries" aria-current="page"')
       expect(deliveries.match(/aria-current="page"/g)).toHaveLength(1)
     })
+
+    /**
+     * Amendment 1 item 5: on the customer topbar the operator links append
+     * to a nav that already carries customer links, so — unlike the
+     * operator-only screens below — there really is something on the other
+     * side of the divider here.
+     */
+    it("groups the appended operator links behind a divider and an 'Operator' label", () => {
+      const rendered = topbar("operator@example.test", "dashboard", true)
+      expect(rendered).toContain('data-testid="nav-group-divider"')
+      expect(rendered).toContain('data-testid="nav-group-operator-label"')
+      expect(rendered).toContain(">Operator<")
+
+      const nonOperator = topbar("customer@example.test", "dashboard", false)
+      expect(nonOperator).not.toContain('data-testid="nav-group-divider"')
+      expect(nonOperator).not.toContain('data-testid="nav-group-operator-label"')
+    })
+  })
+})
+
+/**
+ * Amendment 1 (2026-09-02) — the account menu that replaces the flat
+ * `nav-account` / `identity-email` / `signout-link` on every authenticated
+ * screen. `tests/acceptance/ms-4/contract.md` § "Account menu" is the
+ * authority; these are the fast, unit-level tripwires next to the sealed
+ * black-box slice.
+ */
+describe("account-menu (Amendment 1)", () => {
+  it("shows initials — the first two characters of the email's local-part, uppercased", () => {
+    for (const [email, initials] of [
+      ["dana@example.test", "DA"],
+      ["ops@example.test", "OP"],
+      ["nadia.nav.131@example.test", "NA"],
+    ] as const) {
+      const rendered = topbar(email, "none", false)
+      expect(rendered).toContain(`data-testid="account-menu"`)
+      expect(rendered).toMatch(
+        new RegExp(`data-testid="account-menu"[^>]*>${initials}</summary>`),
+      )
+    }
+  })
+
+  it("carries the accessible name and a static, closed-by-default aria-expanded", () => {
+    const rendered = topbar("dana@example.test", "none", false)
+    expect(rendered).toContain('aria-label="Account menu (dana@example.test)"')
+    expect(rendered).toContain('aria-expanded="false"')
+    expect(rendered).not.toContain("<details class=\"account-menu\" open>")
+  })
+
+  it("is a script-free <details>/<summary> disclosure — no <script> tag anywhere", () => {
+    expect(topbar("dana@example.test", "none", false)).not.toContain("<script")
+    expect(operatorTopbar("ops@example.test", "leads")).not.toContain("<script")
+  })
+
+  it("orders the customer panel identity-email, then nav-account, then signout-link", () => {
+    const rendered = topbar("dana@example.test", "account", false)
+    const panel = rendered.slice(rendered.indexOf('class="account-menu-panel"'))
+    const identityAt = panel.indexOf('data-testid="identity-email"')
+    const accountAt = panel.indexOf('data-testid="nav-account"')
+    const signoutAt = panel.indexOf('data-testid="signout-link"')
+    expect(identityAt).toBeGreaterThan(-1)
+    expect(accountAt).toBeGreaterThan(identityAt)
+    expect(signoutAt).toBeGreaterThan(accountAt)
+  })
+
+  it("omits nav-account from the operator panel — /account is a customer-gated route", () => {
+    const rendered = operatorTopbar("ops@example.test", "leads")
+    const panel = rendered.slice(rendered.indexOf('class="account-menu-panel"'))
+    expect(panel).not.toContain('data-testid="nav-account"')
+    expect(panel).toContain('data-testid="identity-email"')
+    expect(panel).toContain('data-testid="signout-link"')
+  })
+
+  it("falls back to a placeholder for an unresolved identity rather than throwing", () => {
+    const rendered = topbar(null, "none", false)
+    expect(rendered).toContain('aria-label="Account menu (unknown)"')
   })
 })
 
@@ -183,6 +279,19 @@ describe("operatorTopbar", () => {
     const rendered = operatorTopbar("ops@example.test", "deliveries")
     expect(rendered).toContain('data-testid="signout-link"')
     expect(rendered).toContain('href="/cdn-cgi/access/logout"')
+  })
+
+  /**
+   * Amendment 1 item 5: every operator-only screen groups its five links
+   * behind a divider and an "Operator" label, even though — per the
+   * contract's own admission — there is nothing on the other side of the
+   * divider on this unmerged header today.
+   */
+  it("groups the five operator links behind a divider and an 'Operator' label", () => {
+    const rendered = operatorTopbar("ops@example.test", "leads")
+    expect(rendered).toContain('data-testid="nav-group-divider"')
+    expect(rendered).toContain('data-testid="nav-group-operator-label"')
+    expect(rendered).toContain(">Operator<")
   })
 
   it("shares header.topbar, so it inherits the same wrapping rules", () => {

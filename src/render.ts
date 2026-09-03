@@ -53,15 +53,15 @@ export type NavCurrent =
  * breaking those oracles or the epic reconciling them — flagged back to the
  * milestone owner, not silently resolved here.
  *
- * The customer links (`nav-dashboard`, `nav-new`, `nav-outbox`,
- * `nav-account`) render unconditionally. The operator section is appended
- * only when `isOperator` is true — the caller passes exactly the same fact
- * `readOperator(request, env) !== null` already gates `/leads` and
- * `/deliveries` on (`src/operators.ts`), so this introduces no new notion of
- * role and no new way to learn who is staff. A non-operator customer must see
- * no operator link at all — that is the part issue #103 calls "worth a
- * test": the nav must not become a directory of surfaces a customer cannot
- * open.
+ * The customer links (`nav-dashboard`, `nav-new`, `nav-outbox`) render
+ * unconditionally, in the nav's own flex slot. The operator section is
+ * appended after them, inside the same `<nav>`, only when `isOperator` is
+ * true — the caller passes exactly the same fact `readOperator(request, env)
+ * !== null` already gates `/leads` and `/deliveries` on
+ * (`src/operators.ts`), so this introduces no new notion of role and no new
+ * way to learn who is staff. A non-operator customer must see no operator
+ * link at all — that is the part issue #103 calls "worth a test": the nav
+ * must not become a directory of surfaces a customer cannot open.
  *
  * Per the contract's global hook list: `brand-home`, `nav-dashboard`,
  * `nav-new`, `identity-email`. `nav-outbox` (issue #14), `nav-account`
@@ -71,21 +71,28 @@ export type NavCurrent =
  * `email` is deliberately not asserted as verified here or anywhere else —
  * see `src/identity.ts`. It is display copy, not an authorization decision.
  *
- * `signout-link` (issue #103) is a plain link to
- * `/cdn-cgi/access/logout` next to the identity span. Cloudflare Access owns
- * the session and clears its own cookie for the whole team domain at that
- * path — the portal has no session of its own to end, so there is nothing
- * for this function to build beyond the link itself.
+ * ── Amendment 1 (2026-09-02) — the account menu ─────────────────────────
+ * `nav-account`, `identity-email` and `signout-link` no longer render flat
+ * in the header. The Gate-A contract's original ms-4 text (superseded, kept
+ * for the record in `tests/acceptance/ms-4/contract.md`) put `nav-account`
+ * in the main nav row next to `nav-outbox`; the amendment moved it, along
+ * with `identity-email` and `signout-link` (issue #103), into a single
+ * right-aligned `<details>`/`<summary>` disclosure (`account-menu`) — see
+ * `accountMenu()` below. This is also the fix for the reflow issue #103's
+ * own header comment used to describe here: with the account controls
+ * pulled out of the nav row entirely, the nav's own link count can never
+ * move `brand-home` — see the three-slot layout this function now builds.
+ * `signout-link` is a plain link to `/cdn-cgi/access/logout` inside that
+ * panel. Cloudflare Access owns the session and clears its own cookie for
+ * the whole team domain at that path — the portal has no session of its own
+ * to end, so there is nothing for this function to build beyond the link
+ * itself.
  */
 export function topbar(email: string | null, current: NavCurrent, isOperator: boolean): string {
   const dashboardCurrent = current === "dashboard" ? ' aria-current="page"' : ""
   const newCurrent = current === "new" ? ' aria-current="page"' : ""
   const outboxCurrent = current === "outbox" ? ' aria-current="page"' : ""
   const accountCurrent = current === "account" ? ' aria-current="page"' : ""
-  const leadsCurrent = current === "leads" ? ' aria-current="page"' : ""
-  const deliveriesCurrent = current === "deliveries" ? ' aria-current="page"' : ""
-  const requestsCurrent = current === "requests" ? ' aria-current="page"' : ""
-  const clientsCurrent = current === "clients" ? ' aria-current="page"' : ""
   const identity = email ? escapeHtml(email) : "unknown"
 
   // `nav-replies` (issue #166) has no `NavCurrent` value of its own: `/replies`
@@ -99,27 +106,88 @@ export function topbar(email: string | null, current: NavCurrent, isOperator: bo
   // Appended after the customer links, inside the same `<nav>`, rather than a
   // second `<nav>` — one landmark for one primary-navigation region (the
   // customer links and the operator links are both "where can I go from
-  // here", never two competing lists).
-  const operatorLinks = isOperator
-    ? `
-    <a href="/leads" data-testid="nav-leads"${leadsCurrent}>Leads</a>
-    <a href="/deliveries" data-testid="nav-deliveries"${deliveriesCurrent}>Deliveries</a>
-    <a href="/replies" data-testid="nav-replies">Replies</a>
-    <a href="/requests" data-testid="nav-requests"${requestsCurrent}>Requests</a>
-    <a href="/clients" data-testid="nav-clients"${clientsCurrent}>Clients</a>`
-    : ""
+  // here", never two competing lists). Grouped behind `nav-group-divider` /
+  // `nav-group-operator-label` (Amendment 1 item 5) the same way the
+  // operator-only screens below group them — unlike those screens, this nav
+  // really does have customer links on the other side of the divider.
+  const operatorLinks = isOperator ? operatorNavGroup(current) : ""
 
   return `<header class="topbar">
   <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
   <nav aria-label="primary">
     <a href="/submissions" data-testid="nav-dashboard"${dashboardCurrent}>My requests</a>
     <a href="/intake" data-testid="nav-new"${newCurrent}>New request</a>
-    <a href="/outbox" data-testid="nav-outbox"${outboxCurrent}>Sent emails</a>
-    <a href="/account" data-testid="nav-account"${accountCurrent}>My profile</a>${operatorLinks}
+    <a href="/outbox" data-testid="nav-outbox"${outboxCurrent}>Sent emails</a>${operatorLinks}
   </nav>
-  <span class="identity" data-testid="identity-email">signed in as ${identity}</span>
-  <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>
+  ${accountMenu(
+    email,
+    `
+      <span class="identity" data-testid="identity-email">signed in as ${identity}</span>
+      <a href="/account" data-testid="nav-account"${accountCurrent}>My profile</a>
+      <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>`,
+  )}
 </header>`
+}
+
+/**
+ * Amendment 1 item 5 — `nav-group-divider` (a visual rule, `aria-hidden`
+ * since it carries no content) and `nav-group-operator-label` (visible text
+ * "Operator") preceding the five operator links, wherever they render. The
+ * contract's own resolution of "separate operator links from customer
+ * links with a divider and a label" — see the long comment on
+ * `operatorTopbar()` below for why, on the operator-only screens, this
+ * divider has nothing on its other side yet.
+ *
+ * `current` is typed as `string` rather than either `NavCurrent` or
+ * `OperatorNavCurrent` because both callers share this one function: a
+ * value one caller's type never carries (e.g. `topbar()` passing something
+ * that is never `"replies"`) simply never equality-matches, which is
+ * exactly the behavior `topbar()`'s old inline `nav-replies` comment
+ * documented — no `aria-current` from the customer screen, because nothing
+ * there can ever *be* the replies screen.
+ */
+function operatorNavGroup(current: string): string {
+  const cur = (value: string) => (current === value ? ' aria-current="page"' : "")
+  return `
+    <span class="nav-group-divider" data-testid="nav-group-divider" aria-hidden="true"></span>
+    <span class="nav-group-operator-label" data-testid="nav-group-operator-label">Operator</span>
+    <a href="/leads" data-testid="nav-leads"${cur("leads")}>Leads</a>
+    <a href="/deliveries" data-testid="nav-deliveries"${cur("deliveries")}>Deliveries</a>
+    <a href="/replies" data-testid="nav-replies"${cur("replies")}>Replies</a>
+    <a href="/requests" data-testid="nav-requests"${cur("requests")}>Requests</a>
+    <a href="/clients" data-testid="nav-clients"${cur("clients")}>Clients</a>`
+}
+
+/**
+ * Amendment 1's `account-menu` — a `<details>`/`<summary>` disclosure, no
+ * script (this repo's established zero-JS disclosure convention; see
+ * `.composer-toggle` further down this file). The summary shows initials:
+ * the first two characters of the email's local-part, uppercased —
+ * `dana@example.test` -> `DA` — pinned exactly this way so an independent
+ * test-author can compute the expected initials from a fixture email
+ * without reading this function. `aria-expanded` is static, not
+ * script-maintained: this function always renders the closed state
+ * (`aria-expanded="false"`, no `open` attribute on the `<details>`) because
+ * every page load starts closed — there is no server-side notion of "the
+ * menu the caller last had open" to render instead, and the sealed
+ * acceptance spec only ever asserts the closed state on a fresh load
+ * (`tests/acceptance/ms-4/contract.md` § "Account menu").
+ *
+ * `panelBody` is the caller's markup for the panel — `topbar()` above
+ * includes `nav-account`, `operatorTopbar()` below does not, per the
+ * contract's "Operator screens" section (an operator's own Access
+ * application cannot serve `/account`, a customer-gated route).
+ */
+function accountMenu(email: string | null, panelBody: string): string {
+  const identity = email ? escapeHtml(email) : "unknown"
+  const local = (email ?? "unknown").split("@")[0] ?? ""
+  const initials = escapeHtml((local.slice(0, 2) || "??").toUpperCase())
+
+  return `<details class="account-menu">
+    <summary data-testid="account-menu" aria-label="Account menu (${identity})" aria-expanded="false">${initials}</summary>
+    <div class="account-menu-panel">${panelBody}
+    </div>
+  </details>`
 }
 
 /**
@@ -168,25 +236,32 @@ export type OperatorNavCurrent = "leads" | "deliveries" | "replies" | "requests"
  * operator screen behind Access is still a screen behind Access, and the
  * sealed oracles above assert its *absence* only for the customer nav hooks,
  * never for this one.
+ *
+ * ── Amendment 1 (2026-09-02) ─────────────────────────────────────────────
+ * `identity-email` and `signout-link` no longer render flat — they move
+ * into the same right-aligned `account-menu` disclosure `topbar()` gained
+ * above (`accountMenu()`), with one difference: this panel omits
+ * `nav-account`. `/account` is a customer-gated route (see the "Route
+ * surface" table in `tests/acceptance/ms-4/contract.md`) that an operator's
+ * own Access application cannot serve, so linking to it here would offer a
+ * control that 403s the moment it is used. The five operator links
+ * themselves also gain `nav-group-divider` / `nav-group-operator-label`
+ * (Amendment 1 item 5) — a self-contained labeled group, even though on
+ * this unmerged header there is nothing on the divider's other side to
+ * separate the group *from* yet (see `operatorNavGroup()` above for the
+ * full rationale, flagged there as the contract's own admission).
  */
 export function operatorTopbar(email: string, current: OperatorNavCurrent): string {
-  const leadsCurrent = current === "leads" ? ' aria-current="page"' : ""
-  const deliveriesCurrent = current === "deliveries" ? ' aria-current="page"' : ""
-  const repliesCurrent = current === "replies" ? ' aria-current="page"' : ""
-  const requestsCurrent = current === "requests" ? ' aria-current="page"' : ""
-  const clientsCurrent = current === "clients" ? ' aria-current="page"' : ""
-
   return `<header class="topbar">
   <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
-  <nav aria-label="primary">
-    <a href="/leads" data-testid="nav-leads"${leadsCurrent}>Leads</a>
-    <a href="/deliveries" data-testid="nav-deliveries"${deliveriesCurrent}>Deliveries</a>
-    <a href="/replies" data-testid="nav-replies"${repliesCurrent}>Replies</a>
-    <a href="/requests" data-testid="nav-requests"${requestsCurrent}>Requests</a>
-    <a href="/clients" data-testid="nav-clients"${clientsCurrent}>Clients</a>
+  <nav aria-label="primary">${operatorNavGroup(current)}
   </nav>
-  <span class="identity" data-testid="identity-email">signed in as ${escapeHtml(email)}</span>
-  <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>
+  ${accountMenu(
+    email,
+    `
+      <span class="identity" data-testid="identity-email">signed in as ${escapeHtml(email)}</span>
+      <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>`,
+  )}
 </header>`
 }
 
@@ -208,42 +283,86 @@ export function operatorTopbar(email: string, current: OperatorNavCurrent): stri
  * "invisible enough".
  */
 const APP_STYLES = `
-  /* The topbar WRAPS, and its identity may break mid-token. Both are load-
-     bearing, not cosmetic. A phone is 412 CSS px wide, the body reserves
-     1.25rem either side, and the brand + three nav links + a monospace
-     "signed in as name@example.com" do not fit in what is left. As a nowrap
-     flex row this header did not clip — it pushed the *document* wider than
-     the layout viewport, and mobile Chrome answers a document wider than
-     device-width by scaling the whole page down. Once page scale != 1, the
-     CSS-pixel coordinates a test computes for a control and the screen
-     coordinates its click lands on drift apart, so a click aimed at
-     submit-intake lands on whatever sits ~70px above it (the
-     label[for=projectScope]) and the form is never submitted. Wrapping keeps
-     scrollWidth <= clientWidth, which keeps page scale at 1. Nothing here
+  /* ── Amendment 1 (2026-09-02): the three-slot header ──────────────────────
+     brand (left, flex: 0 0 auto) / nav (center, flex: 1 1 auto, wraps
+     internally) / account-menu (right, flex: 0 0 auto). This is this
+     amendment's own fix for a reflow bug (contract.md's "WHY"): before this,
+     header.topbar was a single wrapping flex row of brand + every nav link +
+     a flat identity span + a flat signout link, so the number of links
+     changed how the row wrapped and brand-home visibly moved between a
+     9-link customer screen (nav wraps to a second line) and a 5-link
+     operator one (nav shares the first line). Pinning brand-home as the
+     row's first flex-basis-0 child, and pulling the identity/signout
+     controls out of the row entirely into account-menu's own absolutely-
+     positioned panel (closed by default, so it contributes nothing to the
+     row's width), means only the nav's own internal wrapping can ever move —
+     never brand-home's position in the row. The nav's own wrap is still
+     load-bearing for the same reason it always was: a phone is 412 CSS px
+     wide, and without somewhere for a long link list to wrap, a nowrap row
+     doesn't clip, it pushes the *document* wider than the layout viewport —
+     mobile Chrome answers that by scaling the whole page down, and once page
+     scale != 1 the CSS-pixel coordinates a test computes for a control and
+     the screen coordinates its click lands on drift apart. Nothing here
      changes the desktop layout: at >=44rem it all still fits on one line. */
   header.topbar {
-    display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1.25rem;
+    display: flex; align-items: flex-start; gap: 1rem;
     max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
     border-bottom: 1px solid var(--line);
   }
-  header.topbar .brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1); }
-  header.topbar nav { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-right: auto; min-width: 0; }
+  header.topbar .brand {
+    flex: 0 0 auto; padding-top: 0.35rem;
+    font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1);
+  }
+  header.topbar nav {
+    flex: 1 1 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem;
+    padding-top: 0.4rem; min-width: 0;
+  }
   header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
   header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  /* Amendment 1 item 5's operator link group (operatorNavGroup() in
+     render.ts) — a thin rule plus a small-caps label ahead of the five
+     operator links, self-contained even where (today, always) there is
+     nothing on the other side of the divider to separate the group from. */
+  header.topbar nav .nav-group-divider { width: 1px; align-self: stretch; background: var(--line); }
+  header.topbar nav .nav-group-operator-label {
+    color: var(--text-faint); font-size: var(--step--2); text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  /* The account menu (accountMenu() in render.ts) — a native
+     <details>/<summary> disclosure, no script. summary is the round
+     initials button; the panel is absolutely positioned so it never
+     contributes to header.topbar's own row width or height while closed,
+     which is what lets the header stay a single, un-wrapped row regardless
+     of how long identity-email's email happens to be. */
+  header.topbar .account-menu { flex: 0 0 auto; position: relative; }
+  header.topbar .account-menu summary {
+    list-style: none; cursor: pointer; width: 2.15rem; height: 2.15rem; border-radius: 999px;
+    background: var(--surface-2); border: 1px solid var(--line-strong); color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: var(--step--1);
+  }
+  header.topbar .account-menu summary::-webkit-details-marker { display: none; }
+  header.topbar .account-menu[open] summary { outline: 2px solid var(--accent); outline-offset: 1px; }
+  header.topbar .account-menu .account-menu-panel {
+    position: absolute; right: 0; top: calc(100% + 0.5rem); z-index: 10;
+    display: grid; gap: 0.6rem; min-width: 12rem; padding: 0.75rem 0.9rem;
+    background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-md);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.14);
+  }
   /* overflow-wrap: anywhere (NOT break-word) so the break opportunity is taken
-     into account when the flex item's min-content size is resolved —
-     break-word would let the item claim its unbroken width first and overflow
-     anyway. An email address has no space in it to break at. */
-  header.topbar .identity {
+     into account when the panel's min-content size is resolved — break-word
+     would let the item claim its unbroken width first and overflow anyway.
+     An email address has no space in it to break at. */
+  header.topbar .account-menu .identity {
     color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono);
     min-width: 0; overflow-wrap: anywhere;
   }
-  /* The sign-out link (issue #103) — same treatment as a nav link, not the
-     identity span's muted, monospace styling: it is an action, not a readout. */
-  header.topbar .signout {
-    color: var(--text-dim); text-decoration: none; font-size: var(--step--1); flex-shrink: 0;
-  }
-  header.topbar .signout:hover { color: var(--accent); }
+  header.topbar .account-menu .account-menu-panel a { color: var(--text); text-decoration: none; font-size: var(--step--1); }
+  header.topbar .account-menu .account-menu-panel a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  /* The sign-out link (issue #103) — same treatment as a nav link inside the
+     panel, not the identity span's muted, monospace styling: it is an
+     action, not a readout. */
+  header.topbar .account-menu .account-menu-panel a.signout { color: var(--text-dim); }
+  header.topbar .account-menu .account-menu-panel a.signout:hover { color: var(--accent); }
   main { max-width: 44rem; margin: 0 auto; padding: 0 1rem 3rem; }
 
   form.intake, form.lead, form.account, form.rename-project, form.client-merge { display: grid; gap: 1.25rem; }
