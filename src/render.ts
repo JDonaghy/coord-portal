@@ -148,14 +148,24 @@ export function topbar(email: string | null, current: NavCurrent, isOperator: bo
  */
 function operatorNavGroup(current: string): string {
   const cur = (value: string) => (current === value ? ' aria-current="page"' : "")
+  // Issue #308: everything below is wrapped in one `nav-group-operator`
+  // container so the group is a single flex item of `header.topbar nav`,
+  // not five-plus siblings the outer row can wrap between at an arbitrary
+  // point. See the `.nav-group-operator` rule in APP_STYLES for the layout
+  // half of the fix. The wrapper adds no new hook and changes no pinned
+  // element's testid, text or `aria-hidden` — `nav-group-divider` and
+  // `nav-group-operator-label` are exactly as the contract pins them, just
+  // with a parent they didn't have before.
   return `
-    <span class="nav-group-divider" data-testid="nav-group-divider" aria-hidden="true"></span>
-    <span class="nav-group-operator-label" data-testid="nav-group-operator-label">Operator</span>
-    <a href="/leads" data-testid="nav-leads"${cur("leads")}>Leads</a>
-    <a href="/deliveries" data-testid="nav-deliveries"${cur("deliveries")}>Deliveries</a>
-    <a href="/replies" data-testid="nav-replies"${cur("replies")}>Replies</a>
-    <a href="/requests" data-testid="nav-requests"${cur("requests")}>Requests</a>
-    <a href="/clients" data-testid="nav-clients"${cur("clients")}>Clients</a>`
+    <span class="nav-group-operator">
+      <span class="nav-group-divider" data-testid="nav-group-divider" aria-hidden="true"></span>
+      <span class="nav-group-operator-label" data-testid="nav-group-operator-label">Operator</span>
+      <a href="/leads" data-testid="nav-leads"${cur("leads")}>Leads</a>
+      <a href="/deliveries" data-testid="nav-deliveries"${cur("deliveries")}>Deliveries</a>
+      <a href="/replies" data-testid="nav-replies"${cur("replies")}>Replies</a>
+      <a href="/requests" data-testid="nav-requests"${cur("requests")}>Requests</a>
+      <a href="/clients" data-testid="nav-clients"${cur("clients")}>Clients</a>
+    </span>`
 }
 
 /**
@@ -321,8 +331,24 @@ const APP_STYLES = `
   header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
   /* Amendment 1 item 5's operator link group (operatorNavGroup() in
      render.ts) — a thin rule plus a small-caps label ahead of the five
-     operator links, self-contained even where (today, always) there is
-     nothing on the other side of the divider to separate the group from. */
+     operator links, self-contained even where (today, on the unmerged
+     operatorTopbar() screens) there is nothing on the other side of the
+     divider to separate the group from.
+     Issue #308: on topbar() (a customer screen viewed by an operator) there
+     IS something on the other side — the customer links — and the
+     divider/label/five-links used to be nine flat siblings of this nav's own
+     wrapping flex row, so flex-wrap broke the group wherever the row ran out
+     of width, not at the group boundary. .nav-group-operator below makes
+     the whole group one flex item of that row (flex-basis: 100% forces it
+     onto its own line unconditionally, not just when it doesn't fit) and its
+     own nested flex container, so if IT ever needs to wrap — a narrow phone
+     — its own five links wrap together, never split across the customer row
+     above. On operatorTopbar() screens this group is nav's only child, so
+     flex-basis: 100% is a no-op there: still one line, unchanged from
+     before this issue. */
+  header.topbar nav .nav-group-operator {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; flex-basis: 100%;
+  }
   header.topbar nav .nav-group-divider { width: 1px; align-self: stretch; background: var(--line); }
   header.topbar nav .nav-group-operator-label {
     color: var(--text-faint); font-size: var(--step--2); text-transform: uppercase; letter-spacing: 0.05em;
