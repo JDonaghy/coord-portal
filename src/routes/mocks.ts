@@ -1,21 +1,48 @@
 import { parseFormData } from "../formData"
 import { resolveSiteIdentity } from "../identity"
+import { readOperator } from "../operators"
+import { recordOperatorRead } from "../operatorAccess"
 import { html, page } from "../render"
 import { json } from "../router"
 import { listRounds } from "../rounds"
 import { isOwnedBy } from "./submission"
-import { getSubmission, getSubmissionByReference } from "../submissions"
+import { getSubmission, getSubmissionByReference, type Submission } from "../submissions"
 import type { Env } from "../types"
 
 /**
  * `GET /submissions/:id/rounds/:n/mock[/...]` — the round's mock bundle,
- * served read-only out of R2 — and `POST /api/bridge/mocks/:reference/:round`,
- * the upload half that fills that bucket.
+ * served read-only out of R2 — `GET /requests/:id/rounds/:n/mock[/...]`, the
+ * operator-scoped counterpart (issue #304) — and
+ * `POST /api/bridge/mocks/:reference/:round`, the upload half that fills that
+ * bucket.
  *
  * Issue #13: "Mocks reuse the pattern already in the repo (`docs/mocks/web/`):
  * self-contained static HTML against a shared token stylesheet, stored in R2,
  * served read-only. No build step, no framework, no live data — the cheapest
  * thing that answers 'is this what you meant?'."
+ *
+ * ── THE OPERATOR READ (#304) ─────────────────────────────────────────────
+ * Before this issue, reaching a round's bundle required being the customer it
+ * belongs to — an operator reviewing a `changes-requested` verdict could read
+ * the comment (`routes/requests.ts`'s round history) but never open the mock
+ * it was about. `operatorMockBundle` below is a second entry point onto the
+ * exact same read `serveBundle` performs for `mockBundle` — same R2 key
+ * resolution, same headers, same bytes — gated by `readOperator`
+ * (`src/operators.ts`) instead of `isOwnedBy`. Per the issue's own design
+ * constraint, this is deliberately a second gate on a second route, not a
+ * bypass added inside `isOwnedBy` itself: that function is called from both
+ * this file and `routes/submission.ts`, and widening it there would silently
+ * widen access at every call site, including ones that must never grant an
+ * operator anything. The 404 stays the 404: `readOperator` returning `null`
+ * (a stranger, an unconfigured deploy, a customer who is not also an
+ * operator) renders the exact same `notFound()` a missing bundle does, so a
+ * non-operator sees no behavioural difference between this route existing and
+ * not. Every request that clears both gates (a verified operator, a
+ * submission that exists) is recorded — `src/operatorAccess.ts`'s
+ * `recordOperatorRead`, written before the R2 lookup itself — because this is
+ * the first route in the portal where one person reads another's private
+ * material, and a round with no bundle published yet should leave the same
+ * trace a genuine look at one would, not a silent gap in the log.
  *
  * ── THE UPLOAD HALF (#120) ──────────────────────────────────────────────────
  * This used to be GET-only, with a comment here explaining that adding an
@@ -82,6 +109,74 @@ export async function mockBundle(
     return notFound()
   }
 
+  return serveBundle(env, submission, roundNumber, rest)
+}
+
+/* ─────────────────────────── the operator read (#304) ──────────────────────── */
+
+const OPERATOR_BUNDLE_PATH = /^\/requests\/([^/?#]+)\/rounds\/(\d+)\/mock(?:\/(.*))?$/
+
+export function matchOperatorMockBundlePath(
+  pathname: string,
+): { id: string; round: number; rest: string } | null {
+  const match = pathname.match(OPERATOR_BUNDLE_PATH)
+  if (!match) return null
+  const [, id, round, rest] = match
+  if (!id || !round) return null
+  return { id, round: Number(round), rest: rest ?? "" }
+}
+
+/**
+ * `GET /requests/:id/rounds/:n/mock[/...]` — the operator-scoped counterpart
+ * to `mockBundle` above (issue #304). See this module's own doc comment for
+ * the full rationale; in short, this reads through `serveBundle` exactly as
+ * `mockBundle` does — same R2 key, same headers, same bytes — gated by
+ * `readOperator` rather than `isOwnedBy`, and records the read
+ * (`recordOperatorRead`) before serving it.
+ *
+ * `readOperator` returning `null` and `getSubmission` finding nothing both
+ * render the identical `notFound()` below — not a distinct refusal for "you
+ * are not an operator" versus "no such submission" — the same "a 404 that
+ * only fires for someone else's bundle would itself confirm it exists"
+ * reasoning `mockBundle` already applies, extended to whether this operator
+ * route itself exists at all.
+ */
+export async function operatorMockBundle(
+  request: Request,
+  env: Env,
+  id: string,
+  roundNumber: number,
+  rest: string,
+): Promise<Response> {
+  const operator = await readOperator(request, env)
+  if (!operator) return notFound()
+
+  const submission = await getSubmission(env, id)
+  if (!submission) return notFound()
+
+  await recordOperatorRead(env, operator.email, submission.reference, roundNumber)
+
+  return serveBundle(env, submission, roundNumber, rest)
+}
+
+/**
+ * The one read both `mockBundle` and `operatorMockBundle` perform once their
+ * own gate has passed — "same R2 read path the customer route uses" is issue
+ * #304's own requirement for the operator route, and factoring the shared
+ * tail out is what makes that true by construction rather than by two copies
+ * staying in sync by hand.
+ *
+ * A round with no bundle, or a round number nothing was ever published under,
+ * renders the same `notFound()` a missing submission does — never an error —
+ * which is also what makes "a round with no bundle... render[s] cleanly"
+ * true for the operator path with no extra code: it is the same call.
+ */
+async function serveBundle(
+  env: Env,
+  submission: Submission,
+  roundNumber: number,
+  rest: string,
+): Promise<Response> {
   const round = (await listRounds(env, submission.reference)).find((r) => r.round === roundNumber)
   const key = round?.mockBundle ? resolveBundleKey(round.mockBundle, rest) : null
   if (!key) return notFound()

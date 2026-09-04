@@ -1,7 +1,16 @@
 import { parseFormData } from "../formData"
 import { readOperator, type Operator } from "../operators"
+import { recordOperatorRead } from "../operatorAccess"
 import { escapeHtml, html, operatorTopbar, page } from "../render"
-import { derivedStatus, getCurrentRound, loadSignoffStates, VERDICT_TEXT, type SignoffState } from "../rounds"
+import {
+  derivedStatus,
+  getCurrentRound,
+  listRounds,
+  loadSignoffStates,
+  VERDICT_TEXT,
+  type DesignRound,
+  type SignoffState,
+} from "../rounds"
 import { derivedStartWorkStatus, getStartWork, loadStartWorkStates, type StartWorkRecord } from "../startWork"
 import {
   customerFacingStatus,
@@ -90,6 +99,27 @@ import { isFormContentType } from "./submission"
  * second door onto the same room; it does not move the first one. Same
  * `readOperator` gate and indistinguishable 404 as every route on this
  * surface, so a non-operator gets a 404, never a 403.
+ *
+ * ── `GET /requests/:id/rounds` — ISSUE #304's OPERATOR ROUND READ ─────────
+ * `requestDetail`'s own doc comment used to say plainly that this surface's
+ * "contract is the reassignment panel, not a general operator submission
+ * detail screen" and that round history in particular should not be added
+ * "without its own issue". #304 is that issue: an operator reviewing a
+ * `changes-requested` verdict could read `signoff_comment` off `coord
+ * journal` but never open the mock it was commenting on, because
+ * `routes/mocks.ts`'s bundle route and `routes/submission.ts`'s round history
+ * both gate on `isOwnedBy` alone, and an operator's Access email is never a
+ * submission's `customer_email`.
+ *
+ * `requestRounds` below, and `operatorMockBundle`
+ * (`routes/mocks.ts`, wired in `src/pages.ts`), are the fix — a second,
+ * operator-scoped read of the exact same `design_rounds`/`signoffs` state and
+ * the exact same R2 bytes, never a widening of `isOwnedBy` itself (see that
+ * function's own doc comment in `routes/submission.ts` for why not). Every
+ * page this surface renders says so in its own copy
+ * (`operator-access-notice`) — this is customer material read by an
+ * operator, not a customer's own view of it — and every successful read is
+ * recorded (`src/operatorAccess.ts`).
  */
 export async function requestsInbox(request: Request, env: Env): Promise<Response> {
   const operator = await readOperator(request, env)
@@ -102,15 +132,31 @@ export async function requestsInbox(request: Request, env: Env): Promise<Respons
 const REQUESTS_PATH = "/requests"
 const REQUEST_DETAIL_PATH = /^\/requests\/([^/?#]+)$/
 const REQUEST_REASSIGN_PATH = /^\/requests\/([^/?#]+)\/reassign$/
+const REQUEST_ROUNDS_PATH = /^\/requests\/([^/?#]+)\/rounds$/
 
 /** What `handlePages` needs to know about a `/requests…` URL, or `null`. */
 export function matchRequestsPath(
   pathname: string,
-): { kind: "index" } | { kind: "detail"; id: string } | { kind: "reassign"; id: string } | null {
+):
+  | { kind: "index" }
+  | { kind: "detail"; id: string }
+  | { kind: "reassign"; id: string }
+  | { kind: "rounds"; id: string }
+  | null {
   if (pathname === REQUESTS_PATH) return { kind: "index" }
 
   const reassign = pathname.match(REQUEST_REASSIGN_PATH)
   if (reassign?.[1]) return { kind: "reassign", id: reassign[1] }
+
+  // Checked ahead of `detail` below: `/requests/:id/rounds` would otherwise
+  // never reach `REQUEST_DETAIL_PATH` (that regex requires nothing after the
+  // id), but the mock-bundle path under it
+  // (`/requests/:id/rounds/:n/mock[/...]`) is matched directly in
+  // `src/pages.ts` via `routes/mocks.ts`'s own `matchOperatorMockBundlePath`,
+  // the same split the customer-facing routes already use between
+  // `SUBMISSION_ROUNDS_PATH` and `matchMockBundlePath`.
+  const rounds = pathname.match(REQUEST_ROUNDS_PATH)
+  if (rounds?.[1]) return { kind: "rounds", id: rounds[1] }
 
   const detail = pathname.match(REQUEST_DETAIL_PATH)
   if (detail?.[1]) return { kind: "detail", id: detail[1] }
@@ -383,6 +429,184 @@ function requestDetailPage(
     <dd data-testid="request-detail-customer">${escapeHtml(submission.customerEmail ?? "no email on file")}</dd>
   </dl>
 
+  <p class="round-history-aside">
+    <a href="/requests/${encodeURIComponent(submission.id)}/rounds" data-testid="request-rounds-link">
+      See design rounds &amp; mock bundles
+    </a>
+  </p>
+
   ${reassignPanel(`/requests/${encodeURIComponent(submission.id)}/reassign`, options)}
 </main>`
+}
+
+/* ─────────────────────── the operator round read (#304) ────────────────── */
+
+/**
+ * `GET /requests/:id/rounds` — issue #304's operator-scoped read of a
+ * submission's design-round history: the same `design_rounds`/`signoffs`
+ * state `routes/submission.ts`'s `submissionRounds` renders for the customer,
+ * plus each round's decision timestamp (which the customer's own round
+ * history does not show — see `operatorRoundEntry`) and a link to each
+ * round's own published bundle (which the customer's own round history does
+ * not link either — only the *current* round does, from the sign-off screen).
+ * An operator reviewing history has no "current round" to stand on; every
+ * round here needs its own way in.
+ *
+ * Same guard shape as `requestDetail` just above: `readOperator` first, then
+ * `getSubmission`, both refusing with the one indistinguishable
+ * `leadsNotFound()` this whole surface uses. A submission with no rounds yet
+ * renders the same empty state `routes/submission.ts`'s `roundHistory` does —
+ * "No design round has been published for this request yet" — never an
+ * error.
+ *
+ * Recorded via `recordOperatorRead` with `round: null` — this reads the whole
+ * history, not one round's bundle; see `src/operatorAccess.ts`.
+ */
+export async function requestRounds(request: Request, env: Env, id: string): Promise<Response> {
+  const operator = await readOperator(request, env)
+  if (!operator) return leadsNotFound()
+
+  const submission = await getSubmission(env, id)
+  if (!submission) return leadsNotFound()
+
+  const rounds = await listRounds(env, submission.reference)
+  await recordOperatorRead(env, operator.email, submission.reference, null)
+
+  return html(
+    page(
+      `Round history — ${submission.reference} — coord-portal`,
+      operatorRoundHistoryPage(operator, submission, rounds),
+    ),
+  )
+}
+
+function operatorRoundHistoryPage(
+  operator: Operator,
+  submission: Submission,
+  rounds: DesignRound[],
+): string {
+  const body =
+    rounds.length > 0
+      ? rounds.map((round) => operatorRoundEntry(submission, round)).join("\n")
+      : `    <p class="lede">No design round has been published for this request yet.</p>`
+
+  return `${operatorTopbar(operator.email, "requests")}
+<main>
+  <a class="back-link" href="/requests/${encodeURIComponent(submission.id)}" data-testid="back-to-request">&larr; ${escapeHtml(titleOf(submission))}</a>
+  <h1>Round history</h1>
+  <p class="meta" data-testid="request-detail-reference">${escapeHtml(submission.reference)}</p>
+
+  ${operatorAccessNotice(submission)}
+
+  <div data-testid="round-history">
+${body}
+  </div>
+</main>`
+}
+
+/**
+ * "Clearly marked as operator access to customer material, not a customer
+ * view" — issue #304's own acceptance line, made literal. Rendered once per
+ * page, ahead of the round list itself, so it is the first thing an operator
+ * reads here, not a footnote.
+ */
+function operatorAccessNotice(submission: Submission): string {
+  return `<p class="operator-access-notice" data-testid="operator-access-notice" role="note">
+    You are viewing ${escapeHtml(submission.customerEmail ?? "this customer")}'s design rounds and
+    published mocks as an operator. This is their material, not yours — the read is recorded.
+  </p>`
+}
+
+/**
+ * One round, operator-facing — the same facts `routes/submission.ts`'s
+ * `roundEntry` renders for the customer (badge, verdict, opened date, outcome
+ * definition, decomposition and, on a `changes-requested` round, the
+ * customer's own comment), plus the two things only an operator's screen
+ * needs:
+ *
+ *   `round-decided-at`   the customer's own `decidedAt` — absent on a still-
+ *                        `pending` round, the same way `round-comment` is
+ *                        absent on an `approved` one. The customer's own
+ *                        round history never shows this (their own copy
+ *                        already says "opened <date>", and they were there
+ *                        when they decided); an operator reviewing a verdict
+ *                        after the fact needs to know when, not just what.
+ *   `operator-mock-bundle-link`
+ *                        every round's own published bundle, via
+ *                        `operatorMockBundleHref` below — not only the
+ *                        current round's, the way the customer's sign-off
+ *                        screen links just one. An operator reviewing
+ *                        history has no "current round" to stand on; each
+ *                        entry needs its own way into what was actually
+ *                        shown.
+ *
+ * Deliberately its own function rather than an extra parameter threaded onto
+ * `routes/submission.ts`'s exported `roundEntry` — that function is called
+ * positionally as `.map(roundEntry)` from two customer-facing call sites
+ * (`submission.ts` itself and `routes/project.ts`); giving it a second,
+ * operator-only parameter would mean either call site accidentally passing
+ * `Array.prototype.map`'s own index/array arguments through it, which is
+ * exactly the "two copies drifting" failure mode `roundEntry`'s own export
+ * comment warns against, applied to itself.
+ */
+function operatorRoundEntry(submission: Submission, round: DesignRound): string {
+  const items = round.decomposition.map((item) => `        <li>${escapeHtml(item)}</li>`).join("\n")
+  const decomposition = round.decomposition.length
+    ? `      <ul class="decomposition-list">
+${items}
+      </ul>`
+    : ""
+
+  // Only rounds where changes were requested carry a comment — approving asks
+  // for none, and a pending round has not been answered yet. Same rule
+  // `routes/submission.ts`'s `roundEntry` applies, and the same reason its own
+  // comment gives for keeping the customer's words free of decorative
+  // quotation marks in the DOM.
+  const comment =
+    round.verdict === "changes-requested" && round.comment
+      ? `      <blockquote data-testid="round-comment">${escapeHtml(round.comment)}</blockquote>`
+      : ""
+
+  const decidedAt = round.decidedAt
+    ? `      <p class="round-decided-at" data-testid="round-decided-at">Decided ${escapeHtml(round.decidedAt)}</p>`
+    : ""
+
+  const href = operatorMockBundleHref(submission, round)
+  const bundleLink = href
+    ? `      <a class="mock-bundle-link" href="${escapeHtml(href)}" data-testid="operator-mock-bundle-link"
+         aria-label="Open the published mock bundle for round ${round.round}">
+        View the mock bundle &rarr;
+      </a>`
+    : ""
+
+  return `    <section class="round-entry" data-testid="round-entry" data-round="${round.round}" data-verdict="${escapeHtml(round.verdict)}">
+      <div class="round-entry-head">
+        <span class="round-badge">Round ${round.round}</span>
+        <span class="verdict-pill" data-testid="verdict-pill" data-verdict="${escapeHtml(round.verdict)}">${escapeHtml(VERDICT_TEXT[round.verdict])}</span>
+        <span class="round-date">opened ${escapeHtml(round.openedAt)}</span>
+      </div>
+      <p class="outcome-definition">${escapeHtml(round.outcomeDefinition)}</p>
+${decomposition}
+${comment}
+${decidedAt}
+${bundleLink}
+    </section>`
+}
+
+/**
+ * `mockBundleHref` (`routes/submission.ts`) for the operator route instead of
+ * the customer one — same two shapes (an absolute URL or root-relative path
+ * used verbatim; anything else treated as an R2 key and routed back through
+ * this portal), same "no identifier in the link text" reasoning, only the R2
+ * read path swapped for `routes/mocks.ts`'s `operatorMockBundle`
+ * (`/requests/:id/rounds/:n/mock`) instead of the customer's `mockBundle`
+ * (`/submissions/:id/rounds/:n/mock`) — a link built from the customer path
+ * would 404 for an operator by construction, the same way `promotedReference`
+ * (`routes/leads.ts`) never links a `/submissions/:id` an operator cannot open.
+ */
+function operatorMockBundleHref(submission: Submission, round: DesignRound): string | null {
+  const bundle = round.mockBundle?.trim()
+  if (!bundle) return null
+  if (/^https?:\/\//i.test(bundle) || bundle.startsWith("/")) return bundle
+  return `/requests/${submission.id}/rounds/${round.round}/mock`
 }

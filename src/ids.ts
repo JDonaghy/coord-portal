@@ -109,6 +109,19 @@ export function generateInboundEmailId(): string {
   return `inb_${randomHex(24)}`
 }
 
+/**
+ * `opread_` + 24 lowercase hex chars — one row in `operator_reads` (issue
+ * #304), the audit trail for an operator reading a customer's own
+ * design-round material. Same shape as `generateEventId` /
+ * `generateOutboxId` / `generateMessageId` / `generateInboundEmailId`, and
+ * portal-internal for the same reason: nothing ever reads this id back —
+ * `src/operatorAccess.ts`'s `recordOperatorRead` writes the row and nothing
+ * quotes it, by id or otherwise, anywhere else.
+ */
+export function generateOperatorReadId(): string {
+  return `opread_${randomHex(24)}`
+}
+
 function randomHex(length: number): string {
   const bytes = crypto.getRandomValues(new Uint8Array(Math.ceil(length / 2)))
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0"))
