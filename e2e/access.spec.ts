@@ -112,14 +112,124 @@ test("a customer cannot open another customer's submission or round history by U
 })
 
 /**
+ * Issue #306: the not-found copy used to offer two causes ("submitted
+ * somewhere else" or "the link is wrong") and neither is true for the
+ * likeliest real one — the reader is signed in as a different address than
+ * the submission belongs to. The fix names the caller's own signed-in
+ * address (or the lack of one) without touching `isOwnedBy`, the status
+ * code, or whether the response varies by whether the id is real.
+ */
+test("a non-owner is told which address they're signed in as, and to try the address the request was sent to", async ({
+  browser,
+  baseURL,
+}) => {
+  const ada = uniqueEmail("ada-e2e-notfound-owner")
+  const bo = uniqueEmail("bo-e2e-notfound-nonowner")
+
+  const adaContext = await browser.newContext({
+    baseURL,
+    extraHTTPHeaders: { [ACCESS_HEADER]: ada },
+  })
+  const boContext = await browser.newContext({
+    baseURL,
+    extraHTTPHeaders: { [ACCESS_HEADER]: bo },
+  })
+
+  const adaPage = await adaContext.newPage()
+  const adaSubmission = await createSubmission(adaPage, "ADA-E2E-NOTFOUND")
+  await adaContext.close()
+
+  const boPage = await boContext.newPage()
+  const response = await boPage.goto(adaSubmission.url)
+  expect(response?.status()).toBe(404) // never a 403 — knowing the URL is still not authorisation
+
+  const body = await boPage.locator("body").innerText()
+  expect(body).toContain("We can't find that request")
+  expect(body).toContain(bo) // names Bo's own signed-in address
+  expect(body).not.toContain(ada) // never Ada's — that would confirm whose submission it is
+  expect(body.toLowerCase()).toContain("sign in with that")
+
+  await boContext.close()
+})
+
+test("an unauthenticated visitor is not told the link is wrong, and is not named as signed in", async ({
+  browser,
+  baseURL,
+}) => {
+  const ada = uniqueEmail("ada-e2e-notfound-anon")
+  const adaContext = await browser.newContext({
+    baseURL,
+    extraHTTPHeaders: { [ACCESS_HEADER]: ada },
+  })
+  const adaPage = await adaContext.newPage()
+  const adaSubmission = await createSubmission(adaPage, "ADA-E2E-NOTFOUND-ANON")
+  await adaContext.close()
+
+  const nobody = await browser.newContext({ baseURL })
+  const nobodyPage = await nobody.newPage()
+  const response = await nobodyPage.goto(adaSubmission.url)
+  expect(response?.status()).toBe(404)
+
+  const body = await nobodyPage.locator("body").innerText()
+  expect(body).toContain("We can't find that request")
+  // The old copy stated flatly "the link is wrong"; the new copy only offers
+  // that as one of several possibilities, never the stated cause.
+  expect(body).not.toContain("the link is wrong")
+  expect(body).not.toContain("signed in as")
+  expect(body.toLowerCase()).toContain("not signed in")
+
+  await nobody.close()
+})
+
+test("a non-existent submission and someone else's real submission render byte-identical 404s for the same caller", async ({
+  browser,
+  baseURL,
+  request,
+}) => {
+  const ada = uniqueEmail("ada-e2e-notfound-real")
+  const adaContext = await browser.newContext({
+    baseURL,
+    extraHTTPHeaders: { [ACCESS_HEADER]: ada },
+  })
+  const adaPage = await adaContext.newPage()
+  const adaSubmission = await createSubmission(adaPage, "ADA-E2E-NOTFOUND-REAL")
+  await adaContext.close()
+
+  const bo = uniqueEmail("bo-e2e-notfound-real")
+  const boHeaders = { [ACCESS_HEADER]: bo }
+
+  const realButNotOwned = await request.get(adaSubmission.url, { headers: boHeaders })
+  const neverExisted = await request.get("/submissions/sub_does_not_exist", { headers: boHeaders })
+  expect(realButNotOwned.status()).toBe(404)
+  expect(neverExisted.status()).toBe(404)
+  expect(await realButNotOwned.text()).toBe(await neverExisted.text())
+
+  // Same property, unauthenticated.
+  const realAnon = await request.get(adaSubmission.url)
+  const neverExistedAnon = await request.get("/submissions/sub_does_not_exist")
+  expect(realAnon.status()).toBe(404)
+  expect(neverExistedAnon.status()).toBe(404)
+  expect(await realAnon.text()).toBe(await neverExistedAnon.text())
+})
+
+/**
  * Issue #46: `request.formData()` throws a raw `TypeError` — an unhandled
  * 500 — when a POST carries no `Content-Type` at all (a bot, a broken
  * client, a redirect replayed as a bare POST). That is a malformed request,
- * not a server error, and per the fix it has to be indistinguishable from
- * the non-owner refusal just above: same status, same body, never a 5xx
- * that would tell a prober "the id exists, the body was just wrong."
+ * not a server error, and per the fix it has to render the same house-style
+ * 404 the non-owner refusal just above renders — same status, same shape,
+ * never a 5xx that would tell a prober "the id exists, the body was just
+ * wrong."
+ *
+ * Before issue #306 this was a byte-for-byte comparison. #306 makes the 404
+ * page name the caller's own signed-in address, so Ada's malformed POST (her
+ * own submission) and Bo's ownership refusal (also Ada's submission) now
+ * differ in exactly that one line — each names its own caller, never
+ * anything about the submission. What still has to hold, and is asserted
+ * below, is that both are the same 404 template and neither leaks the
+ * *other* caller's identity.
  */
-test("a POST with no Content-Type gets the same 404 a non-owner gets, never a 500", async ({
+test("a POST with no Content-Type gets the same 404 shape a non-owner gets, never a 500", async ({
   browser,
   baseURL,
   request,
@@ -140,14 +250,25 @@ test("a POST with no Content-Type gets the same 404 a non-owner gets, never a 50
   })
   expect(ownerResponse.status()).toBe(404)
 
-  // A stranger posting the same way gets byte-for-byte the same refusal —
-  // no oracle that distinguishes "your body was wrong" from "not your id".
+  // A stranger posting the same way gets the same house-style refusal — no
+  // oracle that distinguishes "your body was wrong" from "not your id".
   const bo = uniqueEmail("bo-e2e-ct")
   const strangerResponse = await request.post(adaSubmission.url, {
     headers: { [ACCESS_HEADER]: bo },
   })
   expect(strangerResponse.status()).toBe(404)
-  expect(await strangerResponse.text()).toBe(await ownerResponse.text())
+
+  const [ownerBody, strangerBody] = await Promise.all([
+    ownerResponse.text(),
+    strangerResponse.text(),
+  ])
+  expect(ownerBody).toContain("We can't find that request")
+  expect(strangerBody).toContain("We can't find that request")
+  // Each names only its own caller (issue #306) — never the other one's.
+  expect(ownerBody).toContain(ada)
+  expect(ownerBody).not.toContain(bo)
+  expect(strangerBody).toContain(bo)
+  expect(strangerBody).not.toContain(ada)
 })
 
 /**
