@@ -88,7 +88,7 @@ export async function submissionDetail(
     // (`src/routes/leads.ts`) instead, reached the way an operator already
     // reaches everything else about a promoted lead, never through this
     // customer-only route.
-    return notFoundResponse()
+    return notFoundResponse(email)
   }
 
   // Additive to the ownership scoping above, never a substitute for it — see
@@ -134,7 +134,7 @@ export async function submitSubmissionAction(
   // with `isOwnedBy` alone because it never needs to hand `email` anywhere
   // that requires non-null.
   if (!submission || !isOwnedBy(submission, email) || email === null) {
-    return notFoundResponse()
+    return notFoundResponse(email)
   }
 
   // Additive to the ownership check above, never a substitute for it — see
@@ -157,10 +157,10 @@ export async function submitSubmissionAction(
   // through `parseFormData`, which turns that throw into `null`: any failure
   // there gets the same 404, not a 5xx.
   const contentType = request.headers.get("content-type") ?? ""
-  if (!isFormContentType(contentType)) return notFoundResponse()
+  if (!isFormContentType(contentType)) return notFoundResponse(email)
 
   const form = await parseFormData(request)
-  if (!form) return notFoundResponse()
+  if (!form) return notFoundResponse(email)
   const action = stringField(form, "action")
 
   if (action === "message") {
@@ -476,7 +476,7 @@ export async function submissionRounds(
   const email = await resolveSiteIdentity(request, env)
   const submission = await getSubmission(env, id)
   if (!submission || !isOwnedBy(submission, email)) {
-    return notFoundResponse()
+    return notFoundResponse(email)
   }
 
   const rounds = await listRounds(env, submission.reference)
@@ -504,9 +504,18 @@ export function isOwnedBy(submission: Submission, email: string | null): boolean
   return email !== null && submission.customerEmail === email
 }
 
-/** The one 404 every refusal on this route renders — see `submissionDetail`'s module comment. */
-function notFoundResponse(): Response {
-  return html(page("Not found — coord-portal", notFound()), { status: 404 })
+/**
+ * The one 404 every refusal on this route renders — see `submissionDetail`'s
+ * module comment.
+ *
+ * `email` is `resolveSiteIdentity`'s reading at the moment of refusal: the
+ * caller's own already-known identity, echoed back on their own screen, never
+ * anything about the submission they asked for. Every call site above passes
+ * it straight through — see `notFound()`'s own comment for why that is safe
+ * (issue #306).
+ */
+function notFoundResponse(email: string | null): Response {
+  return html(page("Not found — coord-portal", notFound(email)), { status: 404 })
 }
 
 /**
@@ -1603,9 +1612,44 @@ ${messageThreadSection(`/submissions/${submission.id}`, thread, "customer", emai
 </main>`
 }
 
-function notFound(): string {
+/**
+ * Issue #306: the two causes this copy used to offer — "submitted somewhere
+ * else" or "the link is wrong" — are both false for the single most likely
+ * way a real customer reaches this screen. Every notification email links
+ * straight to `/submissions/:id`, and reaching that id requires being
+ * authenticated, via Cloudflare Access, as exactly `submission.customerEmail`
+ * (`isOwnedBy`, this file's module comment) — so the likeliest cause is that
+ * the reader is signed in under a different address than the one the mail
+ * went to, and that cause was not among the options.
+ *
+ * Naming the signed-in address does not leak anything `isOwnedBy` is meant to
+ * keep secret: it is the caller's own already-known identity, not anything
+ * about the submission. What still must not vary is whether the requested id
+ * exists — a real submission owned by someone else and an id nobody ever
+ * minted reach this function with the same `email` either way, so the two
+ * stay byte-identical (the property `src/routes/mocks.ts`'s own module
+ * comment documents — "a 404 that only fires for someone else's [id] would
+ * itself confirm it exists" — re-asserted for this route by
+ * `e2e/access.spec.ts`).
+ *
+ * `email === null` (nobody signed in at all) gets its own line rather than
+ * the "signed in as" one: there is no address to name, and the point is the
+ * same either way — sign in with the address the request was sent to.
+ *
+ * The sign-out link reuses `topbar()`'s exact href and `data-testid` — see
+ * `src/render.ts` — since this page renders no header of its own and a
+ * reader who now knows *what* to do (sign in as a different address) may not
+ * know *how* without it.
+ */
+function notFound(email: string | null): string {
+  const identityLine =
+    email !== null
+      ? `<p class="lede">You're signed in as <strong>${escapeHtml(email)}</strong>. If this request was sent to a different address, sign in with that one — <a href="/cdn-cgi/access/logout" data-testid="signout-link">sign out</a> first.</p>`
+      : `<p class="lede">You're not signed in. If this request was sent to you, sign in with the address it was sent to.</p>`
+
   return `<main>
   <h1>We can't find that request</h1>
-  <p class="lede">It may have been submitted somewhere else, or the link is wrong.</p>
+  ${identityLine}
+  <p class="lede">It may also have been submitted somewhere else, or the link may be wrong.</p>
 </main>`
 }
