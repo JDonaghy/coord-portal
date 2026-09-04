@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weekly usage digest for team admins — coord-portal</title>
+<!-- MOCK — Amendment 2 (2026-09-04) screen state, coord-portal#309: the render
+     every prior mock in this contract missed — a CUSTOMER screen (topbar(),
+     not operatorTopbar()) viewed by a signed-in OPERATOR. Route: GET
+     /submissions/:id, the same route the amendment's own evidence observed
+     live on 2026-09-04. Every mock 01-07 in this contract shows either a
+     pure customer screen (topbar(), isOperator=false — no mock here does
+     this; see ms-1's own contract for those) or a pure operator screen
+     (operatorTopbar(), mocks 01-05/07) or the unmerged /leads/:id view. None
+     of them shows `topbar()` called with `isOperator=true`, which is what
+     actually renders the instant an operator opens a customer's submission
+     to look something up — ordinary operator work, not an edge case.
+
+     src/render.ts's topbar() appends `operatorNavGroup(current)` to the SAME
+     `<nav>` as the customer links whenever its `isOperator` parameter is
+     true — see the doc comment above `topbar()` and `operatorNavGroup()` in
+     that file. This mock renders exactly that: `nav-dashboard` / `nav-new` /
+     `nav-outbox` (the customer group) followed by `nav-group-divider` /
+     `nav-group-operator-label` / the five operator links, all inside one
+     `<nav aria-label="primary">`, in one document.
+
+     Body below the header reuses `tests/acceptance/ms-1/mocks/
+     04-submission-in-design.html`'s content byte-for-byte (same synthetic
+     submission, same "In design" status) — ms-1's contract, not this one,
+     owns `submission-detail`/`status-pill`/`status-timeline`/`rollup-copy`;
+     nothing about them is new or redefined here. What this mock adds is
+     only the header. The account-menu panel still carries `nav-account`
+     because this is a customer SCREEN (topbar()) — the contract's existing
+     "Operator screens" pinning (panel omits nav-account) governs
+     operatorTopbar() screens only (mocks 01-05/07) and is unchanged by this
+     amendment; see contract.md "Do NOT change" list.
+
+     ── Why this file is 412px wide, always, regardless of the viewing
+     browser's own window size ──
+     The point of this mock is the "does not fragment" property Amendment 2
+     pins: the operator group (divider + label + five links) must move to
+     its own line as one intact unit rather than splitting mid-group across
+     the customer nav's wrap points. That property is only OBSERVABLE at a
+     width too narrow for customer links + divider + label + five links to
+     all share one line. Rather than rely on whoever opens this file to
+     resize their browser to demonstrate it, `body` below is hard-capped at
+     412px — the exact CSS-px figure `src/render.ts`'s own APP_STYLES
+     comment cites as its wrap breakpoint rationale ("a phone is 412 CSS px
+     wide") — so the wrap is visible on load, in any browser, at any window
+     size. This is a mock-authoring device only; it pins no new hook and no
+     new breakpoint value, and a worker is not required to hard-code 412px
+     anywhere in the app itself. -->
+<link rel="stylesheet" href="../../../../public/tokens.css">
+<style>
+  /* Forces the narrow rendering described above. Not part of the app's own
+     layout — a mock-only device so the wrap is visible without resizing. */
+  body { max-width: 412px; margin: 2rem auto; padding: 0 1rem 3rem; border: 1px dashed var(--line-strong); }
+
+  /* ── header.topbar, copied from src/render.ts's APP_STYLES (Amendment 1's
+     three-slot layout + Amendment 2 / issue #308's .nav-group-operator
+     wrap-as-one-unit rule) — unmodified by this mock. ── */
+  header.topbar {
+    display: flex; align-items: flex-start; gap: 1rem;
+    max-width: 44rem; margin: 0 auto 2rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  header.topbar .brand {
+    flex: 0 0 auto; padding-top: 0.35rem;
+    font-weight: 700; color: var(--text); text-decoration: none; font-size: var(--step-1);
+  }
+  header.topbar nav {
+    flex: 1 1 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem;
+    padding-top: 0.4rem; min-width: 0;
+  }
+  header.topbar nav a { color: var(--text-dim); text-decoration: none; font-size: var(--step--1); }
+  header.topbar nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+  /* The group-as-one-unit fix (issue #308): flex-basis: 100% forces the
+     whole operator group onto its own line unconditionally rather than
+     letting the outer nav's own wrap break it wherever it runs out of
+     width — so on a customer screen (this mock) the group either sits after
+     the customer links on a shared line (wide viewport) or drops to its own
+     line, whole, never split across two lines with some of its five links
+     on one and the rest on another. */
+  header.topbar nav .nav-group-operator {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; flex-basis: 100%;
+  }
+  header.topbar nav .nav-group-divider { width: 1px; align-self: stretch; background: var(--line); }
+  header.topbar nav .nav-group-operator-label {
+    color: var(--text-faint); font-size: var(--step--2); text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  header.topbar .account-menu { flex: 0 0 auto; position: relative; }
+  header.topbar .account-menu summary {
+    list-style: none; cursor: pointer; width: 2.15rem; height: 2.15rem; border-radius: 999px;
+    background: var(--surface-2); border: 1px solid var(--line-strong); color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: var(--step--1);
+  }
+  header.topbar .account-menu summary::-webkit-details-marker { display: none; }
+  header.topbar .account-menu[open] summary { outline: 2px solid var(--accent); outline-offset: 1px; }
+  header.topbar .account-menu .account-menu-panel {
+    position: absolute; right: 0; top: calc(100% + 0.5rem); z-index: 10;
+    display: grid; gap: 0.6rem; min-width: 12rem; padding: 0.75rem 0.9rem;
+    background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-md);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.14);
+  }
+  header.topbar .account-menu .identity {
+    color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono);
+    min-width: 0; overflow-wrap: anywhere;
+  }
+  header.topbar .account-menu .account-menu-panel a { color: var(--text); text-decoration: none; font-size: var(--step--1); }
+  header.topbar .account-menu .account-menu-panel a.signout { color: var(--text-dim); }
+
+  /* ── Body — ms-1's submission-detail content, unmodified in substance
+     (contract.md "Do NOT change"), reused non-normatively per the same
+     latitude the original ms-4 contract took reusing ms-2's lead-detail
+     hooks byte-for-byte. ── */
+  main { max-width: 100%; }
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 0.4em;
+    padding: 0.25em 0.75em; border-radius: 999px; font-size: var(--step--1); font-weight: 600;
+  }
+  .status-pill[data-status="in-design"] { background: var(--accent-wash); color: var(--accent-dim); }
+  .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); margin: 0.35rem 0 1.5rem; }
+  ol.timeline {
+    list-style: none; margin: 0 0 2rem; padding: 0; display: flex; flex-wrap: wrap; gap: 0 0.5rem;
+  }
+  ol.timeline li {
+    font-size: var(--step--1); color: var(--text-faint); padding: 0.3em 0;
+    position: relative;
+  }
+  ol.timeline li:not(:last-child)::after { content: "→"; margin: 0 0.5em; color: var(--line-strong); }
+  ol.timeline li[data-current="true"] { color: var(--accent-dim); font-weight: 700; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 1.25rem; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
+  <nav aria-label="primary">
+    <a href="/submissions" data-testid="nav-dashboard">My requests</a>
+    <a href="/intake" data-testid="nav-new">New request</a>
+    <a href="/outbox" data-testid="nav-outbox">Sent emails</a>
+    <span class="nav-group-operator">
+      <span class="nav-group-divider" data-testid="nav-group-divider" aria-hidden="true"></span>
+      <span class="nav-group-operator-label" data-testid="nav-group-operator-label">Operator</span>
+      <a href="/leads" data-testid="nav-leads">Leads</a>
+      <a href="/deliveries" data-testid="nav-deliveries">Deliveries</a>
+      <a href="/replies" data-testid="nav-replies">Replies</a>
+      <a href="/requests" data-testid="nav-requests">Requests</a>
+      <a href="/clients" data-testid="nav-clients">Clients</a>
+    </span>
+  </nav>
+  <details class="account-menu">
+    <summary data-testid="account-menu" aria-label="Account menu (ops@example.test)" aria-expanded="false">OP</summary>
+    <div class="account-menu-panel">
+      <span class="identity" data-testid="identity-email">signed in as ops@example.test</span>
+      <a href="/account" data-testid="nav-account">My profile</a>
+      <a class="signout" href="/cdn-cgi/access/logout" data-testid="signout-link">Sign out</a>
+    </div>
+  </details>
+</header>
+<main data-testid="submission-detail" data-status="in-design">
+  <span class="status-pill" data-testid="status-pill" data-status="in-design">In design</span>
+  <h1>Weekly usage digest for team admins</h1>
+  <p class="meta" data-testid="submission-reference">SUB-2B91EE &middot; submitted 3 days ago</p>
+
+  <ol class="timeline" data-testid="status-timeline" aria-label="Progress">
+    <li data-testid="timeline-step" data-step="describing">Describing</li>
+    <li data-testid="timeline-step" data-step="in-design" data-current="true">In design</li>
+    <li data-testid="timeline-step" data-step="awaiting-signoff">Awaiting your sign-off</li>
+    <li data-testid="timeline-step" data-step="in-progress">In progress</li>
+    <li data-testid="timeline-step" data-step="shipped">Shipped</li>
+  </ol>
+
+  <section class="card">
+    <p data-testid="rollup-copy">
+      Our team is turning this into a design. There's nothing for you to do right
+      now — we'll email you the moment there's a proposal ready for your sign-off.
+    </p>
+  </section>
+</main>
+</body>
+</html>
