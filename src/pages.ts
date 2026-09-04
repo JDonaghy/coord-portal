@@ -21,7 +21,7 @@ import {
   postLeadStartWork,
   promoteLeadAction,
 } from "./routes/leads"
-import { matchMockBundlePath, mockBundle } from "./routes/mocks"
+import { matchMockBundlePath, matchOperatorMockBundlePath, mockBundle, operatorMockBundle } from "./routes/mocks"
 import { outbox } from "./routes/outbox"
 import {
   matchRepliesPath,
@@ -33,7 +33,13 @@ import {
   replyDetail,
 } from "./routes/replies"
 import { projectDetail } from "./routes/project"
-import { matchRequestsPath, postRequestReassign, requestDetail, requestsInbox } from "./routes/requests"
+import {
+  matchRequestsPath,
+  postRequestReassign,
+  requestDetail,
+  requestRounds,
+  requestsInbox,
+} from "./routes/requests"
 import { startForm, submitStart } from "./routes/start"
 import { submissionDetail, submissionRounds, submitSubmissionAction } from "./routes/submission"
 import type { Env } from "./types"
@@ -164,11 +170,14 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
   // operator-only. See `routes/requests.ts`.
   // `/requests/:id` and `/requests/:id/reassign` (issue #145) — the second
   // entry point onto #130's reassignment mechanic, for a submission that has
-  // no lead to reach `/leads/:id` through. Owned here for every method on any
-  // `/requests…` path, same reasoning as `/leads…` below: falling through to
-  // `ASSETS.fetch` on an unsupported method would hand an unauthenticated
-  // caller a response this contract says is operator-only. See
-  // `routes/requests.ts`.
+  // no lead to reach `/leads/:id` through. `/requests/:id/rounds` (issue
+  // #304) is the operator-scoped read of that submission's design-round
+  // history — see `routes/requests.ts`'s module comment, "ISSUE #304's
+  // OPERATOR ROUND READ", for why this surface now owns that too. Owned here
+  // for every method on any `/requests…` path, same reasoning as `/leads…`
+  // below: falling through to `ASSETS.fetch` on an unsupported method would
+  // hand an unauthenticated caller a response this contract says is
+  // operator-only. See `routes/requests.ts`.
   const requestsMatch = matchRequestsPath(pathname)
   if (requestsMatch) {
     if (requestsMatch.kind === "index" && request.method === "GET") {
@@ -179,6 +188,9 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
     }
     if (requestsMatch.kind === "reassign" && request.method === "POST") {
       return postRequestReassign(request, env, requestsMatch.id)
+    }
+    if (requestsMatch.kind === "rounds" && request.method === "GET") {
+      return requestRounds(request, env, requestsMatch.id)
     }
     return leadsNotFound()
   }
@@ -271,6 +283,24 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
   const bundleMatch = matchMockBundlePath(pathname)
   if (bundleMatch && request.method === "GET") {
     return mockBundle(request, env, bundleMatch.id, bundleMatch.round, bundleMatch.rest)
+  }
+
+  // The operator-scoped read of the same bundle (issue #304) — same R2 key,
+  // same headers, same bytes, gated by `readOperator` instead of `isOwnedBy`.
+  // Matched here rather than folded into `matchRequestsPath` above for the
+  // same reason the customer path just above is split from
+  // `SUBMISSION_ROUNDS_PATH`/`SUBMISSION_PATH`: this is a nested resource
+  // under a submission id, not a flat `/requests…` action. See
+  // `routes/mocks.ts`'s module comment.
+  const operatorBundleMatch = matchOperatorMockBundlePath(pathname)
+  if (operatorBundleMatch && request.method === "GET") {
+    return operatorMockBundle(
+      request,
+      env,
+      operatorBundleMatch.id,
+      operatorBundleMatch.round,
+      operatorBundleMatch.rest,
+    )
   }
 
   const submissionMatch = pathname.match(SUBMISSION_PATH)
