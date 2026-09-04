@@ -96,6 +96,7 @@ Five open issues, four of which change something a browser can see:
 | `05-lead-reassign-open.html` | Same lead as 02, reassignment panel expanded | `GET /leads/:id`, `data-status="promoted"`, `reassign-toggle` checked |
 | `06-account-profile.html` | Signed-in client editing their own profile | `GET /account` |
 | `07-account-menu-open.html` | **Amendment 1.** Same lead/state as mock 02, account menu opened | `GET /leads/:id`, `data-status="promoted"`, `account-menu` `[open]` |
+| `08-submission-detail-operator-view.html` | **Amendment 2 (2026-09-04), coord-portal#309.** A CUSTOMER screen (`topbar()`) viewed by a signed-in operator — `nav-dashboard`/`nav-new`/`nav-outbox` and the `nav-group-divider`/`nav-group-operator-label`/five-operator-links group both render in the same `<nav>`. Rendered at a hard-capped 412px width so the operator group's move-as-one-unit wrap is visible without resizing. | `GET /submissions/:id`, `data-status="in-design"`, `isOperator=true` |
 
 **Amendment 1** also re-renders the header of mocks 01–06 in place (three-slot layout, account
 menu) — see "Account menu" below. Mocks 01–05 additionally now render the full, current operator
@@ -104,6 +105,11 @@ pinned by ms-3's and ms-5's own, separately-sealed contracts) instead of `nav-le
 otherwise there is nothing for this amendment's "brand-home does not reflow" claim to demonstrate
 — this contract does not redefine any of those four hooks, only reuses them for visual accuracy,
 the same latitude the original ms-4 contract took reusing ms-2's `lead-detail` hooks byte-for-byte.
+
+**Amendment 2 (2026-09-04)** adds mock 08 — the render every prior mock in this contract missed,
+see "Operator nav grouping (item 5)" below. Its body content (`submission-detail`, `status-pill`,
+`status-timeline`, `rollup-copy`) is `ms-1`'s contract, reused non-normatively; nothing about that
+body is new or redefined here.
 
 **Not re-rendered, described in prose instead:** `GET /leads/:id`, `data-status="new"`, **no**
 client match. This is byte-identical to `tests/acceptance/ms-2/mocks/05-lead-detail.html` —
@@ -305,7 +311,7 @@ reflected in the same fields is the pinned behavior; no distinct confirmation ba
 this contract (a worker may add one additively, the same latitude ms-2's contract left for its
 own unpinned surfaces).
 
-## Account menu (Amendment 1, 2026-09-02) — mocks 01–07
+## Account menu (Amendment 1, 2026-09-02; § "Operator nav grouping" corrected by Amendment 2, 2026-09-04) — mocks 01–08
 
 Replaces the flat `nav-account` entry / bare `identity-email` span / third-row `signout-link` on
 every authenticated screen (customer **and**, newly, operator) with one right-aligned disclosure.
@@ -343,10 +349,11 @@ wrapping, never `brand-home`'s position in the row. This is this amendment's fix
      current route is `/account` (mock 06/07's customer case — note mock 07 itself is an operator
      screen and so does not show `nav-account` at all; no mock in this amendment shows
      `nav-account` with `aria-current="page"` inside an *open* panel, because mock 06 shows the
-     panel closed and mock 07 shows an operator screen. This contract does not add an eighth mock
+     panel closed and mock 07 shows an operator screen. This contract does not add a further mock
      for that combination — a worker/tester can derive it by composing 06's markup with 07's
      `open` state; flagged as a gap in mock coverage, not in the pinning itself, the same posture
-     the original contract took toward its own "not re-rendered" no-match screen).
+     the original contract took toward its own "not re-rendered" no-match screen — not to be
+     confused with mock 08, added below by Amendment 2 for an unrelated gap).
   3. `signout-link` — text exactly `Sign out`, `href="/cdn-cgi/access/logout"` (this exact hook,
      text and href already exist, pinned by `tests/acceptance/ms-5/contract.md` for the operator
      topbar; this amendment reuses it rather than redefining it, and additionally pins it onto the
@@ -382,28 +389,68 @@ a worse outcome than the clutter this amendment sets out to fix, so this contrac
 A worker who disagrees and wants an operator-equivalent profile page is proposing new scope, not
 implementing this amendment.
 
-### Operator nav grouping (item 5) — a request this contract cannot satisfy as literally written
+### Operator nav grouping (item 5)
 
-The request asks that "operator links... are visually separated from the customer links by a
-divider and a group label, so the two sets stop reading as one undifferentiated list." On every
-operator screen this contract or `ms-3`'s/`ms-5`'s already-sealed contracts render, **there are no
-customer links to separate from** — `nav-dashboard`, `nav-new`, `nav-new-cta` and `nav-outbox` are
-explicitly pinned absent from operator screens (this amendment's own "CONSTRAINTS" section restates
-that, quoting ms-2 issue 33 and ms-3 issue 55), and customer/operator sit behind two different
-Cloudflare Access applications that never render in the same document. There is, today, nothing on
-either side of the requested divider but the five operator links themselves. This contract does not
-silently invent a customer-link presence that the architecture forbids in order to make the
-request's premise true. What it pins instead, as its own resolution: a `nav-group-divider` element
-and a `nav-group-operator-label` element (visible text "Operator") precede the five operator links
-as a self-contained, labeled group — satisfying the literal structural ask (a divider, then a
-label, then the links) while flagging that, under the current architecture, the divider currently
-separates the group from nothing. If a future milestone ever renders customer and operator links in
-the same document, this structure is already in place for that; until then, this is this
-contract's best-effort compliance with a request whose stated premise ("the two sets... reading as
-one undifferentiated list") does not describe anything this contract or its predecessors ever
-built. The five links keep their existing meaning and destinations exactly as ms-3's and ms-5's
-contracts pin them — this amendment does not touch `nav-deliveries`, `nav-replies`, `nav-requests`
-or `nav-clients` beyond wrapping them in this group.
+> **Amendment 2 (2026-09-04), coord-portal#309 — this section replaces the original Gate-A text.**
+> The original text claimed that no operator screen ever renders alongside customer links, called
+> the request's premise unsatisfiable, and framed the divider/label group pinned below as a
+> forward-compatible placeholder separating "the group from nothing." That claim was false: it
+> reasoned only about the *unmerged* operator screens (`/leads`, `/deliveries`, `/replies`,
+> `/requests`, `/clients`, rendered by `operatorTopbar()`), and never considered an operator viewing
+> a *customer* screen (`/submissions*`, `/intake`, `/outbox`, `/account`, rendered by `topbar()`),
+> which is most of what an operator actually does — opening a customer's own submission to look
+> something up. `src/render.ts`'s `topbar(email, current, isOperator)` appends
+> `operatorNavGroup(current)` inside the same `<nav>` as the customer links whenever `isOperator` is
+> true, so both sets render together, in one document, on every customer screen an operator opens.
+> Observed live 2026-09-04 on `/submissions/<id>`:
+>
+> ```
+> coord-portal   My requests  New request  Sent emails | OPERATOR  Leads  Deliveries
+>                             Replies  Requests  Clients
+> ```
+>
+> The request's premise — that operator and customer links render together and read as one
+> undifferentiated list without a divider — was correct. Mock 08
+> (`08-submission-detail-operator-view.html`) is the render this contract was missing: no mock in
+> this contract, before Amendment 2, showed a customer screen viewed by an operator, which is why
+> this gap survived Gate A, the mock's own reviewer and the human sign-off.
+
+**Both renders are real, and this contract pins them separately:**
+
+- **`topbar()` — a customer screen, `isOperator=true`** (mock 08): the customer links
+  (`nav-dashboard`, `nav-new`, `nav-outbox`) and the operator group (`nav-group-divider`,
+  `nav-group-operator-label`, the five operator links) render together, inside one
+  `<nav aria-label="primary">`, in one document. Here the divider and the "Operator" label
+  genuinely separate two populated groups — that is their purpose on this render, not a
+  forward-compatible placeholder.
+- **`operatorTopbar()` — an unmerged operator screen** (`/leads`, `/deliveries`, `/replies`,
+  `/requests`, `/clients`; mocks 01–05, 07 in this contract; ms-3's and ms-5's own contracts for
+  the other three): `nav-dashboard`, `nav-new`, `nav-new-cta` and `nav-outbox` are still pinned
+  absent, exactly as ms-2 issue 33's and ms-3 issue 55's already-sealed oracles require (see the
+  long comment on `topbar()` in `src/render.ts` for why that merge is one-directional). On this
+  render the divider and label still precede only the five operator links, with nothing on their
+  other side — that half of the original text was accurate and is unchanged.
+
+`nav-group-divider` and `nav-group-operator-label` keep their exact `data-testid` values, visible
+text ("Operator") and `aria-hidden` on the divider on both renders, unchanged by this correction —
+see contract.md's "Do NOT change" note on this amendment. The five links keep their existing
+meaning and destinations exactly as ms-3's and ms-5's contracts pin them.
+
+**New pinning — the group does not fragment (coord-portal#308 is the implementation half; this
+contract pins the property, not the CSS technique):** at every viewport, the operator group behaves
+as one unit inside the nav's own wrapping. Either the whole group — divider, label and all five
+links — shares a line with the content before it, or it moves to its own line intact. It must never
+split, with some of the five links ending up on one line and the rest on another, and it must never
+end up with some of the five links sharing a line with a customer link while the others do not. A
+sealed test can check this without any new hook, using `boundingBox()` on the existing
+`nav-group-divider`, `nav-group-operator-label`, `nav-leads`, `nav-deliveries`, `nav-replies`,
+`nav-requests` and `nav-clients` elements: at any width, all seven must share one top y-coordinate
+with each other. Whether that shared line also happens to hold `nav-outbox` (etc.) is not pinned —
+only that the seven operator-group elements never disagree with each other about which line they
+are on. Mock 08 demonstrates the wrapped case (412px, matching the CSS-px figure
+`src/render.ts`'s own layout comment cites) — a worker or tester can derive the shared-line case by
+widening the same markup; this contract does not add a ninth mock for it, the same latitude the
+original ms-4 contract's own "not re-rendered" section took.
 
 ### Keyboard behavior — Escape does not close the panel in these mocks, and this contract flags why
 
@@ -416,7 +463,7 @@ keypress. Every existing disclosure in this repo (`.composer-toggle`, this contr
 any `tests/acceptance/*/mocks/` directory in this repo contains a `<script>` tag. This contract
 does not resolve the conflict by quietly adding an inline script — that would be a real, first-of-
 its-kind departure from this repo's established no-JS-mock convention, and is a call for whoever
-owns that convention, not a mock-author agent. **Mocks 01–07 render the JS-free variant: keyboard-
+owns that convention, not a mock-author agent. **Mocks 01–08 render the JS-free variant: keyboard-
 operable via native `<details>` semantics, `Escape` does not close the panel.** An implementer who
 adds a small inline vanilla-JS `keydown` listener to satisfy "Escape closes" is not violating this
 contract's rendered surface (a script-enhanced `<details>` still passes every `data-testid`/text/
@@ -497,12 +544,21 @@ repeated here.)
 `nav-account` (on the shared customer `topbar()`), `account-form`, `account-email`,
 `account-phone-field`, `account-cc-emails-field`, `account-address-field`, `account-save-button`
 
-**Amendment 1 (2026-09-02), every authenticated screen (mocks 01–07) — supersedes where
+**Amendment 1 (2026-09-02), every authenticated screen (mocks 01–08) — supersedes where
 `nav-account`/`identity-email`/`signout-link` render and when they are visible, per "Account menu"
 above:** `account-menu` (the `<summary>` trigger, `aria-expanded`, `aria-label`), `nav-group-divider`,
-`nav-group-operator-label` (operator screens only). `nav-account`, `identity-email` and
-`signout-link` are not new hooks — they keep the names, text and `href`s already pinned above and
-by `ms-5`'s contract — only their container and visibility change.
+`nav-group-operator-label` (present whenever `isOperator` is true — both on the unmerged operator
+screens, mocks 01–05/07, and, per Amendment 2 above, on a customer screen viewed by an operator,
+mock 08 — not "operator screens only" as originally written here). `nav-account`, `identity-email`
+and `signout-link` are not new hooks — they keep the names, text and `href`s already pinned above
+and by `ms-5`'s contract — only their container and visibility change.
+
+**Amendment 2 (2026-09-04), mock 08 — no new hooks.** `nav-dashboard`, `nav-new`, `nav-outbox`,
+`nav-group-divider`, `nav-group-operator-label`, `nav-leads`, `nav-deliveries`, `nav-replies`,
+`nav-requests`, `nav-clients`, `account-menu`, `identity-email`, `nav-account` and `signout-link`
+all keep exactly the names, text and attributes already pinned above; this amendment only adds a
+render where they co-occur and pins the non-fragmentation property in "Operator nav grouping (item
+5)" above.
 
 ## Synthetic data
 
@@ -549,14 +605,20 @@ of its own — never real contact information.
    This is a coordination problem between Gate A and an already-run Gate B, not something this
    amendment resolves; the coordinator must decide whether the sealed spec is re-authored or this
    amendment is rejected before any implementer starts work against it.
-8. **Amendment 1's "divider separating operator links from customer links" (item 5) describes a
-   state that cannot occur** under this repo's architecture — customer and operator sit behind two
-   different Access applications and their nav links never render in the same document (this
-   amendment's own "CONSTRAINTS" section says as much). This contract renders a labeled,
-   divider-prefixed group of the five operator links as its best-effort, forward-compatible
-   reading — see "Operator nav grouping" above — but does not claim this satisfies the request's
-   stated rationale, because nothing today produces the "undifferentiated list" the request
-   describes.
+8. **Superseded by Amendment 2 (2026-09-04) — kept for the record, do not treat as current.**
+   Original text: "Amendment 1's 'divider separating operator links from customer links' (item 5)
+   describes a state that cannot occur under this repo's architecture — customer and operator sit
+   behind two different Access applications and their nav links never render in the same document
+   ... This contract renders a labeled, divider-prefixed group of the five operator links as its
+   best-effort, forward-compatible reading ... but does not claim this satisfies the request's
+   stated rationale, because nothing today produces the 'undifferentiated list' the request
+   describes." That reasoning covered only the unmerged operator screens (`operatorTopbar()`); it
+   never considered `topbar()` rendered for an operator (`isOperator=true`), which is the ordinary
+   case of an operator opening a customer's own submission, and on which both link sets do render
+   together as one list, divider and label included. See "Operator nav grouping (item 5)" above,
+   as corrected by Amendment 2, and mock 08. The corollary this note now records instead: **the
+   group's non-fragmentation across a wrap is the property actually worth guarding** — pinned in
+   the corrected section above, demonstrated by mock 08 at 412px.
 9. **Amendment 1 asks for `Escape`-closes behavior from a JS-free `<details>` disclosure**, which
    is not achievable in CSS alone. Mocks render the JS-free variant (no `Escape` handling); see
    "Keyboard behavior" above. Whether to break this repo's zero-JS-mock convention with a small
