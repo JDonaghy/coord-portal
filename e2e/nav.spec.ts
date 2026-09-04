@@ -105,6 +105,40 @@ async function expectSignOut(page: Page) {
   await expect(signOut).toHaveAttribute("href", LOGOUT_HREF)
 }
 
+/** The five operator links plus the divider/label that precede them — the
+ * whole `nav-group-operator` group issue #308 is about (`operatorNavGroup()`
+ * in `src/render.ts`). */
+const OPERATOR_GROUP_HOOKS = [
+  "nav-group-divider",
+  "nav-group-operator-label",
+  "nav-leads",
+  "nav-deliveries",
+  "nav-replies",
+  "nav-requests",
+  "nav-clients",
+]
+
+async function boxes(page: Page, testids: readonly string[]) {
+  return Promise.all(
+    testids.map(async (testid) => {
+      const box = await page.getByTestId(testid).boundingBox()
+      if (!box) throw new Error(`${testid} has no bounding box — is it hidden?`)
+      return box
+    }),
+  )
+}
+
+type Box = { x: number; y: number; width: number; height: number }
+
+/** True if two boxes' vertical extents overlap — "on the same line", without
+ * assuming every element on that line has the same height (the divider's
+ * `align-self: stretch` makes it taller than the label/links beside it, so
+ * comparing top edges directly is too strict — a centered-but-taller item
+ * still shares the line). */
+function sameLine(a: Box, b: Box): boolean {
+  return Math.max(a.y, b.y) < Math.min(a.y + a.height, b.y + b.height)
+}
+
 test.describe("a non-operator customer's nav", () => {
   test("carries sign-out and every customer link, but no operator link, on every authenticated screen it owns", async ({
     page,
@@ -281,6 +315,83 @@ test.describe("an operator's nav", () => {
     await expect(menu).toHaveText("OP")
     await expect(menu).toHaveAttribute("aria-label", `Account menu (${DEV_OPERATOR})`)
     await expect(menu).toHaveAttribute("aria-expanded", "false")
+
+    await context.close()
+  })
+})
+
+/**
+ * Issue #308: on a customer screen (`topbar()`) an operator views, the
+ * operator group used to be nine flat flex siblings of `header.topbar nav`
+ * (three customer links, the divider, the label, five operator links), so
+ * `flex-wrap` broke the row wherever it ran out of width — not at the group
+ * boundary — and split the operator group across two lines under the
+ * customer links. The fix wraps the group in its own nested flex container
+ * (`nav-group-operator` in `src/render.ts`) so it is one flex item of the
+ * outer row: always its own line (`flex-basis: 100%`), and internally
+ * wrapping as one unit if it doesn't fit. These two tests are the
+ * black-box case the bug report screenshot showed: without the fix, the
+ * customer links and the first two operator elements would share one row's
+ * `y`, with the rest of the group below.
+ */
+test.describe("the operator group's layout on a customer screen (issue #308)", () => {
+  test("renders as a single line, below the customer links, at a desktop width", async ({
+    browser,
+    baseURL,
+  }) => {
+    const context = await contextFor(browser, baseURL, DEV_OPERATOR)
+    const page = await context.newPage()
+    await page.setViewportSize({ width: 1280, height: 800 })
+
+    await page.goto("/submissions")
+
+    const customerBoxes = await boxes(page, CUSTOMER_NAV_HOOKS)
+    const groupBoxes = await boxes(page, OPERATOR_GROUP_HOOKS)
+
+    // The three customer links share one row.
+    const [firstCustomer, ...restCustomer] = customerBoxes
+    for (const box of restCustomer) expect(sameLine(box, firstCustomer!)).toBe(true)
+
+    // The whole operator group — divider, label, all five links — shares a
+    // single row of its own. This is the exact split the bug report showed:
+    // without the fix, some of these boxes would share the customer row
+    // instead of each other.
+    const [firstGroup, ...restGroup] = groupBoxes
+    for (const box of restGroup) expect(sameLine(box, firstGroup!)).toBe(true)
+
+    // And that row sits strictly below the customer row — never merged with
+    // it, which is what made the split possible in the first place.
+    for (const customerBox of customerBoxes) {
+      for (const groupBox of groupBoxes) expect(sameLine(customerBox, groupBox)).toBe(false)
+      expect(firstGroup!.y).toBeGreaterThan(customerBox.y)
+    }
+
+    await context.close()
+  })
+
+  test("never mixes with the customer links even when the group itself has to wrap, at a narrow width", async ({
+    browser,
+    baseURL,
+  }) => {
+    const context = await contextFor(browser, baseURL, DEV_OPERATOR)
+    const page = await context.newPage()
+    // Narrow enough that the five-link operator group cannot fit on one
+    // line by itself (see the module comment on APP_STYLES in
+    // src/render.ts about 412px phones being the load-bearing case for the
+    // nav's own internal wrap) — the group is expected to wrap across
+    // several lines of its own here. What must never happen is one of
+    // those lines mixing in a customer link.
+    await page.setViewportSize({ width: 412, height: 800 })
+
+    await page.goto("/submissions")
+
+    const customerBoxes = await boxes(page, CUSTOMER_NAV_HOOKS)
+    const groupBoxes = await boxes(page, OPERATOR_GROUP_HOOKS)
+
+    const customerBottom = Math.max(...customerBoxes.map((box) => box.y + box.height))
+    const groupTop = Math.min(...groupBoxes.map((box) => box.y))
+
+    expect(groupTop).toBeGreaterThanOrEqual(customerBottom)
 
     await context.close()
   })
