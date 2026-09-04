@@ -62,9 +62,10 @@ async function pushStatus(
   reference: string,
   status: string,
   revision: number,
+  extraFields: Record<string, unknown> = {},
 ) {
   const res = await request.post("/api/bridge/push", {
-    data: { updates: [{ submission_id: reference, revision, fields: { status } }] },
+    data: { updates: [{ submission_id: reference, revision, fields: { status, ...extraFields } }] },
     headers: SERVICE_TOKEN,
   })
   expect(res.status()).toBe(200)
@@ -156,8 +157,37 @@ test("a pushed onhold_since still applies but resolves no onhold-* hook anywhere
   await expect(page.getByTestId("onhold-since")).toHaveCount(0)
 })
 
-test("shipped is terminal and renders its own read-only copy", async ({ page, request }) => {
+test("shipped with a known preview_url renders a button that navigates to it", async ({
+  page,
+  request,
+}) => {
+  // Issue #307: the shipped screen's button used to be a hardcoded
+  // `href="#"`, copied verbatim out of the Gate-A mock's placeholder. It
+  // must now navigate to `submission.previewUrl` when the bridge has pushed
+  // one — a dead button on the last screen a customer ever sees is worse
+  // than none.
   const email = uniqueEmail("e2e-shipped")
+  const seeded = await seedSubmission(page, email)
+  const resultUrl = "https://synthetic-result.example.test/build-9"
+
+  await pushStatus(request, seeded.reference, "shipped", 1, { preview_url: resultUrl })
+  await page.goto(seeded.url)
+
+  await expect(page.getByTestId("status-pill")).toHaveText("Shipped")
+  await expect(page.getByTestId("shipped-copy")).toBeVisible()
+  const link = page.getByTestId("shipped-link")
+  await expect(link).toBeVisible()
+  await expect(link).toHaveAttribute("href", resultUrl)
+})
+
+test("shipped with no known result URL renders explanatory text and no button", async ({
+  page,
+  request,
+}) => {
+  // The other half of #307: when the bridge has never pushed a
+  // `preview_url`, the screen must not fall back to a dead link — it
+  // renders text instead, and no `shipped-link` control at all.
+  const email = uniqueEmail("e2e-shipped-no-url")
   const seeded = await seedSubmission(page, email)
 
   await pushStatus(request, seeded.reference, "shipped", 1)
@@ -165,7 +195,12 @@ test("shipped is terminal and renders its own read-only copy", async ({ page, re
 
   await expect(page.getByTestId("status-pill")).toHaveText("Shipped")
   await expect(page.getByTestId("shipped-copy")).toBeVisible()
-  await expect(page.getByTestId("shipped-link")).toBeVisible()
+  await expect(page.getByTestId("shipped-link")).toHaveCount(0)
+  await expect(page.getByTestId("shipped-link-unavailable")).toBeVisible()
+
+  // Never the mock's placeholder, anywhere on a customer-facing screen.
+  const hrefs = await page.locator('a[href="#"]').count()
+  expect(hrefs).toBe(0)
 })
 
 test("the two actionable states render the pinned pill and ask for nothing yet", async ({

@@ -1584,6 +1584,25 @@ function questionText(value: unknown): string {
   }
 }
 
+/**
+ * Issue #307: `href="#"` was copied verbatim out of the Gate-A mock, where
+ * it is the ordinary placeholder for "a link belongs here" — but a static
+ * mock's placeholder is not a value a customer-facing template may ever
+ * render, and a dead button on the last screen a customer sees reads as a
+ * broken site. `submission.previewUrl` is coord-owned (populated by the
+ * ordinary bridge push, see `Submission.previewUrl` in `src/submissions.ts`)
+ * and is the only result-location field the model currently carries, so it
+ * is the source of truth here too. When it is unset, render text telling the
+ * customer where things stand instead of a control that silently does
+ * nothing — no `href="#"`, ever.
+ */
+export function shippedResultSection(submission: Submission): string {
+  if (submission.previewUrl) {
+    return `<a class="button primary" href="${escapeHtml(submission.previewUrl)}" data-testid="shipped-link">View the result &rarr;</a>`
+  }
+  return `<p data-testid="shipped-link-unavailable">We don't have a link for this yet — reply below and we'll send you one.</p>`
+}
+
 /** `shipped` — terminal, per `mocks/10-submission-shipped.html`. */
 async function shippedDetail(
   env: Env,
@@ -1601,7 +1620,7 @@ async function shippedDetail(
 
   <section class="card">
     <p data-testid="shipped-copy">This is live. Thanks for working through the design with us.</p>
-    <a class="button primary" href="#" data-testid="shipped-link">View the result &rarr;</a>
+    ${shippedResultSection(submission)}
   </section>
 
   ${activityTimeline(events)}
