@@ -187,7 +187,10 @@ async function serveBundle(
   const headers = new Headers()
   headers.set("content-type", contentTypeFor(key))
   headers.set("x-content-type-options", "nosniff")
-  headers.set("content-security-policy", "default-src 'self'; script-src 'none'; frame-ancestors 'self'")
+  headers.set(
+    "content-security-policy",
+    "default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline'; frame-ancestors 'self'",
+  )
   // Customer material behind Access — never store it in a shared cache.
   headers.set("cache-control", "private, no-store")
 
