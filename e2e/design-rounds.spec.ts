@@ -499,7 +499,7 @@ test.describe("the mock bundle route (routes/mocks.ts)", () => {
     expect(doc.headers()["content-type"]).toBe("text/html; charset=utf-8")
     expect(doc.headers()["x-content-type-options"]).toBe("nosniff")
     expect(doc.headers()["content-security-policy"]).toBe(
-      "default-src 'self'; script-src 'none'; frame-ancestors 'self'",
+      "default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline'; frame-ancestors 'self'",
     )
     // Customer material behind Access — never a shared cache.
     expect(doc.headers()["cache-control"]).toBe("private, no-store")
@@ -511,6 +511,45 @@ test.describe("the mock bundle route (routes/mocks.ts)", () => {
     expect(css.status()).toBe(200)
     expect(css.headers()["content-type"]).toBe("text/css; charset=utf-8")
     expect(await css.text()).toBe("body { color: red }")
+  })
+
+  /**
+   * Issue #314: the CSP had no `style-src`, so it fell back to `default-src
+   * 'self'` — which does not permit an inline `<style>` block. The header
+   * assertion above pins the string but would not have caught that: it never
+   * loads the bundle in a real browser and checks whether the stylesheet the
+   * bundle ships inline (the only mechanism available — R2 holds one object
+   * per round, so there is no external stylesheet to fall back to) actually
+   * took effect. This test drives the real Worker with a real page load so
+   * the browser's own CSP enforcement is what's being exercised, not a
+   * re-implementation of it.
+   */
+  test("the bundle's own inline stylesheet is actually applied, not merely present in the DOM", async ({
+    page,
+    request,
+  }) => {
+    const email = uniqueEmail("e2e-mock-styled")
+    const seeded = await seedSubmission(page, email)
+    const indexKey = `rounds/${seeded.reference}/1/index.html`
+    seedR2Object(
+      indexKey,
+      `<!doctype html>
+<html>
+<head><style>body { background-color: rgb(12, 34, 56); }</style></head>
+<body><p>styled synthetic mock</p></body>
+</html>`,
+      "text/html; charset=utf-8",
+    )
+    await publishRound(request, seeded.reference, 1, { ...ROUND_ONE, mock_bundle: indexKey })
+
+    await page.goto(`/submissions/${seeded.id}/rounds/1/mock`)
+
+    // The `<style>` element being in the DOM proves nothing on its own — a
+    // blocking CSP still leaves it there while refusing to apply it. What
+    // matters is whether the browser actually adopted the sheet.
+    expect(await page.evaluate(() => document.styleSheets.length)).toBeGreaterThan(0)
+    const background = await page.evaluate(() => getComputedStyle(document.body).backgroundColor)
+    expect(background).toBe("rgb(12, 34, 56)")
   })
 
   test("a stranger, a missing round, and a signed-out caller all get the exact same 404 a real bundle would give a non-owner", async ({

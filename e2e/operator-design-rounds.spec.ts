@@ -196,7 +196,7 @@ test.describe("the operator round read (routes/requests.ts, routes/mocks.ts — 
     expect(doc.headers()["content-type"]).toBe("text/html; charset=utf-8")
     expect(doc.headers()["x-content-type-options"]).toBe("nosniff")
     expect(doc.headers()["content-security-policy"]).toBe(
-      "default-src 'self'; script-src 'none'; frame-ancestors 'self'",
+      "default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline'; frame-ancestors 'self'",
     )
     expect(doc.headers()["cache-control"]).toBe("private, no-store")
     const operatorBody = await doc.text()
