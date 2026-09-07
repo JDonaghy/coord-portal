@@ -1,7 +1,7 @@
 import { appendEventStatement, type PayloadSubquery } from "./bridge/events"
 import { getClientRecordByEmail } from "./clients"
 import { generateSubmissionId, generateSubmissionReference } from "./ids"
-import { projectAssignmentForFollowUp } from "./projects"
+import { getProject, projectAssignmentForFollowUp } from "./projects"
 import type { Env } from "./types"
 
 /**
@@ -757,13 +757,19 @@ function truncateTitle(text: string): string {
  *
  * The one derivation every "what do we call this submission" surface shares
  * (issue #319): the customer-facing `titleOf` just below — and therefore
- * every notification body/preheader (`notifications.ts`) and every
- * `/submissions`/`/requests/:id` heading — and the operator's `/requests` list
- * (`routes/requests.ts`'s `listAllRequestRows`), which takes the raw
- * `outcome` column directly because its query never loads a full
+ * every `/submissions`/`/requests/:id` heading — and the operator's
+ * `/requests` list (`routes/requests.ts`'s `listAllRequestRows`), which takes
+ * the raw `outcome` column directly because its query never loads a full
  * `Submission`. Before #319 these were two hand-fixed copies that
  * predictably drifted: #316 fixed the list and left this one — the one that
  * actually reaches the customer — broken.
+ *
+ * Every notification body/preheader (`notifications.ts`'s `emailContent`)
+ * falls back to this only when a submission has no named project — issue
+ * #322 found that a *third* fix was still needed after #316 and #319: this
+ * is submission-only, by construction (it has no way to prefer an
+ * operator-set project name over the customer's own prose), so
+ * `titleForNotification` just below is `emailContent`'s actual entry point.
  */
 export function titleFromOutcome(outcome: string): string {
   const lines = outcome
@@ -785,6 +791,36 @@ export function titleFromOutcome(outcome: string): string {
  */
 export function titleOf(submission: Submission): string {
   return titleFromOutcome(submission.outcome)
+}
+
+/**
+ * The project-aware sibling of `titleOf` — issue #322 ("the customer email
+ * still quotes a fragment of the customer's own prose as the project name").
+ * `titleOf` is submission-only by construction: a `Submission` carries
+ * `projectId`, not the project's own `name`, so a derivation confined to
+ * `titleOf`'s signature can never do better than quote the customer's own
+ * words back to them. `listAllRequestRows` (`routes/requests.ts`, issue
+ * #316) never had this defect because it resolves the project row first and
+ * only falls back to the derived title — `project?.name ??
+ * titleFromOutcome(row.outcome)`. #316 fixed that list, #319 made `titleOf`
+ * share its salutation-skip, and neither ever reached `emailContent`
+ * (`notifications.ts`), the one surface that actually reaches the customer —
+ * this closes that gap the same way `listAllRequestRows` already did, for
+ * the one caller (`emailContent`) that has a live `Env` to look the project
+ * up with.
+ *
+ * `null` `projectId` (no project at all) or a project with no `name` set
+ * (issue #149's default, "not named") both fall through to `titleOf`
+ * unchanged — this only ever *replaces* the derived title when an operator
+ * has actually chosen one, never removes the fallback every earlier fix
+ * already depends on.
+ */
+export async function titleForNotification(env: Env, submission: Submission): Promise<string> {
+  if (submission.projectId) {
+    const project = await getProject(env, submission.projectId)
+    if (project?.name) return project.name
+  }
+  return titleOf(submission)
 }
 
 /** A coord-owned fact together with the revision it was last pushed at. */

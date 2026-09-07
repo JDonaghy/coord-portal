@@ -51,8 +51,17 @@ function submission(overrides: Partial<Submission> = {}): Submission {
   }
 }
 
-/** A fake D1 tracking every `outbox` insert and answering `getCurrentRound`'s query. */
-function fakeDb(options: { round?: Record<string, unknown> | null } = {}) {
+/**
+ * A fake D1 tracking every `outbox` insert and answering `getCurrentRound`'s
+ * query, plus (issue #322) `titleForNotification`'s `getProject` lookup —
+ * `options.project` stands in for whatever row `submissions.project_id`
+ * would resolve to, keyed by nothing more than "is this a `projects`
+ * query": every test below drives at most one project per submission, so
+ * matching on the id isn't needed to keep them apart.
+ */
+function fakeDb(
+  options: { round?: Record<string, unknown> | null; project?: Record<string, unknown> | null } = {},
+) {
   const inserted: unknown[][] = []
   let queries = 0
 
@@ -68,6 +77,7 @@ function fakeDb(options: { round?: Record<string, unknown> | null } = {}) {
             },
             async first() {
               if (sql.includes("FROM design_rounds")) return options.round ?? null
+              if (sql.includes("FROM projects")) return options.project ?? null
               return null
             },
             async all() {
@@ -285,6 +295,69 @@ describe("emailContent", () => {
       expect(content.body, `${type} body`).toContain("Could you convert our intake spreadsheet")
       expect(content.preheader, `${type} preheader`).not.toMatch(/^Hi,?$/i)
     }
+  })
+
+  // ── issue #322: the third fix for one derivation, and the first that ever
+  // reaches the customer ─────────────────────────────────────────────────────
+  //
+  // #316 fixed the operator's `/requests` list; #319 made `titleOf` share
+  // that fix's salutation-skip. Neither ever made the customer-facing email
+  // prefer an operator-set project name the way `listAllRequestRows`
+  // (`routes/requests.ts`) already does — `project?.name ??
+  // titleFromOutcome(row.outcome)`. Reproduced against a real send
+  // (SUB-1BCFC3): a `signoff-ready` body quoted the customer's own opening
+  // sentence back to her, verbatim, inside `a design for "...".`
+
+  it("prefers an operator-set project name over the customer's own prose, in every send type's body and preheader", async () => {
+    const { env } = fakeDb({
+      round: null,
+      project: {
+        id: "proj_000001",
+        customer_email: null,
+        created_at: "2026-01-01T00:00:00Z",
+        client_id: null,
+        name: "format-converter",
+      },
+    })
+    const named = submission({
+      projectId: "proj_000001",
+      outcome:
+        'I\'ve put together a design for "Your name came up when I was asking around about a synthetic small project."',
+    })
+    for (const type of SENDING_TYPES) {
+      const content = await emailContent(env, named, type)
+      expect(content.body, `${type} body`).toContain("format-converter")
+      expect(content.preheader, `${type} preheader`).toContain("format-converter")
+      expect(content.body, `${type} body`).not.toContain("Your name came up")
+      expect(content.body, `${type} body`).not.toContain("asking around")
+    }
+  })
+
+  it("falls back to the derived title when the submission's project has no name set", async () => {
+    const { env } = fakeDb({
+      round: null,
+      project: {
+        id: "proj_000002",
+        customer_email: null,
+        created_at: "2026-01-01T00:00:00Z",
+        client_id: null,
+        name: null,
+      },
+    })
+    const unnamed = submission({
+      projectId: "proj_000002",
+      outcome: "A synthetic outcome for the unnamed-project fallback case.",
+    })
+    const content = await emailContent(env, unnamed, "shipped")
+    expect(content.body).toContain("A synthetic outcome for the unnamed-project fallback case.")
+  })
+
+  it("falls back to the derived title when the submission has no project at all", async () => {
+    const { env, queryCount } = fakeDb({ round: null })
+    const content = await emailContent(env, submission({ projectId: null }), "shipped")
+    expect(content.body).toContain("A printable watering rota for the community greenhouse.")
+    // No `projectId` means no reason to query `projects` at all.
+    expect(queryCount()).toBe(0)
   })
 })
 
