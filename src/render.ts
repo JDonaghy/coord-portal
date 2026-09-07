@@ -897,8 +897,13 @@ const APP_STYLES = `
   .request-row .row-main { display: grid; gap: 0.3rem; min-width: 0; }
   /* Issue #316: the title is the row's way into /requests/:id — an anchor,
      not the inert span it used to be — styled to still read as a title
-     first and a link second, the same "color: inherit, underline on hover"
-     treatment .submission-row above gives its own linked title. */
+     first and a link second: color inherited and no underline until hover,
+     the same "look like the surrounding text" goal .submission-row above
+     serves by making the whole row the anchor (color: inherit;
+     text-decoration: none, :hover only ever changing border-color). The
+     two rows reach that goal differently — this one links just the title
+     text and underlines on hover, .submission-row links the whole row and
+     never underlines — so they read consistently, not identically. */
   .request-row .title { font-weight: 600; color: inherit; text-decoration: none; }
   .request-row .title:hover { text-decoration: underline; }
   .request-row .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
