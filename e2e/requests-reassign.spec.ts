@@ -97,7 +97,7 @@ test("a submission with no lead has no reassignment control anywhere on /leads, 
   await operator.goto("/requests")
   const row = operator.getByTestId("request-row").filter({ hasText: seeded.reference })
   await expect(row).toHaveCount(1)
-  await row.getByTestId("request-reassign-link").click()
+  await row.getByTestId("request-open-link").click()
   await expect(new URL(operator.url()).pathname).toBe(`/requests/${seeded.id}`)
   await expect(operator.getByTestId("request-detail")).toBeVisible()
   await expect(operator.getByTestId("request-detail-reference")).toHaveText(seeded.reference)

@@ -1,6 +1,7 @@
 import { parseFormData } from "../formData"
 import { readOperator, type Operator } from "../operators"
 import { recordOperatorRead } from "../operatorAccess"
+import { getProjectsByIds } from "../projects"
 import { escapeHtml, html, operatorTopbar, page } from "../render"
 import {
   derivedStatus,
@@ -9,6 +10,7 @@ import {
   loadSignoffStates,
   VERDICT_TEXT,
   type DesignRound,
+  type RoundVerdict,
   type SignoffState,
 } from "../rounds"
 import { derivedStartWorkStatus, getStartWork, loadStartWorkStates, type StartWorkRecord } from "../startWork"
@@ -171,6 +173,7 @@ interface SubmissionRow {
   customer_email: string | null
   outcome: string
   created_at: string
+  project_id: string | null
 }
 
 interface RequestRow {
@@ -193,13 +196,25 @@ interface RequestRow {
  */
 async function listAllRequestRows(env: Env): Promise<RequestRow[]> {
   const { results } = await env.DB.prepare(
-    `SELECT id, reference, status, customer_email, outcome, created_at
+    `SELECT id, reference, status, customer_email, outcome, created_at, project_id
        FROM submissions
       ORDER BY created_at DESC`,
   ).all<SubmissionRow>()
   const submissions = results ?? []
 
   const references = submissions.map((row) => row.reference)
+  // Issue #316: the same "an operator-named project wins over the derived
+  // title" rule `routes/dashboard.ts`'s `groupByProject`/`projectTitleFromNewest`
+  // already apply on the customer's own `/submissions` — one batched
+  // `getProjectsByIds` for every distinct project id on this page, not one
+  // `getProject` per row, same reasoning as `loadSignoffStates` below. Not
+  // `projectTitleFromNewest` itself: that helper wants a full `Submission` to
+  // fall back to `titleOf` on, and this route's own query (like
+  // `titleFromOutcome`'s doc comment below explains) selects only the columns
+  // it needs off the unscoped table — so the fallback is this file's own
+  // `titleFromOutcome` instead.
+  const projectIds = [...new Set(submissions.map((row) => row.project_id).filter((id): id is string => !!id))]
+  const projects = await getProjectsByIds(env, projectIds)
   // The newest design round + verdict for every submission that has one —
   // unfiltered by status, unlike `loadSignoffStates`'s only other caller
   // (`routes/dashboard.ts`, which asks only for `awaiting-signoff` rows to
@@ -218,10 +233,11 @@ async function listAllRequestRows(env: Env): Promise<RequestRow[]> {
     const status = isSubmissionStatus(row.status) ? row.status : "describing"
     const state = roundStates.get(row.reference) ?? null
     const display = deriveDisplayStatus(status, state, startWorkStates.get(row.reference) ?? null)
+    const project = row.project_id ? projects.get(row.project_id) : undefined
     return {
       id: row.id,
       reference: row.reference,
-      title: titleFromOutcome(row.outcome),
+      title: project?.name ?? titleFromOutcome(row.outcome),
       customerEmail: row.customer_email,
       createdAt: row.created_at,
       display,
@@ -247,16 +263,51 @@ function deriveDisplayStatus(
 }
 
 /**
- * The same derivation `titleOf` (`src/submissions.ts`) applies to a full
- * `Submission` — the intake form collects an outcome, not a title, so the
- * first line of it stands in for one — spelled out again here rather than
- * imported: this route's own query (above) selects only the columns it
- * needs off the unscoped table, not a full `Submission`, so there is no
- * value to pass `titleOf` without first faking the rest of that interface.
+ * A greeting-only opening line — `"Hi,"`, `"Hello,"`, `"Hi there,"`,
+ * `"Dear Sam,"` — and nothing else. Every email-intake submission's
+ * `outcome` is the customer's raw message, so its first line is the
+ * salutation, not content (issue #316: a real submission rendered on
+ * `/requests` titled exactly `"Hi,"`). Short (a real sentence runs well past
+ * this), free of any sentence-ending punctuation (a greeting is not a
+ * sentence), and led by a conventional salutation word — enough to catch the
+ * shape without a maintained list of exact strings a customer might open an
+ * email with.
  */
-function titleFromOutcome(outcome: string): string {
-  const firstLine = outcome.split("\n")[0]?.trim() || outcome
-  return firstLine.length > 80 ? `${firstLine.slice(0, 79)}…` : firstLine
+const SALUTATION_RE = /^(hi|hello|hey|dear|greetings|good\s+(morning|afternoon|evening))\b/i
+
+function isSalutationLine(line: string): boolean {
+  return line.length <= 40 && !/[.!?]/.test(line) && SALUTATION_RE.test(line)
+}
+
+function truncateTitle(text: string): string {
+  return text.length > 80 ? `${text.slice(0, 79)}…` : text
+}
+
+/**
+ * The same derivation `titleOf` (`src/submissions.ts`) applies to a full
+ * `Submission` — the intake form collects an outcome, not a title, so a line
+ * of it stands in for one — spelled out again here rather than imported:
+ * this route's own query (above) selects only the columns it needs off the
+ * unscoped table, not a full `Submission`, so there is no value to pass
+ * `titleOf` without first faking the rest of that interface.
+ *
+ * Unlike `titleOf`, this skips a leading salutation line (issue #316: "a
+ * greeting alone is never a title") and uses the first line of actual
+ * content instead. If every line reads as a greeting — or `outcome` is one
+ * line with nothing else on it — this falls back to a longer excerpt of the
+ * whole text rather than rendering just the greeting.
+ */
+export function titleFromOutcome(outcome: string): string {
+  const lines = outcome
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+
+  const content = lines.find((line) => !isSalutationLine(line))
+  if (content) return truncateTitle(content)
+
+  const collapsed = outcome.replace(/\s+/g, " ").trim()
+  return truncateTitle(collapsed || outcome)
 }
 
 function requestsPage(operator: Operator, rows: RequestRow[]): string {
@@ -282,10 +333,11 @@ function emptyRequests(): string {
 }
 
 function requestRow(row: RequestRow): string {
+  const href = `/requests/${encodeURIComponent(row.id)}`
   return `    <li>
       <div class="request-row" data-testid="request-row" data-status="${escapeHtml(row.display)}">
         <div class="row-main">
-          <span class="title" data-testid="request-title">${escapeHtml(row.title)}</span>
+          <a class="title" href="${href}" data-testid="request-title">${escapeHtml(row.title)}</a>
           <span class="meta">
             <span data-testid="request-customer">${escapeHtml(row.customerEmail ?? "no email on file")}</span>
             &middot; <span data-testid="request-reference">${escapeHtml(row.reference)}</span>
@@ -294,10 +346,29 @@ function requestRow(row: RequestRow): string {
         </div>
         <div class="row-side">
           <span class="status-pill" data-testid="status-pill" data-status="${escapeHtml(row.display)}">${escapeHtml(statusText(row.display))}</span>${roundBadge(row.round)}
-          <a class="button secondary" href="/requests/${encodeURIComponent(row.id)}" data-testid="request-reassign-link">Reassign</a>
+          <a class="button secondary" href="${href}" data-testid="request-open-link">Open</a>
         </div>
       </div>
     </li>`
+}
+
+/**
+ * `VERDICT_TEXT` (`src/rounds.ts`) is documented there as "the
+ * customer-visible text" — `pending` reads `"Awaiting your sign-off"`,
+ * correct on the customer's own screens (`routes/submission.ts`) where "your"
+ * means the customer reading it. Every screen in this file is an operator's,
+ * reading about a round awaiting the *customer's* sign-off, not their own —
+ * issue #316. Not a change to `VERDICT_TEXT` itself (still shared, still
+ * right for the customer view); just the second, operator-facing wording at
+ * the two call sites here that used to render it verbatim (`roundBadge`
+ * below and `operatorRoundEntry`'s `verdict-pill`). `approved` and
+ * `changes-requested` need no second wording — neither says "you" or "your"
+ * either way — so they pass `VERDICT_TEXT` through unchanged.
+ */
+const OPERATOR_VERDICT_TEXT: Record<RoundVerdict, string> = {
+  pending: "Awaiting customer sign-off",
+  approved: VERDICT_TEXT.approved,
+  "changes-requested": VERDICT_TEXT["changes-requested"],
 }
 
 /**
@@ -308,7 +379,7 @@ function requestRow(row: RequestRow): string {
 function roundBadge(round: SignoffState | null): string {
   if (!round) return ""
   return `
-          <span class="round-pill" data-testid="request-round" data-verdict="${escapeHtml(round.verdict)}">Round ${round.round} &middot; ${escapeHtml(VERDICT_TEXT[round.verdict])}</span>`
+          <span class="round-pill" data-testid="request-round" data-verdict="${escapeHtml(round.verdict)}">Round ${round.round} &middot; ${escapeHtml(OPERATOR_VERDICT_TEXT[round.verdict])}</span>`
 }
 
 /**
@@ -321,11 +392,13 @@ function roundBadge(round: SignoffState | null): string {
  *
  * Exists for exactly one reason today — hosting the reassignment panel for a
  * submission `/leads/:id` cannot reach (see this file's module comment) — so
- * it renders just enough to orient an operator who followed the "Reassign"
- * link off the list (`requestRow` above): what it is, whose it is, and the
- * panel itself. It is not a second `/submissions/:id`; there is no message
- * thread, round history or preview link here, and none should be added
- * without its own issue — this route's contract is the reassignment panel,
+ * it renders just enough to orient an operator who followed the title or
+ * "Open" link off the list (`requestRow` above, issue #316: neither is
+ * labelled "Reassign" any more — that named the one action available once
+ * you arrive, not what clicking through actually does): what it is, whose it
+ * is, and the panel itself. It is not a second `/submissions/:id`; there is
+ * no message thread, round history or preview link here, and none should be
+ * added without its own issue — this route's contract is the reassignment panel,
  * not a general operator submission detail screen.
  */
 export async function requestDetail(request: Request, env: Env, id: string): Promise<Response> {
@@ -582,7 +655,7 @@ ${items}
   return `    <section class="round-entry" data-testid="round-entry" data-round="${round.round}" data-verdict="${escapeHtml(round.verdict)}">
       <div class="round-entry-head">
         <span class="round-badge">Round ${round.round}</span>
-        <span class="verdict-pill" data-testid="verdict-pill" data-verdict="${escapeHtml(round.verdict)}">${escapeHtml(VERDICT_TEXT[round.verdict])}</span>
+        <span class="verdict-pill" data-testid="verdict-pill" data-verdict="${escapeHtml(round.verdict)}">${escapeHtml(OPERATOR_VERDICT_TEXT[round.verdict])}</span>
         <span class="round-date">opened ${escapeHtml(round.openedAt)}</span>
       </div>
       <p class="outcome-definition">${escapeHtml(round.outcomeDefinition)}</p>

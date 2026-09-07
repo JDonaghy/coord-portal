@@ -103,6 +103,8 @@ interface RequestRow {
   reference: string
   pillText: string
   round: string | null
+  title: string
+  titleHref: string | null
 }
 
 /** The one `request-row` on `/requests` whose `request-reference` is `reference`. */
@@ -112,12 +114,15 @@ async function readRequestRow(operator: Page, reference: string): Promise<Reques
   await expect(row, `exactly one request-row for ${reference}`).toHaveCount(1)
 
   const round = row.getByTestId("request-round")
+  const title = row.getByTestId("request-title")
   return {
     status: await row.getAttribute("data-status"),
     customer: flat(await row.getByTestId("request-customer").innerText()),
     reference: flat(await row.getByTestId("request-reference").innerText()),
     pillText: flat(await row.getByTestId("status-pill").innerText()),
     round: (await round.count()) > 0 ? flat(await round.innerText()) : null,
+    title: flat(await title.innerText()),
+    titleHref: await title.getAttribute("href"),
   }
 }
 
@@ -161,13 +166,26 @@ test("the operator's /requests lists every customer's submissions on one screen 
   expect(aliceRow.status).toBe("describing")
   expect(aliceRow.customer).toBe(aliceEmail)
   expect(aliceRow.round, "a submission with no design round shows no round badge").toBeNull()
+  // Issue #316: the title names the request (here, the plain synthetic
+  // outcome `seedSubmission` filed — no greeting to skip), and it is itself
+  // the link into the detail screen, not an inert span.
+  expect(aliceRow.title).toBe("A synthetic outcome for e2e requests coverage (alice).")
+  expect(aliceRow.titleHref, "the title links into /requests/:id").toMatch(/^\/requests\/[^/]+$/)
 
   const bobRow = await readRequestRow(operator, bob.reference)
   expect(bobRow.status).toBe("awaiting-signoff")
+  // `status-pill` is `statusText` (`src/submissions.ts`), the same
+  // customer-facing status pill the customer's own screens show — unchanged
+  // by issue #316, which only touches the round pill below.
   expect(bobRow.pillText).toBe("Awaiting your sign-off")
   expect(bobRow.customer).toBe(bobEmail)
   expect(bobRow.round).toContain("Round 1")
-  expect(bobRow.round).toContain("Awaiting your sign-off")
+  // Issue #316: the round pill is operator-facing wording, not the
+  // customer-visible `VERDICT_TEXT["pending"]` ("Awaiting your sign-off")
+  // this same screen used to render verbatim — this operator is not the one
+  // being asked to sign off.
+  expect(bobRow.round).toContain("Awaiting customer sign-off")
+  expect(bobRow.round).not.toContain("Awaiting your sign-off")
 
   // /submissions is unchanged: each customer still sees only their own
   // reference, never the other's.
@@ -180,6 +198,59 @@ test("the operator's /requests lists every customer's submissions on one screen 
   await expect(bobPage.getByText(alice.reference)).toHaveCount(0)
 
   await Promise.all([aliceContext.close(), bobContext.close(), operatorContext.close()])
+})
+
+/**
+ * Issue #316. An email-intake submission's `outcome` is the customer's raw
+ * message, so its first line is a salutation — before this fix, `/requests`
+ * titled the row with exactly that greeting, and the only clickable thing on
+ * the row was a button labelled "Reassign". This pins the two fixes
+ * together, the way the issue itself asks for: "an operator can find a known
+ * submission by its title and open it from the list".
+ */
+test("an email-intake greeting does not become the row's title, and the title is what opens the request", async ({
+  browser,
+  baseURL,
+}) => {
+  const email = uniqueEmail("e2e-requests-greeting")
+  const context = await contextFor(browser, baseURL, email)
+  const page = await context.newPage()
+
+  await page.setExtraHTTPHeaders({ "Cf-Access-Authenticated-User-Email": email })
+  await page.goto("/intake")
+  await page
+    .getByTestId("field-outcome")
+    .fill(
+      "Hi,\nYour name came up when I was asking around about getting a synthetic project built for e2e coverage.",
+    )
+  await page.getByTestId("field-audience").fill("synthetic e2e readers")
+  await page.getByTestId("field-done-definition").fill("The requests e2e suite goes green.")
+  await page.getByTestId("submit-intake").click()
+  await expect(page.getByTestId("intake-receipt")).toBeVisible()
+  const reference = (await page.getByTestId("submission-reference").innerText())
+    .trim()
+    .replace(/^Reference\s+/, "")
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+
+  const row = await readRequestRow(operator, reference)
+  expect(row.title).not.toBe("Hi,")
+  expect(row.title).toBe(
+    "Your name came up when I was asking around about getting a synthetic project built for e2e coverage.",
+  )
+
+  // The title itself is the way in — not a button named after an unrelated
+  // action available once you arrive.
+  const titleLink = operator
+    .getByTestId("request-row")
+    .filter({ hasText: reference })
+    .getByTestId("request-title")
+  await titleLink.click()
+  await expect(operator.getByTestId("request-detail")).toBeVisible()
+  await expect(operator.getByTestId("request-detail-reference")).toHaveText(reference)
+
+  await Promise.all([context.close(), operatorContext.close()])
 })
 
 test("the requests surface is a 404 to anyone who is not the operator, the same shape as a route that does not exist", async ({

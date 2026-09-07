@@ -895,7 +895,12 @@ const APP_STYLES = `
     padding: 1rem 1.25rem;
   }
   .request-row .row-main { display: grid; gap: 0.3rem; min-width: 0; }
-  .request-row .title { font-weight: 600; }
+  /* Issue #316: the title is the row's way into /requests/:id — an anchor,
+     not the inert span it used to be — styled to still read as a title
+     first and a link second, the same "color: inherit, underline on hover"
+     treatment .submission-row above gives its own linked title. */
+  .request-row .title { font-weight: 600; color: inherit; text-decoration: none; }
+  .request-row .title:hover { text-decoration: underline; }
   .request-row .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
   .request-row .row-side { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; flex-shrink: 0; }
   .round-pill {
