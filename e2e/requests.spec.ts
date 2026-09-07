@@ -513,3 +513,206 @@ test("/requests holds up once the portal has more submissions than D1 will bind 
 
   await Promise.all([context.close(), operatorContext.close()])
 })
+
+/* ─────────────────── issue #323: client/project filtering ──────────────── */
+
+/**
+ * Every `request-reference` currently rendered on `/requests` — for
+ * asserting on the *set* of visible rows a filter narrows to, complementing
+ * `readRequestRow`'s own "exactly one row" check above.
+ */
+async function visibleReferences(operator: Page): Promise<string[]> {
+  const rows = operator.getByTestId("request-row")
+  const count = await rows.count()
+  const refs: string[] = []
+  for (let i = 0; i < count; i += 1) {
+    refs.push(flat(await rows.nth(i).getByTestId("request-reference").innerText()))
+  }
+  return refs
+}
+
+/** Promotes a lead into a submission and names its project — `seedPromotedLead`
+ * plus the rename step `an operator-named project's name is the row title…`
+ * above already exercises, factored out so the filter tests below can seed
+ * two distinctly-labelled projects without repeating it inline. */
+async function seedNamedProject(
+  browser: Browser,
+  baseURL: string | undefined,
+  operator: Page,
+  summary: string,
+  email: string,
+  projectName: string,
+): Promise<{ reference: string }> {
+  const seeded = await seedPromotedLead(browser, baseURL, operator, summary, email)
+  await expect(operator.getByTestId("rename-project-card")).toBeVisible()
+  await operator.getByTestId("rename-project-input").fill(projectName)
+  await operator.getByTestId("rename-project-submit").click()
+  await expect(operator.getByTestId("rename-project-input")).toHaveValue(projectName)
+  return seeded
+}
+
+test("the client filter narrows /requests to one customer, and the project filter hides itself until there is more than one project on offer", async ({
+  browser,
+  baseURL,
+}) => {
+  const tag = Math.random().toString(36).slice(2, 10)
+  const aliceEmail = uniqueEmail("e2e-requests-filter-alice")
+  const bobEmail = uniqueEmail("e2e-requests-filter-bob")
+  const carolEmail = uniqueEmail("e2e-requests-filter-carol")
+  const alphaProject = `Alpha Engagement (${tag})`
+  const betaProject = `Beta Engagement (${tag})`
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+
+  // Two clients each with exactly one named project (#129 mints one at
+  // promotion time), and a third client with a plain /intake submission that
+  // never carries a project at all — issue #323's "a row with no project
+  // still shows under All projects" case.
+  const alice = await seedNamedProject(
+    browser,
+    baseURL,
+    operator,
+    `A synthetic filter-check summary, alice (${tag}).`,
+    aliceEmail,
+    alphaProject,
+  )
+  const bob = await seedNamedProject(
+    browser,
+    baseURL,
+    operator,
+    `A synthetic filter-check summary, bob (${tag}).`,
+    bobEmail,
+    betaProject,
+  )
+  const carolContext = await contextFor(browser, baseURL, carolEmail)
+  const carolPage = await carolContext.newPage()
+  const carol = await seedSubmission(carolPage, carolEmail, `filter-carol-${tag}`)
+
+  // Default load: every client and both projects are on offer, and every
+  // row is visible — "All clients"/"All projects" is exactly today's
+  // unfiltered behaviour. `/requests` is unscoped by construction (issue
+  // #104) and `serve:test` does not wipe state between runs, so — unlike
+  // the sealed acceptance suite's own single-worker, wiped-per-run
+  // guarantee (CLAUDE.md's "Determinism") — this file's own other specs,
+  // and this project's own `fullyParallel` siblings, can be seeding
+  // unrelated rows into the very same list at the very same time. Every
+  // check below asserts presence of what this test itself seeded, never an
+  // exhaustive "and nothing else" — the same reason every other test in
+  // this file scopes a locator with `.filter({ hasText: reference })`
+  // rather than asserting on `requests-list`'s full contents.
+  await operator.goto("/requests")
+  await expect(operator.getByTestId("requests-filter-form")).toBeVisible()
+  const clientSelect = operator.getByTestId("requests-filter-client")
+  for (const email of [aliceEmail, bobEmail, carolEmail]) {
+    await expect(clientSelect.getByRole("option", { name: email, exact: true })).toHaveCount(1)
+  }
+  const projectSelect = operator.getByTestId("requests-filter-project")
+  await expect(projectSelect).toBeVisible()
+  for (const label of [alphaProject, betaProject]) {
+    await expect(projectSelect.getByRole("option", { name: label, exact: true })).toHaveCount(1)
+  }
+  const defaultRefs = await visibleReferences(operator)
+  expect(defaultRefs).toEqual(expect.arrayContaining([alice.reference, bob.reference, carol.reference]))
+
+  // Selecting alice narrows the list to her own row only, and — since she
+  // now has exactly one project on offer — the project select disappears
+  // entirely rather than rendering as a single, inert option.
+  await clientSelect.selectOption(aliceEmail)
+  await operator.getByTestId("requests-filter-submit").click()
+  expect(new URL(operator.url()).searchParams.get("client")).toBe(aliceEmail)
+  expect(await visibleReferences(operator)).toEqual([alice.reference])
+  await expect(operator.getByTestId("requests-filter-project")).toHaveCount(0)
+  await expect(operator.getByTestId("requests-filter-client")).toHaveValue(aliceEmail)
+
+  // The selection survives a reload — the query string is the state.
+  await operator.reload()
+  expect(await visibleReferences(operator)).toEqual([alice.reference])
+  await expect(operator.getByTestId("requests-filter-client")).toHaveValue(aliceEmail)
+
+  // Carol has no project at all — her own scope also hides the project
+  // select (zero options, not one).
+  await operator.goto(`/requests?client=${encodeURIComponent(carolEmail)}`)
+  expect(await visibleReferences(operator)).toEqual([carol.reference])
+  await expect(operator.getByTestId("requests-filter-project")).toHaveCount(0)
+
+  await Promise.all([operatorContext.close(), carolContext.close()])
+})
+
+test("the project filter narrows across every client, and picking a client resets a project selection that no longer belongs to it", async ({
+  browser,
+  baseURL,
+}) => {
+  const tag = Math.random().toString(36).slice(2, 10)
+  const aliceEmail = uniqueEmail("e2e-requests-filter-reset-alice")
+  const bobEmail = uniqueEmail("e2e-requests-filter-reset-bob")
+  const alphaProject = `Alpha Reset Engagement (${tag})`
+  const betaProject = `Beta Reset Engagement (${tag})`
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+
+  const alice = await seedNamedProject(
+    browser,
+    baseURL,
+    operator,
+    `A synthetic reset-check summary, alice (${tag}).`,
+    aliceEmail,
+    alphaProject,
+  )
+  const bob = await seedNamedProject(
+    browser,
+    baseURL,
+    operator,
+    `A synthetic reset-check summary, bob (${tag}).`,
+    bobEmail,
+    betaProject,
+  )
+
+  // Picking Beta alone (client still "All clients") narrows to bob's row —
+  // the project filter's own reach, independent of the client filter.
+  await operator.goto("/requests")
+  await operator.getByTestId("requests-filter-project").selectOption({ label: betaProject })
+  await operator.getByTestId("requests-filter-submit").click()
+  expect(await visibleReferences(operator)).toEqual([bob.reference])
+
+  // Now, without reloading in between, also switch the client to alice and
+  // submit once — the single <form> resubmits both selects together, so the
+  // request this sends is exactly the "now-impossible pair" issue #323 calls
+  // out: ?client=alice&project=<beta's id>, and Beta is not alice's project.
+  await operator.getByTestId("requests-filter-client").selectOption(aliceEmail)
+  await operator.getByTestId("requests-filter-submit").click()
+
+  // The impossible pair does not survive: alice's own row renders (not an
+  // empty result), and since her own scope now has exactly one project, the
+  // project select is gone rather than stuck showing "Beta …".
+  expect(await visibleReferences(operator)).toEqual([alice.reference])
+  await expect(operator.getByTestId("requests-filter-project")).toHaveCount(0)
+  await expect(operator.getByTestId("requests-filter-client")).toHaveValue(aliceEmail)
+
+  await operatorContext.close()
+})
+
+test("an empty filtered result names the client filter that produced it, instead of a bare empty list", async ({
+  browser,
+  baseURL,
+}) => {
+  const email = uniqueEmail("e2e-requests-filter-empty")
+  const strangerEmail = uniqueEmail("e2e-requests-filter-nomatch")
+
+  const context = await contextFor(browser, baseURL, email)
+  const page = await context.newPage()
+  await seedSubmission(page, email, "filter-empty-anchor")
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+
+  // strangerEmail has never submitted anything — there is at least one real
+  // submission in the portal (the anchor above), so the filter bar renders,
+  // but this particular client matches none of it.
+  await operator.goto(`/requests?client=${encodeURIComponent(strangerEmail)}`)
+  await expect(operator.getByTestId("requests-list")).toHaveCount(0)
+  await expect(operator.getByTestId("requests-list-empty")).toHaveText(`No requests for ${strangerEmail}.`)
+
+  await Promise.all([context.close(), operatorContext.close()])
+})
