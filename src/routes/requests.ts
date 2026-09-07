@@ -28,6 +28,7 @@ import {
   getSubmission,
   isSubmissionStatus,
   statusText,
+  titleFromOutcome,
   titleOf,
   type Submission,
   type SubmissionStatus,
@@ -260,9 +261,10 @@ async function listAllRequestRows(env: Env): Promise<RequestRow[]> {
   // `getProject` per row, same reasoning as `loadSignoffStates` below. Not
   // `projectTitleFromNewest` itself: that helper wants a full `Submission` to
   // fall back to `titleOf` on, and this route's own query (like
-  // `titleFromOutcome`'s doc comment below explains) selects only the columns
-  // it needs off the unscoped table — so the fallback is this file's own
-  // `titleFromOutcome` instead.
+  // `titleFromOutcome`'s doc comment in `../submissions` explains) selects
+  // only the columns it needs off the unscoped table — so the fallback is
+  // `titleFromOutcome` instead, re-exported below (issue #319) from the same
+  // module `titleOf` now shares it with.
   const projectIds = [...new Set(submissions.map((row) => row.project_id).filter((id): id is string => !!id))]
   const projects = await getProjectsByIds(env, projectIds)
   // The newest design round + verdict for every submission that has one —
@@ -313,52 +315,17 @@ function deriveDisplayStatus(
 }
 
 /**
- * A greeting-only opening line — `"Hi,"`, `"Hello,"`, `"Hi there,"`,
- * `"Dear Sam,"` — and nothing else. Every email-intake submission's
- * `outcome` is the customer's raw message, so its first line is the
- * salutation, not content (issue #316: a real submission rendered on
- * `/requests` titled exactly `"Hi,"`). Short (a real sentence runs well past
- * this), free of any sentence-ending punctuation (a greeting is not a
- * sentence), and led by a conventional salutation word — enough to catch the
- * shape without a maintained list of exact strings a customer might open an
- * email with.
+ * Issue #319: `titleFromOutcome` now lives in `../submissions`, next to
+ * `titleOf`, which is just `titleFromOutcome(submission.outcome)` — the two
+ * used to be separate, hand-fixed copies (this route's took the outcome
+ * string this route's own query already had off the unscoped table; #316
+ * fixed the salutation-skipping here and left `titleOf`'s first-line-only
+ * version, the one that reaches the customer's own notifications, broken).
+ * Re-exported under its original name so nothing importing it from this
+ * module — `listAllRequestRows` below and `test/requests.test.ts` — has to
+ * change.
  */
-const SALUTATION_RE = /^(hi|hello|hey|dear|greetings|good\s+(morning|afternoon|evening))\b/i
-
-function isSalutationLine(line: string): boolean {
-  return line.length <= 40 && !/[.!?]/.test(line) && SALUTATION_RE.test(line)
-}
-
-function truncateTitle(text: string): string {
-  return text.length > 80 ? `${text.slice(0, 79)}…` : text
-}
-
-/**
- * The same derivation `titleOf` (`src/submissions.ts`) applies to a full
- * `Submission` — the intake form collects an outcome, not a title, so a line
- * of it stands in for one — spelled out again here rather than imported:
- * this route's own query (above) selects only the columns it needs off the
- * unscoped table, not a full `Submission`, so there is no value to pass
- * `titleOf` without first faking the rest of that interface.
- *
- * Unlike `titleOf`, this skips a leading salutation line (issue #316: "a
- * greeting alone is never a title") and uses the first line of actual
- * content instead. If every line reads as a greeting — or `outcome` is one
- * line with nothing else on it — this falls back to a longer excerpt of the
- * whole text rather than rendering just the greeting.
- */
-export function titleFromOutcome(outcome: string): string {
-  const lines = outcome
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-
-  const content = lines.find((line) => !isSalutationLine(line))
-  if (content) return truncateTitle(content)
-
-  const collapsed = outcome.replace(/\s+/g, " ").trim()
-  return truncateTitle(collapsed || outcome)
-}
+export { titleFromOutcome }
 
 function requestsPage(operator: Operator, rows: RequestRow[]): string {
   return `${operatorTopbar(operator.email, "requests")}

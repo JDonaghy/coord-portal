@@ -268,10 +268,10 @@ test("an email-intake greeting does not become the row's title, and the title is
   const page = await context.newPage()
 
   // The second line is deliberately kept to 79 characters — at or under
-  // `truncateTitle`'s 80-character threshold (`src/routes/requests.ts`) — so
-  // this test asserts the salutation-skip behaviour on its own, untangled
-  // from truncation, which `test/requests.test.ts` already covers on its
-  // own.
+  // `truncateTitle`'s 80-character threshold (`src/submissions.ts`, issue
+  // #319's shared `titleFromOutcome`) — so this test asserts the
+  // salutation-skip behaviour on its own, untangled from truncation, which
+  // `test/requests.test.ts` already covers on its own.
   const { reference } = await seedSubmission(
     page,
     email,
@@ -295,6 +295,21 @@ test("an email-intake greeting does not become the row's title, and the title is
   await titleLink.click()
   await expect(operator.getByTestId("request-detail")).toBeVisible()
   await expect(operator.getByTestId("request-detail-reference")).toHaveText(reference)
+
+  // Issue #319: the detail heading comes from `titleOf`, not
+  // `titleFromOutcome` — #316 only fixed the list above. Before #319 this
+  // heading, and the round-history back-link built from the same `titleOf`
+  // call, still read exactly "Hi,".
+  await expect(operator.getByTestId("request-detail-title")).not.toHaveText("Hi,")
+  await expect(operator.getByTestId("request-detail-title")).toHaveText(
+    "Your name came up when I was asking about a synthetic project for e2e coverage.",
+  )
+
+  await operator.getByTestId("request-rounds-link").click()
+  await expect(operator.getByTestId("back-to-request")).not.toHaveText("← Hi,")
+  await expect(operator.getByTestId("back-to-request")).toHaveText(
+    "← Your name came up when I was asking about a synthetic project for e2e coverage.",
+  )
 
   await Promise.all([context.close(), operatorContext.close()])
 })
