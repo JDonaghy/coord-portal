@@ -724,17 +724,67 @@ export async function getSubmissionByReference(
 }
 
 /**
+ * A greeting-only opening line — `"Hi,"`, `"Hello,"`, `"Hi there,"`, `"Dear
+ * Sam,"` — and nothing else. Every email-intake submission's `outcome` is the
+ * customer's raw message, so its first line is often the salutation, not
+ * content (issue #316: a real submission rendered on `/requests` titled
+ * exactly `"Hi,"`; issue #319: `titleOf` below shipped that same bug straight
+ * to the customer, in every notification body, because it had its own,
+ * unfixed, first-line-only derivation). Short (a real sentence runs well past
+ * this), free of any sentence-ending punctuation (a greeting is not a
+ * sentence), and led by a conventional salutation word — enough to catch the
+ * shape without a maintained list of exact strings a customer might open an
+ * email with.
+ */
+const SALUTATION_RE = /^(hi|hello|hey|dear|greetings|good\s+(morning|afternoon|evening))\b/i
+
+function isSalutationLine(line: string): boolean {
+  return line.length <= 40 && !/[.!?]/.test(line) && SALUTATION_RE.test(line)
+}
+
+function truncateTitle(text: string): string {
+  return text.length > 80 ? `${text.slice(0, 79)}…` : text
+}
+
+/**
  * The intake form collects an outcome, not a title (contract note 3: no
- * portal-internal field schema is pinned). The first line of the outcome text
- * is close enough to a title for a list row or a detail heading, truncated so
- * one very long paragraph cannot blow out the layout.
+ * portal-internal field schema is pinned). A line of the outcome text stands
+ * in for one, skipping a leading salutation line (issue #316: "a greeting
+ * alone is never a title") in favor of the first line of actual content. If
+ * every line reads as a greeting — or `outcome` is one line with nothing else
+ * on it — this falls back to a longer excerpt of the whole text rather than
+ * rendering just the greeting.
  *
+ * The one derivation every "what do we call this submission" surface shares
+ * (issue #319): the customer-facing `titleOf` just below — and therefore
+ * every notification body/preheader (`notifications.ts`) and every
+ * `/submissions`/`/requests/:id` heading — and the operator's `/requests` list
+ * (`routes/requests.ts`'s `listAllRequestRows`), which takes the raw
+ * `outcome` column directly because its query never loads a full
+ * `Submission`. Before #319 these were two hand-fixed copies that
+ * predictably drifted: #316 fixed the list and left this one — the one that
+ * actually reaches the customer — broken.
+ */
+export function titleFromOutcome(outcome: string): string {
+  const lines = outcome
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+
+  const content = lines.find((line) => !isSalutationLine(line))
+  if (content) return truncateTitle(content)
+
+  const collapsed = outcome.replace(/\s+/g, " ").trim()
+  return truncateTitle(collapsed || outcome)
+}
+
+/**
  * Shared by the dashboard rows and the submission detail screens so the same
- * submission reads with the same title everywhere.
+ * submission reads with the same title everywhere — see `titleFromOutcome`
+ * just above for the derivation itself.
  */
 export function titleOf(submission: Submission): string {
-  const firstLine = submission.outcome.split("\n")[0]?.trim() || submission.outcome
-  return firstLine.length > 80 ? `${firstLine.slice(0, 79)}…` : firstLine
+  return titleFromOutcome(submission.outcome)
 }
 
 /** A coord-owned fact together with the revision it was last pushed at. */

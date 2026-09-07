@@ -263,6 +263,29 @@ describe("emailContent", () => {
     expect(content.ctaText).toBe("Review the design")
     expect(content.ctaHref).toBe("/submissions/sub_000001")
   })
+
+  // ── issue #319: titleOf shipped the same bug #316 fixed on /requests ──────
+  //
+  // An email-intake submission's `outcome` is the customer's raw message, so
+  // its first line is often a bare salutation. #316 fixed the operator's
+  // `/requests` list to skip it; `titleOf` — the derivation every customer
+  // notification actually uses — kept its own, unfixed, first-line-only
+  // version, so a real send read "I've put together a design for 'Hi,.'"
+  // (SUB-1BCFC3). `titleOf` and `titleFromOutcome` now share one derivation
+  // in `src/submissions.ts`, so this covers every `SENDING_TYPES` body and
+  // preheader, not just `signoff-ready`.
+  it("never titles a design after the customer's salutation, in body or preheader", async () => {
+    const { env } = fakeDb({ round: null })
+    const greeted = submission({
+      outcome: "Hi,\nCould you convert our intake spreadsheet into a proper web form?",
+    })
+    for (const type of SENDING_TYPES) {
+      const content = await emailContent(env, greeted, type)
+      expect(content.body, `${type} body`).not.toMatch(/"Hi,?\.?"/i)
+      expect(content.body, `${type} body`).toContain("Could you convert our intake spreadsheet")
+      expect(content.preheader, `${type} preheader`).not.toMatch(/^Hi,?$/i)
+    }
+  })
 })
 
 describe("recordNotificationForStatus", () => {
