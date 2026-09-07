@@ -42,6 +42,20 @@ import type { Env } from "../types"
  * is how either reaches the daemon afterward, so a submission already on the
  * wire converges on the truth instead of staying pinned to whatever
  * `project_id` (often absent) it carried at creation.
+ *
+ * A third exception, `outbound_draft.approved` / `outbound_draft.rejected`
+ * (#318): an operator's verdict on a coord-owned draft coord itself queued in
+ * its own `portal_outbox` and mirrored here read-only via
+ * `POST /api/bridge/outbound-drafts` (`src/coordOutboundDrafts.ts`). This
+ * looks like it could re-trigger the same echo the module comment above warns
+ * against, but it cannot: the fact these events announce — "an operator
+ * decided X about draft Y" — is never itself pushed back to this portal by
+ * coord. Coord's own reaction is to stop asserting that draft id on its next
+ * `outbound-drafts` push and, for an approval, actually send the message —
+ * neither of which produces a *new* event here for coord to pull again. The
+ * loop the comment above worries about needs the daemon's own write to
+ * reappear as an event; this is the operator's write, about a row coord
+ * itself is not the sole writer of once a human has looked at it.
  */
 export const BRIDGE_EVENT_TYPES = [
   "submission.created",
@@ -51,6 +65,8 @@ export const BRIDGE_EVENT_TYPES = [
   "question.answered",
   "preview.approved",
   "preview.changes_requested",
+  "outbound_draft.approved",
+  "outbound_draft.rejected",
 ] as const
 
 export type BridgeEventType = (typeof BRIDGE_EVENT_TYPES)[number]
