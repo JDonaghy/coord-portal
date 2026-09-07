@@ -176,6 +176,44 @@ describe("emailContent", () => {
     expect(queryCount()).toBe(0)
   })
 
+  // ── issue #327: reword `shipped` and drop its signature ────────────────────
+  //
+  // The old body quoted the project name back at the customer (`"<title>" is
+  // live.`), which read like a machine filling a slot, and closed with
+  // `SIGNATURE` — a first-person sign-off for what is a business closing out
+  // paid work. Unlike #105 above, this is a `shipped`-only change: the other
+  // three sending types keep their exact #105 copy and signature.
+  describe("shipped: reworded body, no signature (issue #327)", () => {
+    it("reads exactly the new copy, with the title unquoted", async () => {
+      const { env } = fakeDb({ round: null })
+      const content = await emailContent(env, submission({ outcome: "Natal Chart" }), "shipped")
+      expect(content.body).toBe(
+        "The Natal Chart work you requested is complete. Thank you for doing business with us! " +
+          "We look forward to working with you again.",
+      )
+    })
+
+    it("does not close with the first-person signature", async () => {
+      const { env } = fakeDb({ round: null })
+      const content = await emailContent(env, submission(), "shipped")
+      expect(content.body).not.toContain("— John, Heuron Technology")
+      expect(content.body).not.toContain("John")
+    })
+
+    it("keeps the button text and destination unchanged", async () => {
+      const { env } = fakeDb({ round: null })
+      const content = await emailContent(env, submission(), "shipped")
+      expect(content.ctaText).toBe("View the result")
+      expect(content.ctaHref).toBe("/submissions/sub_000001")
+    })
+
+    it("leaves the subject alone", async () => {
+      const { env } = fakeDb({ round: null })
+      const content = await emailContent(env, submission(), "shipped")
+      expect(content.subject).toBe("Your project has shipped — Heuron Technology")
+    })
+  })
+
   it("preview-ready: links to the portal page, not the raw preview URL, and reads no round", async () => {
     const { env, queryCount } = fakeDb()
     const content = await emailContent(
@@ -214,9 +252,13 @@ describe("emailContent", () => {
     }
   })
 
+  // issue #327: `shipped` is deliberately no longer part of this group — its
+  // own describe block below covers it.
+  const SIGNED_SEND_TYPES = ["signoff-ready", "needs-input", "preview-ready"] as const
+
   it("every body closes with a first-person signature naming the sender", async () => {
     const { env } = fakeDb({ round: null })
-    for (const type of SENDING_TYPES) {
+    for (const type of SIGNED_SEND_TYPES) {
       const content = await emailContent(env, submission(), type)
       expect(content.body, `${type} body`).toContain("— John, Heuron Technology")
       // Blank-line separated, so `composeHtmlBody` renders it as its own
@@ -228,9 +270,10 @@ describe("emailContent", () => {
   it("speaks as one person, not an anonymous corporate 'we'", async () => {
     // The portal fronts a one-person shop. "We've put together a design" named
     // nobody; the site's own voice is first-person singular, and matching it is
-    // both truer and more trustworthy.
+    // both truer and more trustworthy. `shipped` (issue #327) is the one
+    // deliberate exception — see its own describe block below.
     const { env } = fakeDb({ round: null })
-    for (const type of SENDING_TYPES) {
+    for (const type of SIGNED_SEND_TYPES) {
       const content = await emailContent(env, submission(), type)
       expect(content.body, `${type} body`).not.toMatch(/\b(we|we've|us|our)\b/i)
     }

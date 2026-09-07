@@ -377,7 +377,7 @@ export interface EmailContent {
 }
 
 /**
- * The signature every body closes with — issue #105. One line, first person,
+ * The signature most bodies close with — issue #105. One line, first person,
  * naming a person and the business he works for.
  *
  * The defect this fixes is not a missing flourish. The three bodies below used
@@ -387,9 +387,13 @@ export interface EmailContent {
  * and still nearly dismissed it as spam after finding it. "We" also named
  * nobody: the portal fronts a one-person shop, so the site's own plain,
  * first-person voice is both truer and more trustworthy than a corporate
- * plural. Kept as one constant so the three bodies cannot drift apart, and so
- * `composeHtmlBody`'s paragraph split (`src/mailProvider.ts`) has one shape to
- * honour rather than three.
+ * plural. Kept as one constant so the bodies that use it cannot drift apart,
+ * and so `composeHtmlBody`'s paragraph split (`src/mailProvider.ts`) has one
+ * shape to honour rather than several.
+ *
+ * #327 is the one deliberate exception: `shipped`'s body speaks in the
+ * business's own plural voice throughout, so it does not append `SIGNATURE` —
+ * see `emailContent`'s doc comment below.
  */
 const SIGNATURE = "\n\n— John, Heuron Technology"
 
@@ -448,6 +452,12 @@ function attachmentDisclosure(attachmentCount: number): string {
  * deliberately unchanged — nothing about them was part of the defect, and the
  * preheader is the one string the sealed suite reads a round number out of.
  *
+ * #327 dropped `SIGNATURE` from `shipped` alone — its body already speaks as
+ * "us"/"we" and its subject already carries "— Heuron Technology", so a first-
+ * person sign-off underneath would contradict the plural voice right above
+ * it. `signoff-ready`, `needs-input` and `preview-ready` keep the signature
+ * unchanged; this is a `shipped`-only exception, not a reversal of #105.
+ *
  * `title` (issue #322) is `titleForNotification`, not `titleOf` — an
  * operator-set project name wins when one exists, the same way it already
  * does on `/requests` (`listAllRequestRows`) and every other project-aware
@@ -502,7 +512,7 @@ export async function emailContent(env: Env, submission: Submission, type: SendT
   return {
     subject: "Your project has shipped — Heuron Technology",
     preheader: title,
-    body: `"${title}" is live. Thanks for working with me on this.${SIGNATURE}`,
+    body: `The ${title} work you requested is complete. Thank you for doing business with us! We look forward to working with you again.`,
     ctaText: "View the result",
     ctaHref,
   }
