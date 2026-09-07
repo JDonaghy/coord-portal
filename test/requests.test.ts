@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { titleFromOutcome } from "../src/routes/requests"
+import { matchRequestsPath, titleFromOutcome } from "../src/routes/requests"
 
 /**
  * Unit coverage for issue #316's fix to `titleFromOutcome`
@@ -65,5 +65,54 @@ describe("titleFromOutcome", () => {
   it("truncates a long content line to 80 characters with an ellipsis", () => {
     const longLine = "A".repeat(120)
     expect(titleFromOutcome(`Hi,\n${longLine}`)).toBe(`${"A".repeat(79)}…`)
+  })
+})
+
+/**
+ * Unit coverage for issue #318's two new `/requests…` actions — "Approve &
+ * send" / "Reject" on a coord-owned draft. Black-box coverage that a draft
+ * actually renders and the round trip actually reaches coord lives in
+ * `e2e/outbound-drafts.spec.ts` per this repo's testing tiers; this file
+ * pins only the pure routing decision, the same way it already pins
+ * `titleFromOutcome`'s.
+ */
+describe("matchRequestsPath — issue #318's draft actions", () => {
+  it("extracts both the submission id and the draft id for approve", () => {
+    expect(matchRequestsPath("/requests/sub_abc123/drafts/draft_xyz/approve")).toEqual({
+      kind: "draft-approve",
+      id: "sub_abc123",
+      draftId: "draft_xyz",
+    })
+  })
+
+  it("extracts both ids for reject", () => {
+    expect(matchRequestsPath("/requests/sub_abc123/drafts/draft_xyz/reject")).toEqual({
+      kind: "draft-reject",
+      id: "sub_abc123",
+      draftId: "draft_xyz",
+    })
+  })
+
+  it("does not confuse a draft action with plain detail, reassign or rounds", () => {
+    expect(matchRequestsPath("/requests/sub_abc123")).toEqual({ kind: "detail", id: "sub_abc123" })
+    expect(matchRequestsPath("/requests/sub_abc123/reassign")).toEqual({
+      kind: "reassign",
+      id: "sub_abc123",
+    })
+    expect(matchRequestsPath("/requests/sub_abc123/rounds")).toEqual({
+      kind: "rounds",
+      id: "sub_abc123",
+    })
+  })
+
+  it("refuses a drafts path with no action, or an unrecognised one", () => {
+    for (const pathname of [
+      "/requests/sub_abc123/drafts/draft_xyz",
+      "/requests/sub_abc123/drafts/draft_xyz/",
+      "/requests/sub_abc123/drafts//approve",
+      "/requests/sub_abc123/drafts/draft_xyz/discard",
+    ]) {
+      expect(matchRequestsPath(pathname), pathname).toBeNull()
+    }
   })
 })

@@ -369,6 +369,7 @@ describe("the bridge routes behind the gate", () => {
   const routes: Array<[string, string]> = [
     ["GET", "/api/bridge/pull"],
     ["POST", "/api/bridge/push"],
+    ["POST", "/api/bridge/outbound-drafts"],
     ["POST", "/api/bridge/heartbeat"],
     ["POST", "/api/bridge/mocks/SUB-000001/1"],
   ]
@@ -431,6 +432,18 @@ describe("the bridge routes behind the gate", () => {
     expect(res.headers.get("allow")).toBe("GET")
   })
 
+  it("405s /api/bridge/outbound-drafts reached with the wrong method (#318)", async () => {
+    const res = await worker.fetch(
+      new Request("https://intake.heurontech.com/api/bridge/outbound-drafts", {
+        method: "GET",
+        headers: TOKEN,
+      }),
+      envWithToken(),
+    )
+    expect(res.status).toBe(405)
+    expect(res.headers.get("allow")).toBe("POST")
+  })
+
   it("leaves the rest of the API alone", async () => {
     // The gate covers the /api/bridge prefix and nothing else — /api/health is
     // deliberately unauthenticated and must stay that way.
@@ -465,6 +478,42 @@ describe("the bridge routes behind the gate", () => {
       envWithToken(),
     )
     expect(res.status).toBe(404)
+  })
+})
+
+describe("POST /api/bridge/outbound-drafts (#318) — validation that needs no database write", () => {
+  // The full round trip — a draft actually landing, rendering on
+  // `/requests/:id`, and an operator's verdict reaching
+  // `GET /api/bridge/pull` — is covered black-box in
+  // `e2e/outbound-drafts.spec.ts` against real D1. These two rejections
+  // happen before any write, so they are safe to pin against `fakeEnv()`.
+  function outboundDraftsRequest(body: unknown): Request {
+    return new Request("https://intake.heurontech.com/api/bridge/outbound-drafts", {
+      method: "POST",
+      headers: { ...TOKEN, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    })
+  }
+
+  it("refuses a body that is not a batch of drafts", async () => {
+    for (const body of [{}, { drafts: "not-an-array" }, null]) {
+      const res = await worker.fetch(outboundDraftsRequest(body), envWithToken())
+      expect(res.status, JSON.stringify(body)).toBe(400)
+      expect(await res.json()).toMatchObject({ error: "invalid_request" })
+    }
+  })
+
+  it("refuses an oversized batch out loud, with the limit in the answer", async () => {
+    const drafts = Array.from({ length: 51 }, (_, i) => ({
+      id: `draft-${i}`,
+      submission_id: "SUB-000000",
+      kind: "status",
+      fields: { status: "planned" },
+      queued_at: "2026-09-07T00:00:00Z",
+    }))
+    const res = await worker.fetch(outboundDraftsRequest({ drafts }), envWithToken())
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({ error: "too_many_drafts", limit: 50 })
   })
 })
 

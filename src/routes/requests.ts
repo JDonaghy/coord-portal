@@ -1,3 +1,11 @@
+import { appendEventStatement } from "../bridge/events"
+import {
+  approveOutboundDraft,
+  listPendingOutboundDrafts,
+  rejectOutboundDraft,
+  type CoordOutboundDraft,
+  type CoordOutboundDraftKind,
+} from "../coordOutboundDrafts"
 import { parseFormData } from "../formData"
 import { readOperator, type Operator } from "../operators"
 import { recordOperatorRead } from "../operatorAccess"
@@ -122,6 +130,24 @@ import { isFormContentType } from "./submission"
  * (`operator-access-notice`) — this is customer material read by an
  * operator, not a customer's own view of it — and every successful read is
  * recorded (`src/operatorAccess.ts`).
+ *
+ * ── ISSUE #318's DRAFT REVIEW ───────────────────────────────────────────
+ * Every coord-owned push (`design_round`, `question`, `relayed_answer`,
+ * `status`, `preview`) is staged in coord's own `portal_outbox` and released
+ * with `coord portal draft approve` — a terminal command, and until now the
+ * only way to release one, however small the edit. `requestDetail` below now
+ * renders whatever this submission has queued and unreleased
+ * (`listPendingOutboundDrafts`, `src/coordOutboundDrafts.ts` — the portal's
+ * read-only mirror of that queue, kept current by coord's own poll against
+ * `POST /api/bridge/outbound-drafts`), and `postRequestDraftApprove` /
+ * `postRequestDraftReject` are the two actions: the same "Approve & send" /
+ * "Reject" pair `/replies` already established for a portal-drafted reply,
+ * here applied to a coord-drafted one. Approving carries whatever text the
+ * operator actually edited back to coord as an `outbound_draft.approved`
+ * event on the existing `bridge_events` stream (`GET /api/bridge/pull`) —
+ * never a route coord calls to push a decision at; the bridge stays
+ * outbound-only in both directions. See `src/coordOutboundDrafts.ts` and
+ * `src/bridge/events.ts` for the rest of the seam.
  */
 export async function requestsInbox(request: Request, env: Env): Promise<Response> {
   const operator = await readOperator(request, env)
@@ -135,6 +161,8 @@ const REQUESTS_PATH = "/requests"
 const REQUEST_DETAIL_PATH = /^\/requests\/([^/?#]+)$/
 const REQUEST_REASSIGN_PATH = /^\/requests\/([^/?#]+)\/reassign$/
 const REQUEST_ROUNDS_PATH = /^\/requests\/([^/?#]+)\/rounds$/
+const REQUEST_DRAFT_APPROVE_PATH = /^\/requests\/([^/?#]+)\/drafts\/([^/?#]+)\/approve$/
+const REQUEST_DRAFT_REJECT_PATH = /^\/requests\/([^/?#]+)\/drafts\/([^/?#]+)\/reject$/
 
 /** What `handlePages` needs to know about a `/requests…` URL, or `null`. */
 export function matchRequestsPath(
@@ -144,11 +172,26 @@ export function matchRequestsPath(
   | { kind: "detail"; id: string }
   | { kind: "reassign"; id: string }
   | { kind: "rounds"; id: string }
+  | { kind: "draft-approve"; id: string; draftId: string }
+  | { kind: "draft-reject"; id: string; draftId: string }
   | null {
   if (pathname === REQUESTS_PATH) return { kind: "index" }
 
   const reassign = pathname.match(REQUEST_REASSIGN_PATH)
   if (reassign?.[1]) return { kind: "reassign", id: reassign[1] }
+
+  // Checked ahead of `detail` below, same reason `rounds` is: neither regex
+  // has anything after the id, so `/requests/:id/drafts/:draftId/…` would
+  // otherwise never reach either one. Issue #318's two actions on a coord
+  // queued draft.
+  const draftApprove = pathname.match(REQUEST_DRAFT_APPROVE_PATH)
+  if (draftApprove?.[1] && draftApprove[2]) {
+    return { kind: "draft-approve", id: draftApprove[1], draftId: draftApprove[2] }
+  }
+  const draftReject = pathname.match(REQUEST_DRAFT_REJECT_PATH)
+  if (draftReject?.[1] && draftReject[2]) {
+    return { kind: "draft-reject", id: draftReject[1], draftId: draftReject[2] }
+  }
 
   // Checked ahead of `detail` below: `/requests/:id/rounds` would otherwise
   // never reach `REQUEST_DETAIL_PATH` (that regex requires nothing after the
@@ -390,16 +433,18 @@ function roundBadge(round: SignoffState | null): string {
  * trusts, and reusing it here means this route needs no query of its own
  * beyond the one call.
  *
- * Exists for exactly one reason today — hosting the reassignment panel for a
- * submission `/leads/:id` cannot reach (see this file's module comment) — so
- * it renders just enough to orient an operator who followed the title or
- * "Open" link off the list (`requestRow` above, issue #316: neither is
- * labelled "Reassign" any more — that named the one action available once
- * you arrive, not what clicking through actually does): what it is, whose it
- * is, and the panel itself. It is not a second `/submissions/:id`; there is
- * no message thread, round history or preview link here, and none should be
- * added without its own issue — this route's contract is the reassignment panel,
- * not a general operator submission detail screen.
+ * Started as hosting only the reassignment panel for a submission
+ * `/leads/:id` cannot reach (see this file's module comment); issue #318
+ * added the second thing this screen now renders — any coord-owned draft
+ * queued and not yet sent, beside the round-history link, per that issue's
+ * own "beside the round history" placement. It renders just enough to orient
+ * an operator who followed the title or "Open" link off the list
+ * (`requestRow` above, issue #316: neither is labelled "Reassign" any more —
+ * that named the one action available once you arrive, not what clicking
+ * through actually does): what it is, whose it is, the panel itself, and now
+ * whatever coord is waiting on this operator to release. It is still not a
+ * second `/submissions/:id`; there is no message thread or preview link
+ * here, and neither should be added without its own issue.
  */
 export async function requestDetail(request: Request, env: Env, id: string): Promise<Response> {
   const operator = await readOperator(request, env)
@@ -410,11 +455,12 @@ export async function requestDetail(request: Request, env: Env, id: string): Pro
 
   const display = await displayStatusFor(env, submission)
   const options = await loadReassignmentOptions(env, submission.projectId, submission.customerEmail)
+  const drafts = await listPendingOutboundDrafts(env, submission.reference)
 
   return html(
     page(
       `${submission.reference} — coord-portal`,
-      requestDetailPage(operator, submission, display, options),
+      requestDetailPage(operator, submission, display, options, drafts),
     ),
   )
 }
@@ -461,6 +507,140 @@ export async function postRequestReassign(request: Request, env: Env, id: string
 }
 
 /**
+ * The `<textarea>`/`<input>` `name` a draft's field `key` renders under —
+ * `field__` prefixed so it can never collide with the reassignment panel's
+ * own `projectChoice`, or with a future field of the same bare name on some
+ * other form this same page renders.
+ */
+function draftFieldName(key: string): string {
+  return `field__${key}`
+}
+
+/** Redirects back to the detail screen — where every draft action above and below lands, win or no-op. */
+function backToRequest(submissionId: string): Response {
+  return new Response(null, {
+    status: 303,
+    headers: { location: `/requests/${encodeURIComponent(submissionId)}` },
+  })
+}
+
+/**
+ * A pending draft this route trusts, or `null` if the id names nothing, is no
+ * longer `pending`, or belongs to a different submission than the URL names —
+ * the last case matters because `draftId` and the submission `id` in the URL
+ * are two independent identifiers with no foreign-key relationship visible to
+ * the router; without this check an operator with two tabs open could approve
+ * submission A's draft through submission B's form action.
+ */
+async function draftForSubmission(
+  env: Env,
+  submission: Submission,
+  draftId: string,
+): Promise<CoordOutboundDraft | null> {
+  const drafts = await listPendingOutboundDrafts(env, submission.reference)
+  return drafts.find((draft) => draft.id === draftId) ?? null
+}
+
+/**
+ * `POST /requests/:id/drafts/:draftId/approve` — issue #318's "Approve &
+ * send", applied to a coord-drafted message instead of a portal-drafted
+ * reply. Whatever the operator has in the form's text fields — not
+ * necessarily what coord originally queued — is what travels back to coord,
+ * the same "the edited text, not the original" rule `postReplyApprove`
+ * (`src/routes/replies.ts`) already applies to `/replies`.
+ *
+ * A field the form did not carry (a hand-rolled POST missing one, not
+ * anything the rendered form can produce) falls back to the draft's own
+ * queued text rather than an empty string — "absent beats broken", the same
+ * call `fieldOr` makes on `/replies`.
+ *
+ * Guarded the same way every write on this operator surface is: an unknown
+ * submission gets the indistinguishable 404, and a draft that is missing, not
+ * `pending`, or not this submission's own is a guarded no-op — a 303 back to
+ * the screen an operator was already looking at, never an error for a
+ * double-click or a second tab that lost a race.
+ */
+export async function postRequestDraftApprove(
+  request: Request,
+  env: Env,
+  id: string,
+  draftId: string,
+): Promise<Response> {
+  const operator = await readOperator(request, env)
+  if (!operator) return leadsNotFound()
+
+  const submission = await getSubmission(env, id)
+  if (!submission) return leadsNotFound()
+
+  const contentType = request.headers.get("content-type") ?? ""
+  if (!isFormContentType(contentType)) return leadsNotFound()
+  const form = await parseFormData(request)
+  if (!form) return leadsNotFound()
+
+  const pending = await draftForSubmission(env, submission, draftId)
+  if (pending === null) return backToRequest(submission.id)
+
+  const editedFields: Record<string, string> = {}
+  for (const key of Object.keys(pending.fields)) {
+    const raw = form.get(draftFieldName(key))
+    editedFields[key] = typeof raw === "string" ? raw : (pending.fields[key] ?? "")
+  }
+
+  const approved = await approveOutboundDraft(env, draftId, editedFields, operator.email)
+  if (approved !== null) {
+    // Coord's own half: apply this text to the row before sending. No
+    // guard needed here beyond what `approveOutboundDraft` already proved —
+    // this event only exists because that guarded UPDATE just won.
+    await appendEventStatement(env, {
+      type: "outbound_draft.approved",
+      submissionReference: approved.submissionReference,
+      occurredAt: new Date().toISOString(),
+      payload: { draft_id: approved.id, kind: approved.kind, fields: approved.fields },
+    }).run()
+  }
+
+  return backToRequest(submission.id)
+}
+
+/**
+ * `POST /requests/:id/drafts/:draftId/reject` — issue #318's "Reject". Same
+ * guard shape as approve above; no form fields are read beyond the same
+ * content-type check every write on this surface applies, matching
+ * `postReplyDiscard`'s own "carries nothing but its button" convention.
+ */
+export async function postRequestDraftReject(
+  request: Request,
+  env: Env,
+  id: string,
+  draftId: string,
+): Promise<Response> {
+  const operator = await readOperator(request, env)
+  if (!operator) return leadsNotFound()
+
+  const submission = await getSubmission(env, id)
+  if (!submission) return leadsNotFound()
+
+  const contentType = request.headers.get("content-type") ?? ""
+  if (!isFormContentType(contentType)) return leadsNotFound()
+  if ((await parseFormData(request)) === null) return leadsNotFound()
+
+  const pending = await draftForSubmission(env, submission, draftId)
+  if (pending === null) return backToRequest(submission.id)
+
+  const rejected = await rejectOutboundDraft(env, draftId, operator.email)
+  if (rejected !== null) {
+    await appendEventStatement(env, {
+      type: "outbound_draft.rejected",
+      submissionReference: rejected.submissionReference,
+      occurredAt: new Date().toISOString(),
+      payload: { draft_id: rejected.id, kind: rejected.kind },
+    }).run()
+  }
+
+  return backToRequest(submission.id)
+}
+
+/**
  * The same derivation `listAllRequestRows` applies per row, for the one
  * submission this detail screen renders — `getCurrentRound`/`getStartWork`
  * rather than the list's batched `loadSignoffStates`/`loadStartWorkStates`:
@@ -488,6 +668,7 @@ function requestDetailPage(
   submission: Submission,
   display: SubmissionStatus,
   options: ReassignmentOptions,
+  drafts: CoordOutboundDraft[],
 ): string {
   return `${operatorTopbar(operator.email, "requests")}
 <main data-testid="request-detail">
@@ -502,6 +683,8 @@ function requestDetailPage(
     <dd data-testid="request-detail-customer">${escapeHtml(submission.customerEmail ?? "no email on file")}</dd>
   </dl>
 
+  ${outboundDraftsSection(submission, drafts)}
+
   <p class="round-history-aside">
     <a href="/requests/${encodeURIComponent(submission.id)}/rounds" data-testid="request-rounds-link">
       See design rounds &amp; mock bundles
@@ -510,6 +693,100 @@ function requestDetailPage(
 
   ${reassignPanel(`/requests/${encodeURIComponent(submission.id)}/reassign`, options)}
 </main>`
+}
+
+/* ─────────────────── issue #318: coord's queued drafts ─────────────────── */
+
+/** What an operator reads for each kind of coord-owned draft — never a raw wire slug. */
+const DRAFT_KIND_LABEL: Record<CoordOutboundDraftKind, string> = {
+  design_round: "Design round",
+  question: "Question",
+  relayed_answer: "Relayed answer",
+  status: "Status change",
+  preview: "Preview link",
+}
+
+/**
+ * The field(s) a given kind's fields are expected to carry, in render order,
+ * with the label an operator reads over each one. Any field on the draft not
+ * named here still renders — see `draftFieldLabel` — so a wire shape this
+ * deploy has not caught up with is still visible and editable, just under its
+ * own raw name rather than a curated one.
+ */
+const DRAFT_FIELD_LABELS: Record<string, string> = {
+  outcome_definition: "Outcome definition",
+  question: "Question",
+  answer: "Relayed answer",
+  status: "Status",
+  preview_url: "Preview link",
+}
+
+function draftFieldLabel(key: string): string {
+  return DRAFT_FIELD_LABELS[key] ?? key
+}
+
+/**
+ * What approving actually causes — issue #318's own requirement, stated on
+ * the screen rather than assumed: "an operator can tell 'this reaches her
+ * inbox' from 'this only changes what the portal shows'". `status` is the
+ * one kind of coord-owned push that emails the customer at all
+ * (`recordNotificationForStatus`, `src/bridge/updates.ts` — issue #14's three
+ * customer-actionable-or-terminal statuses); every other kind here only ever
+ * changes what a screen renders once coord applies it.
+ */
+function draftConsequence(kind: CoordOutboundDraftKind): string {
+  return kind === "status"
+    ? "Approving this emails the customer — the only kind of coord message that does."
+    : "Approving this only changes what the portal shows. No email is sent."
+}
+
+/**
+ * Absent entirely when nothing is queued — the ordinary steady state, the
+ * same "present iff there is something to say" convention `roundBadge` and
+ * `/replies`' own empty state already use on this codebase's operator
+ * screens.
+ */
+function outboundDraftsSection(submission: Submission, drafts: CoordOutboundDraft[]): string {
+  if (drafts.length === 0) return ""
+  return `
+  <div data-testid="outbound-drafts">
+${drafts.map((draft) => outboundDraftCard(submission, draft)).join("\n")}
+  </div>`
+}
+
+function outboundDraftCard(submission: Submission, draft: CoordOutboundDraft): string {
+  const action = `/requests/${encodeURIComponent(submission.id)}/drafts/${encodeURIComponent(draft.id)}`
+  const fields = Object.entries(draft.fields)
+    .map(([key, value]) => draftField(draft.id, key, value))
+    .join("\n")
+
+  return `    <section class="card" data-testid="outbound-draft" data-draft-kind="${escapeHtml(draft.kind)}">
+      <h2 data-testid="outbound-draft-kind">${escapeHtml(DRAFT_KIND_LABEL[draft.kind])}</h2>
+      <p class="meta">
+        <span data-testid="outbound-draft-submission">${escapeHtml(submission.reference)}</span> &middot;
+        queued <span data-testid="outbound-draft-queued-at">${escapeHtml(draft.queuedAt)}</span>
+      </p>
+      <p class="draft-consequence" data-testid="outbound-draft-consequence">${escapeHtml(draftConsequence(draft.kind))}</p>
+      <form method="POST" action="${action}/approve" data-testid="outbound-draft-approve-form">
+${fields}
+        <div class="actions">
+          <button type="submit" class="primary" data-testid="outbound-draft-approve-button">Approve &amp; send</button>
+        </div>
+      </form>
+      <form method="POST" action="${action}/reject" data-testid="outbound-draft-reject-form">
+        <div class="actions">
+          <button type="submit" class="ghost" data-testid="outbound-draft-reject-button">Reject</button>
+        </div>
+      </form>
+    </section>`
+}
+
+function draftField(draftId: string, key: string, value: string): string {
+  const fieldId = `draft-${draftId}-${key}`
+  return `        <div class="field">
+          <label for="${escapeHtml(fieldId)}">${escapeHtml(draftFieldLabel(key))}</label>
+          <textarea id="${escapeHtml(fieldId)}" name="${escapeHtml(draftFieldName(key))}" rows="6" data-testid="outbound-draft-field" data-field-key="${escapeHtml(key)}">${escapeHtml(value)}</textarea>
+        </div>`
 }
 
 /* ─────────────────────── the operator round read (#304) ────────────────── */

@@ -35,6 +35,8 @@ import {
 import { projectDetail } from "./routes/project"
 import {
   matchRequestsPath,
+  postRequestDraftApprove,
+  postRequestDraftReject,
   postRequestReassign,
   requestDetail,
   requestRounds,
@@ -173,7 +175,10 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
   // no lead to reach `/leads/:id` through. `/requests/:id/rounds` (issue
   // #304) is the operator-scoped read of that submission's design-round
   // history — see `routes/requests.ts`'s module comment, "ISSUE #304's
-  // OPERATOR ROUND READ", for why this surface now owns that too. Owned here
+  // OPERATOR ROUND READ", for why this surface now owns that too.
+  // `/requests/:id/drafts/:draftId/approve|reject` (issue #318) are
+  // "Approve & send" / "Reject" on a coord-owned draft queued against that
+  // submission — see that same file's "ISSUE #318's DRAFT REVIEW". Owned here
   // for every method on any `/requests…` path, same reasoning as `/leads…`
   // below: falling through to `ASSETS.fetch` on an unsupported method would
   // hand an unauthenticated caller a response this contract says is
@@ -191,6 +196,15 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
     }
     if (requestsMatch.kind === "rounds" && request.method === "GET") {
       return requestRounds(request, env, requestsMatch.id)
+    }
+    // Issue #318 — "Approve & send" / "Reject" on a coord-owned draft this
+    // submission has queued and unreleased. See `routes/requests.ts`'s
+    // module comment, "ISSUE #318's DRAFT REVIEW".
+    if (requestsMatch.kind === "draft-approve" && request.method === "POST") {
+      return postRequestDraftApprove(request, env, requestsMatch.id, requestsMatch.draftId)
+    }
+    if (requestsMatch.kind === "draft-reject" && request.method === "POST") {
+      return postRequestDraftReject(request, env, requestsMatch.id, requestsMatch.draftId)
     }
     return leadsNotFound()
   }

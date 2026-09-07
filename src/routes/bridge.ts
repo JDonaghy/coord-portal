@@ -2,6 +2,7 @@ import { decodeCursor, encodeCursor } from "../bridge/cursor"
 import { parsePullLimit, readEventsAfter } from "../bridge/events"
 import { normaliseTimestamp, recordHeartbeat } from "../bridge/heartbeat"
 import { MAX_PUSH_UPDATES, applyUpdates } from "../bridge/updates"
+import { MAX_OUTBOUND_DRAFTS_PUSH, applyOutboundDraftsPush } from "../coordOutboundDrafts"
 import { json } from "../router"
 import type { Env } from "../types"
 
@@ -9,12 +10,13 @@ import type { Env } from "../types"
  * The sync bridge — the portal-side API the coordinator's daemon polls.
  *
  * ── THE SHAPE OF THIS SURFACE IS THE SECURITY ARGUMENT ─────────────────────
- * The three routes below, plus one more that lives in `src/routes/mocks.ts`
+ * The four routes below, plus one more that lives in `src/routes/mocks.ts`
  * (`POST /api/bridge/mocks/:reference/:round`, #120 — a mock bundle upload,
- * gated in `src/router.ts` exactly like these three): the daemon pulls what
- * happened here, pushes what happened there, says it is alive, and hands over
- * the bytes for a design round's mock. Every connection is opened by the
- * daemon. This side has no idea where the fleet is, holds no address for it,
+ * gated in `src/router.ts` exactly like these four): the daemon pulls what
+ * happened here, pushes what happened there and what it has queued but not
+ * yet sent, says it is alive, and hands over the bytes for a design round's
+ * mock. Every connection is opened by the daemon. This side has no idea
+ * where the fleet is, holds no address for it,
  * and must never learn one — no webhook, no callback URL, no "push endpoint"
  * to register, not even behind a shared secret. If latency feels bad the
  * daemon polls faster. That asymmetry is the entire reason this portal can sit
@@ -94,6 +96,43 @@ export async function bridgePush(
   }
 
   const results = await applyUpdates(env, updates, ctx)
+  return json({ results })
+}
+
+/**
+ * `POST /api/bridge/outbound-drafts` — issue #318: coord asserting what it
+ * currently has queued, unreleased, in its own `portal_outbox`.
+ *
+ * This is a re-assertion of coord's *current* pending set, not an append-only
+ * log — a well-formed item is `applied` whether it inserted a new row,
+ * refreshed an existing pending one, or was silently ignored because an
+ * operator already decided it (`applyOutboundDraftsPush`'s own guard). None
+ * of those is a transport failure; only a malformed item, or one naming a
+ * `kind` this portal does not recognise, is `rejected` — see
+ * `src/coordOutboundDrafts.ts`.
+ *
+ * The verdict travels back the other way over the existing outbound stream —
+ * `outbound_draft.approved` / `outbound_draft.rejected` on
+ * `GET /api/bridge/pull` — never through a route coord calls to push a
+ * decision at, and never a callback this side initiates. See
+ * `src/bridge/events.ts`'s own note on why that is not the echo the pull
+ * stream's module comment otherwise warns against.
+ */
+export async function bridgeOutboundDraftsPush(request: Request, env: Env): Promise<Response> {
+  const body = await readJsonBody(request)
+  if (body === null || !isPlainObject(body) || !Array.isArray(body["drafts"])) {
+    return json({ error: "invalid_request" }, { status: 400 })
+  }
+
+  const drafts = body["drafts"]
+  if (drafts.length > MAX_OUTBOUND_DRAFTS_PUSH) {
+    return json(
+      { error: "too_many_drafts", limit: MAX_OUTBOUND_DRAFTS_PUSH },
+      { status: 400 },
+    )
+  }
+
+  const results = await applyOutboundDraftsPush(env, drafts)
   return json({ results })
 }
 

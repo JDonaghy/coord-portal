@@ -1,6 +1,6 @@
 import { bridgeUnauthorized, isBridgeAuthorized } from "./bridge/auth"
 import type { Env } from "./types"
-import { bridgeHeartbeat, bridgePull, bridgePush } from "./routes/bridge"
+import { bridgeHeartbeat, bridgeOutboundDraftsPush, bridgePull, bridgePush } from "./routes/bridge"
 import { health } from "./routes/health"
 import { matchMockUploadPath, uploadMockBundle } from "./routes/mocks"
 import { whoami } from "./routes/whoami"
@@ -20,6 +20,11 @@ const ROUTES: Record<string, Partial<Record<string, Handler>>> = {
   // subscription or a callback for this side to call *it* on.
   "/api/bridge/pull": { GET: bridgePull },
   "/api/bridge/push": { POST: bridgePush },
+  // Issue #318: coord's queued-but-unreleased drafts, asserted on the same
+  // poll tick as everything else here — see `src/routes/bridge.ts`'s own doc
+  // comment for why the verdict travels back over `/api/bridge/pull` instead
+  // of a route coord calls to push a decision at.
+  "/api/bridge/outbound-drafts": { POST: bridgeOutboundDraftsPush },
   "/api/bridge/heartbeat": { POST: bridgeHeartbeat },
   // The mock bundle upload (#120) is matched below, not listed here: its path
   // carries a submission reference and round number, which this flat map has
