@@ -268,7 +268,7 @@ test("naming a new project inline while reassigning names it everywhere, but the
   // typed into it.
   await operator.goto("/requests")
   const requestRow = operator.getByTestId("request-row").filter({ hasText: reference })
-  await requestRow.getByTestId("request-reassign-link").click()
+  await requestRow.getByTestId("request-open-link").click()
   await expect(operator.getByTestId("request-detail")).toBeVisible()
   await openReassign(operator)
   await expect(operator.getByTestId("reassign-new-project-name")).toHaveCount(0)
