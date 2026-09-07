@@ -324,6 +324,18 @@ test("shipped work sends exactly one final email, and nothing before it but the 
   const sent = await awaitOutbox(page, email, 2)
   expect(sent.map((s) => s.type)).toEqual(["preview-ready", "shipped"])
   expect(sent[1]?.to).toContain(email)
+
+  // issue #327: the shipped body is the exact reworded copy, with the title
+  // interpolated unquoted, and drops the first-person signature the other
+  // three sending types still carry — the subject and button stay untouched.
+  const shipped = sent[1]
+  expect(shipped?.subject).toBe("Your project has shipped — Heuron Technology")
+  expect(shipped?.body).toContain(
+    "The A synthetic outcome for e2e notifications coverage. work you requested is complete. " +
+      "Thank you for doing business with us! We look forward to working with you again.",
+  )
+  expect(shipped?.body).not.toContain("— John")
+  expect(shipped?.ctaText).toBe("View the result")
 })
 
 test("only the four sending states ever produce an email — coord churn never does", async ({
