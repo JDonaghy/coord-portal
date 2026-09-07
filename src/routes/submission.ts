@@ -36,6 +36,15 @@ import {
   type Submission,
   type SubmissionStatus,
 } from "../submissions"
+import {
+  getSurveyResponse,
+  parseSurveyRating,
+  recordSurveyResponse,
+  SURVEY_RATING_LABELS,
+  SURVEY_RATINGS,
+  type SurveyRating,
+  type SurveyResponse,
+} from "../surveys"
 import type { Env } from "../types"
 
 /**
@@ -175,6 +184,9 @@ export async function submitSubmissionAction(
   }
   if (action === "confirm-relay") {
     return submitConfirmRelay(env, email, isOperator, submission)
+  }
+  if (action === "survey") {
+    return submitSurvey(env, email, isOperator, submission, form)
   }
   return submitAnswer(env, email, isOperator, submission, form)
 }
@@ -390,6 +402,67 @@ async function submitPreviewReviewAction(
     // Approving asks for no comment — same rule the design round's sign-off follows.
     await recordPreviewReview(env, submission.reference, previewUrl, "approved", null)
   }
+
+  return new Response(null, {
+    status: 303,
+    headers: { location: `/submissions/${submission.id}` },
+  })
+}
+
+/**
+ * The shipped survey (#328) — "please let us know how we did".
+ *
+ * Legal only once, and only on `shipped`: `getSurveyResponse` is checked
+ * first, and either an unshipped submission or one that already has a
+ * response gets the same 409 re-render every other stale composer on this
+ * route gives (`submitSignoff`, `submitPreviewReviewAction`) — a survey is
+ * not a form to resubmit, it is "a reply to a person" (issue #328), so a
+ * second attempt changes nothing rather than overwriting the first.
+ * `recordSurveyResponse`'s own `INSERT OR IGNORE` is the second line of
+ * defence against the same race every other idempotent write here guards —
+ * two tabs open on the same shipped screen, both submitting before either's
+ * 303 lands — but the check here is what turns that race into "the second
+ * request silently lands on the same thank-you screen" rather than "the
+ * second request's response overwrites the first's".
+ *
+ * The rating is the one required field ("nothing is required except the
+ * rating") — a blank or malformed one redisplays the same open composer with
+ * an error, exactly `submitSignoff`'s blank-comment shape. The comment is
+ * genuinely optional: an empty one is stored as `null`, not as `""`.
+ */
+async function submitSurvey(
+  env: Env,
+  email: string | null,
+  isOperator: boolean,
+  submission: Submission,
+  form: FormData,
+): Promise<Response> {
+  const existing =
+    submission.status === "shipped" ? await getSurveyResponse(env, submission.reference) : null
+
+  if (submission.status !== "shipped" || existing) {
+    const thread = { messages: await listMessages(env, submission.reference) }
+    const main = await detailFor(env, email, isOperator, submission, thread)
+    return html(page(`${submission.reference} — coord-portal`, main), { status: 409 })
+  }
+
+  const rating = parseSurveyRating(stringField(form, "rating"))
+  if (!rating) {
+    const thread = { messages: await listMessages(env, submission.reference) }
+    return html(
+      page(
+        `${submission.reference} — coord-portal`,
+        await shippedDetail(env, email, isOperator, submission, thread, {
+          composerOpen: true,
+          error: "Choose a rating before sending.",
+        }),
+      ),
+      { status: 400 },
+    )
+  }
+
+  const comment = stringField(form, "comment") || null
+  await recordSurveyResponse(env, submission.reference, rating, comment)
 
   return new Response(null, {
     status: 303,
@@ -1603,15 +1676,29 @@ export function shippedResultSection(submission: Submission): string {
   return `<p data-testid="shipped-link-unavailable">We don't have a link for this yet — reply below and we'll send you one.</p>`
 }
 
-/** `shipped` — terminal, per `mocks/10-submission-shipped.html`. */
+interface SurveyComposerState {
+  /** Re-open the survey composer server-side after a rejected submit. */
+  composerOpen?: boolean
+  error?: string
+}
+
+/**
+ * `shipped` — terminal, per `mocks/10-submission-shipped.html`, plus the
+ * survey (#328). `surveyState` defaults to closed/no-error — the ordinary
+ * `GET` — and is only ever overridden by `submitSurvey`'s own redisplay after
+ * a blank-rating submit, the same shape `awaitingSignoffDetail`'s `state`
+ * parameter takes for its request-changes composer.
+ */
 async function shippedDetail(
   env: Env,
   email: string | null,
   isOperator: boolean,
   submission: Submission,
   thread: ThreadContext,
+  surveyState: SurveyComposerState = {},
 ): Promise<string> {
   const events = await listLifecycleEvents(env, submission.reference)
+  const surveyResponse = await getSurveyResponse(env, submission.reference)
   return `${topbar(email, "none", isOperator)}
 <main data-testid="submission-detail" data-status="${escapeHtml(submission.status)}">
   ${statusPill(submission.status)}
@@ -1621,6 +1708,7 @@ async function shippedDetail(
   <section class="card">
     <p data-testid="shipped-copy">This is live. Thanks for working through the design with us.</p>
     ${shippedResultSection(submission)}
+    ${surveySection(submission, surveyResponse, surveyState)}
   </section>
 
   ${activityTimeline(events)}
@@ -1629,6 +1717,99 @@ async function shippedDetail(
 
 ${messageThreadSection(`/submissions/${submission.id}`, thread, "customer", email)}
 </main>`
+}
+
+/**
+ * Issue #328's "please let us know how we did" — rendered next to the
+ * existing result link, only on `shipped` (this is only ever reached from
+ * `shippedDetail`). Dispatches on whether a response already exists: "after
+ * it is given, the shipped screen shows what they said rather than the
+ * button, with no edit path" — so exactly one of `surveyPrompt` or
+ * `surveyResponseCard` renders, never both, and there is no branch that
+ * renders the button again once a response is on file.
+ */
+export function surveySection(
+  submission: Submission,
+  response: SurveyResponse | null,
+  state: SurveyComposerState = {},
+): string {
+  return response ? surveyResponseCard(response) : surveyPrompt(submission, state)
+}
+
+/**
+ * The closed-by-default survey button and its composer — the same
+ * no-JavaScript checkbox-and-label disclosure `reassignPanel`
+ * (`src/routes/leads.ts`) and `awaitingSignoffDetail` both use (see either's
+ * doc comment for the full rationale), with its own class names
+ * (`.survey-toggle`/`.survey-panel`/`form.survey-form`) so this panel never
+ * depends on a design round or a reassignment panel being present on the
+ * same page — a shipped submission has neither.
+ *
+ * The rating is five real radio buttons, one per `SURVEY_RATINGS` value, each
+ * wrapped in its own `<label>` carrying the full `SURVEY_RATING_LABELS` text —
+ * operable by keyboard (native radio-group arrow/Tab behaviour, no script)
+ * and readable by a screen reader (an ordinary labelled form control, not a
+ * bespoke widget). `required` on every one is enough for a browser to demand a
+ * selection from the group before submitting at all; `submitSurvey`'s own
+ * `parseSurveyRating` check is the second, server-side line of defence for a
+ * request that reaches this route with no `rating` field regardless (a
+ * scripted client, a browser that skips constraint validation).
+ *
+ * The comment field is the one genuinely optional part of this form — no
+ * `required`, and a short prompt instead of a label implying otherwise.
+ */
+function surveyPrompt(submission: Submission, state: SurveyComposerState): string {
+  const checked = state.composerOpen ? " checked" : ""
+  const errorBlock = state.error
+    ? `<p class="survey-error" data-testid="survey-error" role="alert">${escapeHtml(state.error)}</p>`
+    : ""
+  const options = SURVEY_RATINGS.map((value) => surveyRatingOption(value)).join("\n")
+
+  return `<input class="survey-toggle" type="checkbox" id="survey-toggle" data-testid="survey-toggle" aria-label="Let us know how we did"${checked}>
+    <div class="survey-panel">
+      <label class="secondary survey-open-button" role="button" for="survey-toggle" data-testid="survey-open-button">Please let us know how we did</label>
+
+      <form class="survey-form" method="POST" action="/submissions/${submission.id}" data-testid="survey-form" aria-label="Let us know how we did">
+        <input type="hidden" name="action" value="survey">
+        ${errorBlock}
+        <fieldset class="survey-rating" data-testid="survey-rating">
+          <legend>How did we do?</legend>
+${options}
+        </fieldset>
+        <div class="field survey-comment-field">
+          <label for="surveyComment">Anything you'd like to add? (optional)</label>
+          <textarea id="surveyComment" name="comment" rows="3" data-testid="survey-comment"></textarea>
+        </div>
+        <div class="actions">
+          <label class="ghost" role="button" for="survey-toggle" data-testid="survey-cancel">Cancel</label>
+          <button type="submit" class="primary" data-testid="survey-submit">Send</button>
+        </div>
+      </form>
+    </div>`
+}
+
+function surveyRatingOption(value: SurveyRating): string {
+  return `          <label class="survey-rating-option" data-testid="survey-rating-option" data-value="${value}">
+            <input type="radio" name="rating" value="${value}" required>
+            ${escapeHtml(SURVEY_RATING_LABELS[value])}
+          </label>`
+}
+
+/**
+ * What the customer said, read back in place of the button — the terminal
+ * state `surveySection` renders once a response exists, with no form and no
+ * edit path anywhere on it: "a second thought is a reply to a person, not a
+ * form resubmission" (issue #328).
+ */
+function surveyResponseCard(response: SurveyResponse): string {
+  const commentBlock = response.comment
+    ? `<p class="survey-response-comment" data-testid="survey-response-comment">${escapeHtml(response.comment)}</p>`
+    : ""
+  return `<div class="survey-response" data-testid="survey-response" data-rating="${response.rating}">
+      <p class="survey-thanks" data-testid="survey-thanks">Thanks for letting us know how we did.</p>
+      <p class="survey-response-rating" data-testid="survey-response-rating">${escapeHtml(SURVEY_RATING_LABELS[response.rating])}</p>
+      ${commentBlock}
+    </div>`
 }
 
 /**
