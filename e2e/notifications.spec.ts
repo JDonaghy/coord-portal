@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test"
+import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test"
 
 import { latestOutboxId, markOutboxFailed, markOutboxSent } from "./outbox-fixtures"
 
@@ -37,6 +37,16 @@ import { latestOutboxId, markOutboxFailed, markOutboxSent } from "./outbox-fixtu
  * only way to drive a submission into a sending state is a bridge push (#15's
  * surface); the only way to author one is #9's pinned intake form. Both are
  * used here as instruments, not as subjects.
+ *
+ * Extended for issue #322: a customer notification is supposed to name the
+ * project, not quote a fragment of the customer's own message — the third
+ * fix chasing one derivation (#316 fixed the operator's `/requests` list,
+ * #319 made `titleOf` share its salutation-skip) and the first that ever
+ * touched the surface that actually reaches the customer. The test below
+ * promotes a lead into a submission with a project (issue #129 mints one the
+ * instant a lead promotes), names that project as an operator would, and
+ * proves the resulting email prefers the name over the promoted lead's own
+ * summary.
  *
  * Every string below is invented — see CLAUDE.md rule 1.
  */
@@ -78,6 +88,69 @@ async function seedSubmission(page: Page, email: string): Promise<Seeded> {
     .replace(/^Reference\s+/, "")
   const url = page.url()
   return { url, id: url.split("/submissions/")[1] ?? "", reference }
+}
+
+// ── issue #322: a project-named submission, seeded the same way
+// `e2e/requests.spec.ts` and `e2e/project-naming.spec.ts` each do — this
+// repo's `e2e/` specs carry their own fixture helpers rather than sharing a
+// file across them.
+
+/** See `DEV_OPERATOR_EMAIL` in `src/operators.ts` — honoured only off Cloudflare's edge. */
+const DEV_OPERATOR = "ops@example.test"
+
+const TURNSTILE_FIELD = "cf-turnstile-response"
+
+async function contextFor(browser: Browser, baseURL: string | undefined, email: string | null) {
+  return browser.newContext({
+    baseURL,
+    extraHTTPHeaders: email ? { "Cf-Access-Authenticated-User-Email": email } : {},
+  })
+}
+
+/** Waits for the dev Turnstile stand-in to fill itself in. */
+async function settleBotGate(page: Page) {
+  await page.waitForFunction(
+    (field) => {
+      const input = document.querySelector(`input[name="${field}"]`) as HTMLInputElement | null
+      return !!input && input.value.length > 0
+    },
+    TURNSTILE_FIELD,
+    { timeout: 15_000 },
+  )
+}
+
+/**
+ * Promotes a lead through `/start` -> `/leads/:id` — issue #129 mints a
+ * project the instant a lead promotes, which is what the project-naming
+ * assertion below needs: a submission `titleFromOutcome`'s fallback would
+ * otherwise be the only thing on offer for.
+ */
+async function seedPromotedLead(
+  browser: Browser,
+  baseURL: string | undefined,
+  operator: Page,
+  summary: string,
+  email: string,
+): Promise<{ reference: string }> {
+  const strangerContext = await contextFor(browser, baseURL, null)
+  const stranger = await strangerContext.newPage()
+  await stranger.goto("/start")
+  await stranger.getByTestId("field-lead-summary").fill(summary)
+  await stranger.getByTestId("field-lead-email").fill(email)
+  await settleBotGate(stranger)
+  await stranger.getByTestId("submit-lead").click()
+  await expect(stranger.getByTestId("lead-receipt")).toBeVisible()
+  await strangerContext.close()
+
+  await operator.goto("/leads")
+  const row = operator.getByTestId("lead-row").filter({ hasText: summary })
+  await row.getByTestId("review-lead").click()
+  await operator.getByTestId("promote-button").click()
+  await expect(operator.getByTestId("lead-detail")).toHaveAttribute("data-status", "promoted")
+  const reference = (await operator.getByTestId("promoted-submission-reference").innerText())
+    .trim()
+    .replace(/^Promoted to submission\s+/, "")
+  return { reference }
 }
 
 async function push(
@@ -508,5 +581,55 @@ test("a single failed attempt renders the singular 'time', not 'times'", async (
   expect(row.deliveryAttempts).toContain("1")
   expect(row.deliveryAttempts, "one attempt is singular").toMatch(/\btime\b/)
   expect(row.deliveryAttempts).not.toMatch(/times/)
+})
+
+// ── issue #322: the customer email names the project, not the customer's
+// own prose ──────────────────────────────────────────────────────────────
+
+test("a customer notification names the project an operator set, not a quoted fragment of the customer's own message", async ({
+  browser,
+  baseURL,
+  request,
+}) => {
+  const tag = Math.random().toString(36).slice(2, 10)
+  const email = uniqueEmail("e2e-notify-project-name")
+  // Deliberately shaped like the reported defect — a sentence that reads as
+  // prose, so a body that still quoted it back verbatim (`a design for
+  // "..."`.) would be unmistakable.
+  const summary = `Your name came up when I was asking around about a synthetic small project (${tag}).`
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+  const { reference } = await seedPromotedLead(browser, baseURL, operator, summary, email)
+
+  await expect(operator.getByTestId("rename-project-card")).toBeVisible()
+  const chosenName = `A synthetic named engagement (${tag})`
+  await operator.getByTestId("rename-project-input").fill(chosenName)
+  await operator.getByTestId("rename-project-submit").click()
+  await expect(operator.getByTestId("rename-project-input")).toHaveValue(chosenName)
+
+  const applied = await push(request, reference, 1, {
+    design_round: {
+      round: 1,
+      outcome_definition: "A synthetic outcome definition for e2e notifications coverage.",
+      decomposition: ["A synthetic first step"],
+    },
+    status: "awaiting-signoff",
+  })
+  expect(applied.outcome).toBe("applied")
+
+  const customerContext = await contextFor(browser, baseURL, email)
+  const customer = await customerContext.newPage()
+  const [sent] = await awaitOutbox(customer, email, 1)
+
+  expect(sent.type).toBe("signoff-ready")
+  expect(sent.body, "the body names the project").toContain(chosenName)
+  expect(sent.preheader, "the preheader names the project too").toContain(chosenName)
+  expect(sent.body, "no fragment of the customer's own prose survives").not.toContain(
+    "asking around",
+  )
+  expect(sent.body).not.toContain(summary)
+
+  await Promise.all([operatorContext.close(), customerContext.close()])
 })
 

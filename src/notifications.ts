@@ -1,6 +1,6 @@
 import { generateOutboxId } from "./ids"
 import { getCurrentRound } from "./rounds"
-import { titleOf, type CreateGuard, type Submission } from "./submissions"
+import { titleForNotification, type CreateGuard, type Submission } from "./submissions"
 import type { Env } from "./types"
 
 /**
@@ -436,8 +436,9 @@ function attachmentDisclosure(attachmentCount: number): string {
  * action's destination (every type routes back to this submission — issue
  * #14's whole premise, "the async loop only works if 'come back later'
  * actually reaches the customer") and that no engineer-side identifier ever
- * rides in the body: `title` comes from `titleOf`, the customer's own words
- * from the intake form, never coord-authored text.
+ * rides in the body: `title` comes from `titleForNotification` — an
+ * operator-named project, or (absent one) the customer's own words from the
+ * intake form — never coord-authored text.
  *
  * #105 rewrote all three. Each subject now carries "— Heuron Technology" and
  * each body closes with `SIGNATURE`, so the business the recipient actually
@@ -446,9 +447,20 @@ function attachmentDisclosure(attachmentCount: number): string {
  * `preheader`, `ctaText`, `ctaHref` and the round-aware preheader below are
  * deliberately unchanged — nothing about them was part of the defect, and the
  * preheader is the one string the sealed suite reads a round number out of.
+ *
+ * `title` (issue #322) is `titleForNotification`, not `titleOf` — an
+ * operator-set project name wins when one exists, the same way it already
+ * does on `/requests` (`listAllRequestRows`) and every other project-aware
+ * screen, and only a submission with no named project still falls back to a
+ * line of the customer's own prose. Two fixes (#316, #319) had already
+ * chased this same defect through the operator inbox and `titleOf`'s own
+ * salutation-skip without ever reaching this function, the one surface that
+ * actually mails the customer — see `titleForNotification`'s own doc comment
+ * in `src/submissions.ts` for why `titleOf` alone could never have covered
+ * it.
  */
 export async function emailContent(env: Env, submission: Submission, type: SendType): Promise<EmailContent> {
-  const title = titleOf(submission)
+  const title = await titleForNotification(env, submission)
   const ctaHref = `/submissions/${submission.id}`
 
   if (type === "signoff-ready") {
