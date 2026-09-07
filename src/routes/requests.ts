@@ -162,7 +162,11 @@ export async function requestsInbox(request: Request, env: Env): Promise<Respons
   if (!operator) return leadsNotFound()
 
   const rows = await listAllRequestRows(env)
-  return html(page("Requests — coord-portal", requestsPage(operator, rows)))
+  const { searchParams } = new URL(request.url)
+  const filter = resolveRequestsFilter(rows, searchParams.get("client"), searchParams.get("project"))
+  const visible = applyRequestsFilter(rows, filter)
+
+  return html(page("Requests — coord-portal", requestsPage(operator, rows, visible, filter)))
 }
 
 const REQUESTS_PATH = "/requests"
@@ -227,7 +231,13 @@ interface SubmissionRow {
   project_id: string | null
 }
 
-interface RequestRow {
+/**
+ * Exported for `test/requests.test.ts`'s coverage of issue #323's filtering
+ * — the pure derivations below (`resolveRequestsFilter`/`applyRequestsFilter`)
+ * take and return plain `RequestRow[]`, so a unit test can fabricate rows
+ * directly rather than exercising the D1 query in `listAllRequestRows`.
+ */
+export interface RequestRow {
   id: string
   reference: string
   title: string
@@ -235,6 +245,16 @@ interface RequestRow {
   createdAt: string
   display: SubmissionStatus
   round: SignoffState | null
+  /**
+   * Issue #323's own note: this column was already selected by #316 and
+   * already resolved into `title` below — filtering only needed the
+   * grouping, not a new query shape. Carried on the row (rather than
+   * re-derived from `title`, which for an unnamed project is derived from
+   * each submission's own `outcome` and so is *not* stable across a
+   * project's members — see `buildProjectOptions` below) so the client/project
+   * filter can group rows by the same identity the database itself uses.
+   */
+  projectId: string | null
 }
 
 /**
@@ -294,6 +314,7 @@ async function listAllRequestRows(env: Env): Promise<RequestRow[]> {
       createdAt: row.created_at,
       display,
       round: state,
+      projectId: row.project_id,
     }
   })
 }
@@ -327,15 +348,249 @@ function deriveDisplayStatus(
  */
 export { titleFromOutcome }
 
-function requestsPage(operator: Operator, rows: RequestRow[]): string {
+/* ─────────────────── issue #323: client/project filtering ──────────────── */
+
+/**
+ * `submissions.customer_email` is nullable (a defensive schema allowance;
+ * `requestRow` and `requestDetailPage` already fall back to "no email on
+ * file" when it is) — this is the one query-string value that can never
+ * collide with a real address, since a real address always contains `@`.
+ * The client filter's own "no email on file" bucket is keyed on it, both in
+ * the `<option value>` this route renders and in the `?client=` it reads
+ * back.
+ */
+export const NO_CLIENT_EMAIL_KEY = "no-email"
+
+/** One `<option>` — shared shape for both the client and project selects. */
+export interface FilterOption {
+  value: string
+  label: string
+}
+
+/**
+ * `?client=`/`?project=` after resolving against what is actually on this
+ * page — never the raw, unchecked query-string value. `client`/`project`
+ * are `null` for "All clients"/"All projects", exactly the current,
+ * unfiltered behaviour this issue's contract requires as the default.
+ */
+export interface RequestsFilter {
+  client: string | null
+  project: string | null
+  clientOptions: FilterOption[]
+  /** Scoped to `client` — "with 'All clients' chosen it lists every
+   * project; picking a client narrows it" (issue #323). */
+  projectOptions: FilterOption[]
+}
+
+function clientOptionValue(email: string | null): string {
+  return email ?? NO_CLIENT_EMAIL_KEY
+}
+
+function clientOptionLabel(email: string | null): string {
+  return email ?? "no email on file"
+}
+
+/**
+ * Every client with at least one submission, most-recently-created-first
+ * `rows` collapsed to one option per distinct `customerEmail` — issue #323's
+ * "Client lists every client with at least one submission". Sorted
+ * case-insensitively by label rather than left in `rows`' own newest-first
+ * order: a `<select>` an operator is expected to scan for one known address
+ * reads fastest alphabetically, and unlike the request list itself (where
+ * "most recent first" is the point), option order here carries no
+ * information worth preserving.
+ *
+ * There is no `clients.name` column (see `src/clients.ts`'s own doc
+ * comment) — every label here is the address itself, "the honest label"
+ * this issue's own notes call for, with `clientOptionLabel`'s fallback text
+ * for the one case a row has no address to show at all.
+ */
+function buildClientOptions(rows: RequestRow[]): FilterOption[] {
+  const seen = new Map<string, FilterOption>()
+  for (const row of rows) {
+    const value = clientOptionValue(row.customerEmail)
+    if (!seen.has(value)) {
+      seen.set(value, { value, label: clientOptionLabel(row.customerEmail) })
+    }
+  }
+  return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label))
+}
+
+/** Every row belonging to `client` (an option `value`, see
+ * `clientOptionValue`), or every row when `client` is `null` — "All
+ * clients". */
+function rowsForClient(rows: RequestRow[], client: string | null): RequestRow[] {
+  if (client === null) return rows
+  return rows.filter((row) => clientOptionValue(row.customerEmail) === client)
+}
+
+/**
+ * Every *project* among `rows` — deliberately not every row: a row with no
+ * `projectId` has no project to be grouped under (see `RequestRow.projectId`'s
+ * own doc comment) and contributes no option here, though it still renders
+ * under "All projects" (`applyRequestsFilter` below never excludes it except
+ * when a specific project is chosen).
+ *
+ * One option per distinct `projectId`, labelled with whichever row's `title`
+ * is encountered first — `rows` is newest-created-first
+ * (`listAllRequestRows`'s own `ORDER BY`), so the first sighting of a given
+ * project is always its newest submission, and that submission's `title` is
+ * already `project?.name ?? titleFromOutcome(...)` — the identical value
+ * `projectTitleFromNewest` (`routes/leads.ts`) would derive from the same
+ * project and its own newest submission. An *unnamed* project's members can
+ * each carry a different derived `title` (every submission derives its own
+ * from its own `outcome`), so picking any other member's title here would
+ * still be a defensible label, just not the one this codebase's other
+ * project-title call sites already converge on.
+ *
+ * Sorted alphabetically by label, the same reasoning `buildClientOptions`
+ * gives for doing the same.
+ */
+function buildProjectOptions(rows: RequestRow[]): FilterOption[] {
+  const seen = new Map<string, FilterOption>()
+  for (const row of rows) {
+    if (!row.projectId) continue
+    if (!seen.has(row.projectId)) {
+      seen.set(row.projectId, { value: row.projectId, label: row.title })
+    }
+  }
+  return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label))
+}
+
+/** `""`/`null` both mean "All …"; anything else is trimmed and returned
+ * verbatim — see `resolveRequestsFilter`'s own doc comment for why `client`
+ * stops here (honoured even when it names nobody) while `project` (below)
+ * goes on to a second, scoping check. */
+function trimmedOrNull(raw: string | null): string | null {
+  if (raw === null) return null
+  const trimmed = raw.trim()
+  return trimmed === "" ? null : trimmed
+}
+
+/** `project` only: `null` unless `raw` names one of `options` — see
+ * `resolveRequestsFilter`'s own doc comment for why `client` does not go
+ * through this same check. */
+function validatedProject(options: FilterOption[], raw: string | null): string | null {
+  const trimmed = trimmedOrNull(raw)
+  if (trimmed === null) return null
+  return options.some((option) => option.value === trimmed) ? trimmed : null
+}
+
+/**
+ * Resolves the raw `?client=`/`?project=` query values into a filter the
+ * rest of this route trusts — never the unchecked strings themselves.
+ *
+ * `client` is honoured verbatim (trimmed, `""`/absent -> `null`, "All
+ * clients"), even when it names nobody on `clientOptions` — a stale
+ * bookmark, or an address whose last submission was reassigned away. That is
+ * deliberate, not an oversight: issue #323 asks for "a sentence naming the
+ * filter that produced it" on an empty result, e.g. "No requests for
+ * ops@northfield-systems.example" — silently discarding an unrecognised
+ * `client` back to "All clients" would make that sentence unreachable
+ * (`applyRequestsFilter` would show every row instead of naming the filter
+ * that matched none of them), the same "malformed input still gets an
+ * honest answer, not a guess at what the caller meant" posture the rest of
+ * this file already takes for a submission id that names nothing
+ * (`leadsNotFound()`), just answered here with a sentence instead of a 404.
+ *
+ * `project`, by contrast, IS re-validated — against `client`'s *own* project
+ * options, not the unscoped list — because issue #323 states its contract
+ * explicitly: picking a client "resets the project selection rather than
+ * leaving a now-impossible pair selected". A `?client=`/`?project=` pair
+ * from before the operator switched clients (the single `<form>` in
+ * `requestsFilterForm` submits both selects together, so changing one still
+ * resubmits whatever the other was previously set to) is corrected here —
+ * dropped back to "All projects" — rather than compounding into an even
+ * less legible empty result ("No requests for A · B" when B was never A's
+ * project to begin with).
+ */
+export function resolveRequestsFilter(
+  rows: RequestRow[],
+  rawClient: string | null,
+  rawProject: string | null,
+): RequestsFilter {
+  const clientOptions = buildClientOptions(rows)
+  const client = trimmedOrNull(rawClient)
+
+  const projectOptions = buildProjectOptions(rowsForClient(rows, client))
+  const project = validatedProject(projectOptions, rawProject)
+
+  return { client, project, clientOptions, projectOptions }
+}
+
+/** The rows this filter actually selects — `rows` unchanged under "All
+ * clients" + "All projects", the current behaviour issue #323 requires as
+ * the default. */
+export function applyRequestsFilter(rows: RequestRow[], filter: RequestsFilter): RequestRow[] {
+  const byClient = rowsForClient(rows, filter.client)
+  if (filter.project === null) return byClient
+  return byClient.filter((row) => row.projectId === filter.project)
+}
+
+function requestsPage(
+  operator: Operator,
+  allRows: RequestRow[],
+  visibleRows: RequestRow[],
+  filter: RequestsFilter,
+): string {
   return `${operatorTopbar(operator.email, "requests")}
 <main>
   <div class="page-head">
     <h1>Requests</h1>
   </div>
   <p class="lede">Every submission the portal holds, across every customer, most recently created first — the operator-wide counterpart to a customer's own <code>/submissions</code>.</p>
-  ${rows.length > 0 ? requestsList(rows) : emptyRequests()}
+  ${allRows.length > 0 ? requestsFilterForm(filter) : ""}
+  ${visibleRows.length > 0 ? requestsList(visibleRows) : emptyRequests(filter)}
 </main>`
+}
+
+/**
+ * Issue #323's two dependent `<select>`s, in one plain `GET` form — no
+ * script, matching every other control this portal ships (see e.g.
+ * `render.ts`'s `accountMenu()` doc comment on the zero-JS disclosure
+ * convention this codebase holds to throughout). Submitting reloads
+ * `/requests?client=…&project=…`, which is also what makes the current
+ * selection survive a reload: the query string *is* the state, read back by
+ * `resolveRequestsFilter` above.
+ *
+ * The Project field renders only when `filter.projectOptions` has more than
+ * one entry — the operator's own framing, quoted in the issue: "show it if
+ * more than 1". Hiding it (rather than disabling it, or rendering it with
+ * one inert option) also means a submit made while it is hidden carries no
+ * `project` field at all, which is one more way an impossible pair cannot
+ * survive a client change: the moment a client narrows the project options
+ * down to one or none, the very next submit drops `project` from the
+ * request entirely.
+ */
+function requestsFilterForm(filter: RequestsFilter): string {
+  const clientField = `    <div class="field">
+      <label for="requests-filter-client">Client</label>
+      <select id="requests-filter-client" name="client" data-testid="requests-filter-client">
+        <option value=""${filter.client === null ? " selected" : ""}>All clients</option>
+${filter.clientOptions.map((option) => filterOptionTag(option, filter.client)).join("\n")}
+      </select>
+    </div>`
+
+  const projectField =
+    filter.projectOptions.length > 1
+      ? `    <div class="field">
+      <label for="requests-filter-project">Project</label>
+      <select id="requests-filter-project" name="project" data-testid="requests-filter-project">
+        <option value=""${filter.project === null ? " selected" : ""}>All projects</option>
+${filter.projectOptions.map((option) => filterOptionTag(option, filter.project)).join("\n")}
+      </select>
+    </div>`
+      : ""
+
+  return `  <form class="requests-filter" method="GET" action="/requests" data-testid="requests-filter-form">
+${clientField}
+${projectField}
+    <button type="submit" class="secondary" data-testid="requests-filter-submit">Filter</button>
+  </form>`
+}
+
+function filterOptionTag(option: FilterOption, selected: string | null): string {
+  return `        <option value="${escapeHtml(option.value)}"${option.value === selected ? " selected" : ""}>${escapeHtml(option.label)}</option>`
 }
 
 function requestsList(rows: RequestRow[]): string {
@@ -344,9 +599,37 @@ ${rows.map(requestRow).join("\n")}
   </ul>`
 }
 
-/** Mirrors `routes/leads.ts`'s `emptyInbox()` — present instead of the list, never alongside it. */
-function emptyRequests(): string {
-  return `<p class="lede" data-testid="requests-list-empty">Nothing submitted yet.</p>`
+/**
+ * Mirrors `routes/leads.ts`'s `emptyInbox()` — present instead of the list,
+ * never alongside it. Issue #323: once a client and/or project filter is
+ * active, this names the filter that produced the empty result ("No
+ * requests for …") instead of the bare, filter-blind "Nothing submitted
+ * yet." — which is preserved unchanged for the actual zero-submissions
+ * case, since `requestsPage` above never renders the filter form (and so
+ * never an active filter) when `allRows` is empty.
+ */
+function emptyRequests(filter: RequestsFilter): string {
+  const parts: string[] = []
+  if (filter.client !== null) {
+    // Falls back to the raw filter value itself when it names no known
+    // option — `resolveRequestsFilter` deliberately honours an
+    // unrecognised `client` rather than discarding it (see that function's
+    // own doc comment), so the sentence still names exactly what the
+    // operator filtered by, "the address is the honest label" the same way
+    // `clientOptionLabel` already is for a row with none at all.
+    const option = filter.clientOptions.find((candidate) => candidate.value === filter.client)
+    parts.push(option?.label ?? filter.client)
+  }
+  if (filter.project !== null) {
+    // Unlike `client` above, `project` is always a member of
+    // `filter.projectOptions` by construction (`resolveRequestsFilter`
+    // validates it) — the fallback here is defensive only.
+    const option = filter.projectOptions.find((candidate) => candidate.value === filter.project)
+    parts.push(option?.label ?? filter.project)
+  }
+
+  const message = parts.length > 0 ? `No requests for ${parts.join(" · ")}.` : "Nothing submitted yet."
+  return `<p class="lede" data-testid="requests-list-empty">${escapeHtml(message)}</p>`
 }
 
 function requestRow(row: RequestRow): string {

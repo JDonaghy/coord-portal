@@ -395,12 +395,12 @@ const APP_STYLES = `
   .field { display: grid; gap: 0.4rem; }
   .field label { font-weight: 600; font-size: var(--step--1); color: var(--text); }
   .field .hint { color: var(--text-faint); font-size: var(--step--1); font-weight: 400; }
-  .field textarea, .field input[type="text"], .field input[type="email"], .field input[type="tel"] {
+  .field textarea, .field input[type="text"], .field input[type="email"], .field input[type="tel"], .field select {
     font: inherit; padding: 0.65rem 0.75rem; border-radius: var(--r-md);
     border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
     resize: vertical;
   }
-  .field textarea:focus, .field input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .field textarea:focus, .field input:focus, .field select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   /* account-email (issue #131) — the one read-only field this portal
      renders: it is the caller's own Access identity, not something this form
      can change (see src/routes/account.ts). Visually distinct so "you can't
@@ -888,6 +888,18 @@ const APP_STYLES = `
      outbox rows. Same row shape as .lead-row, reuses .status-pill (already
      generic across every SubmissionStatus) rather than inventing a second
      pill component for the identical vocabulary. */
+  /* Issue #323's client/project filter — requestsFilterForm() in
+     routes/requests.ts. A plain GET form, no script; the two <select>s
+     (styled via the shared .field select rule above) sit ahead of the list
+     with the submit button trailing them, and the whole row wraps on a
+     narrow viewport rather than clipping, the same flex-wrap treatment
+     .request-row's own row-side already uses below. */
+  form.requests-filter {
+    display: flex; align-items: flex-end; gap: 1rem; flex-wrap: wrap;
+    margin-bottom: 1.5rem; padding-bottom: 1.25rem; border-bottom: 1px solid var(--line);
+  }
+  form.requests-filter .field { min-width: 12rem; gap: 0.3rem; }
+  form.requests-filter .field label { font-size: var(--step--1); }
   ul.requests-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
   .request-row {
     display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;

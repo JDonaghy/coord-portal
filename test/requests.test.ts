@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest"
 
 import type { CoordOutboundDraft } from "../src/coordOutboundDrafts"
-import { draftConsequence, matchRequestsPath, titleFromOutcome } from "../src/routes/requests"
+import {
+  applyRequestsFilter,
+  draftConsequence,
+  matchRequestsPath,
+  NO_CLIENT_EMAIL_KEY,
+  resolveRequestsFilter,
+  titleFromOutcome,
+  type RequestRow,
+} from "../src/routes/requests"
 
 /**
  * Unit coverage for issue #316's fix to `titleFromOutcome`
@@ -176,5 +184,172 @@ describe("draftConsequence — issue #318's on-screen consequence text", () => {
     expect(draftConsequence(draft("status", {}))).toBe(
       "Approving this only changes what the portal shows. No email is sent.",
     )
+  })
+})
+
+/**
+ * Unit coverage for issue #323's client/project filter — the pure
+ * derivations `resolveRequestsFilter` and `applyRequestsFilter`
+ * (`src/routes/requests.ts`), which take and return plain `RequestRow[]` so
+ * this file can fabricate rows directly rather than exercising
+ * `listAllRequestRows`'s D1 query. Black-box coverage that the `<select>`s
+ * actually render, submit and round-trip through a reload lives in
+ * `e2e/requests.spec.ts`, per this repo's testing tiers — this file pins
+ * only the filtering and option-building decisions themselves, the same
+ * split `titleFromOutcome`'s own coverage above already draws.
+ *
+ * Every address and project id below is invented, on the reserved
+ * `example.test` TLD (CLAUDE.md rule 1) — this file has no D1 to seed
+ * against, but the convention is worth keeping regardless.
+ */
+function row(overrides: Partial<RequestRow> & Pick<RequestRow, "id" | "reference" | "title">): RequestRow {
+  return {
+    customerEmail: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    display: "describing",
+    round: null,
+    projectId: null,
+    ...overrides,
+  }
+}
+
+describe("resolveRequestsFilter — issue #323's client and project options", () => {
+  it("defaults to 'All clients'/'All projects' when nothing is on the query string", () => {
+    const rows = [
+      row({ id: "1", reference: "SUB-000001", title: "A", customerEmail: "alice@example.test" }),
+      row({ id: "2", reference: "SUB-000002", title: "B", customerEmail: "bob@example.test" }),
+    ]
+    const filter = resolveRequestsFilter(rows, null, null)
+    expect(filter.client).toBeNull()
+    expect(filter.project).toBeNull()
+  })
+
+  it("lists every client with at least one submission, sorted by label, 'All clients' still separate", () => {
+    const rows = [
+      row({ id: "1", reference: "SUB-000001", title: "A", customerEmail: "Carol@example.test" }),
+      row({ id: "2", reference: "SUB-000002", title: "B", customerEmail: "alice@example.test" }),
+      // A repeat customer contributes no second option.
+      row({ id: "3", reference: "SUB-000003", title: "C", customerEmail: "alice@example.test" }),
+      row({ id: "4", reference: "SUB-000004", title: "D", customerEmail: "Bob@example.test" }),
+    ]
+    const filter = resolveRequestsFilter(rows, null, null)
+    expect(filter.clientOptions.map((option) => option.label)).toEqual([
+      "alice@example.test",
+      "Bob@example.test",
+      "Carol@example.test",
+    ])
+  })
+
+  it("gives a row with no customer_email its own 'no email on file' client option", () => {
+    const rows = [
+      row({ id: "1", reference: "SUB-000001", title: "A", customerEmail: null }),
+      row({ id: "2", reference: "SUB-000002", title: "B", customerEmail: "alice@example.test" }),
+    ]
+    const filter = resolveRequestsFilter(rows, null, null)
+    expect(filter.clientOptions).toContainEqual({ value: NO_CLIENT_EMAIL_KEY, label: "no email on file" })
+
+    const selected = resolveRequestsFilter(rows, NO_CLIENT_EMAIL_KEY, null)
+    expect(selected.client).toBe(NO_CLIENT_EMAIL_KEY)
+    expect(applyRequestsFilter(rows, selected).map((r) => r.id)).toEqual(["1"])
+  })
+
+  it("with 'All clients' chosen, lists every project across every client", () => {
+    const rows = [
+      row({ id: "1", reference: "SUB-000001", title: "Alpha", customerEmail: "alice@example.test", projectId: "proj_a" }),
+      row({ id: "2", reference: "SUB-000002", title: "Beta", customerEmail: "bob@example.test", projectId: "proj_b" }),
+    ]
+    const filter = resolveRequestsFilter(rows, null, null)
+    expect(filter.projectOptions.map((option) => option.value).sort()).toEqual(["proj_a", "proj_b"])
+  })
+
+  it("picking a client narrows the project list to that client's own projects", () => {
+    const rows = [
+      row({ id: "1", reference: "SUB-000001", title: "Alpha", customerEmail: "alice@example.test", projectId: "proj_a" }),
+      row({ id: "2", reference: "SUB-000002", title: "Beta", customerEmail: "bob@example.test", projectId: "proj_b" }),
+    ]
+    const filter = resolveRequestsFilter(rows, "alice@example.test", null)
+    expect(filter.projectOptions).toEqual([{ value: "proj_a", label: "Alpha" }])
+  })
+
+  it("labels a project option with its newest submission's title, for an unnamed project's several members", () => {
+    // rows are newest-created-first, the same order listAllRequestRows's own
+    // `ORDER BY created_at DESC` produces — the first sighting of a project
+    // id is therefore always its newest submission.
+    const rows = [
+      row({ id: "2", reference: "SUB-000002", title: "Newest outcome line", customerEmail: "alice@example.test", projectId: "proj_a" }),
+      row({ id: "1", reference: "SUB-000001", title: "Older outcome line", customerEmail: "alice@example.test", projectId: "proj_a" }),
+    ]
+    const filter = resolveRequestsFilter(rows, null, null)
+    expect(filter.projectOptions).toEqual([{ value: "proj_a", label: "Newest outcome line" }])
+  })
+
+  it("honours an unrecognised client verbatim rather than silently discarding the filter", () => {
+    // Deliberately not reset to "All clients": issue #323's empty-result
+    // sentence ("No requests for …") needs a real, honoured filter value to
+    // name — see `resolveRequestsFilter`'s own doc comment for why this is
+    // the one field that is not validated against its own option list.
+    const rows = [row({ id: "1", reference: "SUB-000001", title: "A", customerEmail: "alice@example.test" })]
+    const filter = resolveRequestsFilter(rows, "stranger@example.test", null)
+    expect(filter.client).toBe("stranger@example.test")
+    expect(applyRequestsFilter(rows, filter)).toEqual([])
+  })
+
+  it("resets a now-impossible client/project pair rather than leaving it selected", () => {
+    const rows = [
+      row({ id: "1", reference: "SUB-000001", title: "Alpha", customerEmail: "alice@example.test", projectId: "proj_a" }),
+      row({ id: "2", reference: "SUB-000002", title: "Beta", customerEmail: "bob@example.test", projectId: "proj_b" }),
+    ]
+    // proj_b belongs to bob, not alice — switching the client filter to
+    // alice while a stale ?project=proj_b survives on the query string (the
+    // single <form> resubmits both selects together) must not silently
+    // filter to zero rows.
+    const filter = resolveRequestsFilter(rows, "alice@example.test", "proj_b")
+    expect(filter.client).toBe("alice@example.test")
+    expect(filter.project).toBeNull()
+  })
+
+  it("hides down to a single project option once a client is picked whose rows share one project", () => {
+    const rows = [
+      row({ id: "1", reference: "SUB-000001", title: "Alpha", customerEmail: "alice@example.test", projectId: "proj_a" }),
+      row({ id: "2", reference: "SUB-000002", title: "Alpha follow-up", customerEmail: "alice@example.test", projectId: "proj_a" }),
+    ]
+    const filter = resolveRequestsFilter(rows, "alice@example.test", null)
+    // requestsFilterForm only renders the <select> once this exceeds 1 — see
+    // that function's own doc comment.
+    expect(filter.projectOptions).toHaveLength(1)
+  })
+
+  it("contributes no project option for a client whose submissions have no project at all", () => {
+    const rows = [row({ id: "1", reference: "SUB-000001", title: "A", customerEmail: "alice@example.test", projectId: null })]
+    const filter = resolveRequestsFilter(rows, "alice@example.test", null)
+    expect(filter.projectOptions).toEqual([])
+  })
+})
+
+describe("applyRequestsFilter — issue #323", () => {
+  const rows = [
+    row({ id: "1", reference: "SUB-000001", title: "Alpha", customerEmail: "alice@example.test", projectId: "proj_a" }),
+    row({ id: "2", reference: "SUB-000002", title: "Loose", customerEmail: "alice@example.test", projectId: null }),
+    row({ id: "3", reference: "SUB-000003", title: "Beta", customerEmail: "bob@example.test", projectId: "proj_b" }),
+  ]
+
+  it("returns every row unchanged for 'All clients' + 'All projects' — today's behaviour, exactly", () => {
+    const filter = resolveRequestsFilter(rows, null, null)
+    expect(applyRequestsFilter(rows, filter)).toEqual(rows)
+  })
+
+  it("narrows to one client's rows, project-less rows included", () => {
+    const filter = resolveRequestsFilter(rows, "alice@example.test", null)
+    expect(applyRequestsFilter(rows, filter).map((r) => r.id)).toEqual(["1", "2"])
+  })
+
+  it("narrows to one project's rows, excluding that client's project-less rows", () => {
+    const filter = resolveRequestsFilter(rows, "alice@example.test", "proj_a")
+    expect(applyRequestsFilter(rows, filter).map((r) => r.id)).toEqual(["1"])
+  })
+
+  it("narrows to one project across 'All clients' too", () => {
+    const filter = resolveRequestsFilter(rows, null, "proj_b")
+    expect(applyRequestsFilter(rows, filter).map((r) => r.id)).toEqual(["3"])
   })
 })
