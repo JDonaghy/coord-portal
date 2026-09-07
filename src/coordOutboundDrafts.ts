@@ -14,16 +14,24 @@ import type { Env } from "./types"
  * `src/routes/requests.ts` for the two sides that call this module.
  *
  * `applyOutboundDraftsPush` handles coord's own half — asserting what is
- * currently queued, on every poll tick. `approveOutboundDraft` /
- * `rejectOutboundDraft` handle the operator's: a decision, guarded to a row
- * that is still `pending`, exactly the same one-way guard
+ * currently queued, on every poll tick. `approveOutboundDraftStatement` /
+ * `rejectOutboundDraftStatement` handle the operator's: a decision, guarded to
+ * a row that is still `pending`, exactly the same one-way guard
  * `approveReplyDraft` / `discardReplyDraft` (`src/notifications.ts`) already
- * apply to a portal-drafted reply. The verdict itself reaches coord over
- * `bridge_events` — see `src/bridge/events.ts`'s `outbound_draft.approved` /
- * `outbound_draft.rejected`, appended by the two route handlers in
- * `src/routes/requests.ts`, not by this module: appending an event is a
- * decision about the wire contract, and this module's own job stops at "did
- * the write land".
+ * apply to a portal-drafted reply.
+ *
+ * Both are statement-returning, not executing — mirroring
+ * `appendEventStatement` itself (`src/bridge/events.ts`) — because the verdict
+ * that reaches coord over `bridge_events` (`outbound_draft.approved` /
+ * `outbound_draft.rejected`) and the decision recorded here must land in the
+ * same `env.DB.batch()` or not at all. A draft decided but never announced is
+ * a message coord waits on forever; an event announcing a decision that never
+ * actually committed is a lie on the pull stream. `src/routes/requests.ts`'s
+ * `postRequestDraftApprove` / `postRequestDraftReject` batch the two
+ * together, the same all-or-nothing pairing `confirmRelayedAnswer`
+ * (`src/questions.ts`) already establishes for exactly this situation —
+ * appending the event itself is still that route's decision to make, this
+ * module's job stops at handing back a guarded statement.
  */
 
 export const COORD_OUTBOUND_DRAFT_KINDS = [
@@ -135,52 +143,40 @@ function parseFields(raw: string): Record<string, string> {
 }
 
 /**
- * **Approve & send** — records the operator's edited text and flips the gate
- * in the same guarded statement, so a double-click or a second tab converges
- * on one decision. Returns the approved draft (with `fields` replaced by what
- * the operator actually approved) on success, `null` if the row was not
- * `pending` any more.
+ * **Approve & send** — the statement that records the operator's edited text
+ * and flips the gate, guarded to a row that is still `pending` so a
+ * double-click or a second tab that lost the race converges on one decision
+ * rather than two. Returned, not run: the caller (`postRequestDraftApprove`,
+ * `src/routes/requests.ts`) batches this alongside the guarded
+ * `outbound_draft.approved` event append, so the decision and the only way
+ * coord ever learns of it either both land or neither does. See this module's
+ * own doc comment above for why that pairing cannot be two separate
+ * round trips.
  */
-export async function approveOutboundDraft(
+export function approveOutboundDraftStatement(
   env: Env,
   id: string,
   editedFields: Record<string, string>,
   decidedBy: string,
-): Promise<CoordOutboundDraft | null> {
-  const draft = await getPendingOutboundDraft(env, id)
-  if (draft === null) return null
-
-  const result = await env.DB.prepare(
+): D1PreparedStatement {
+  return env.DB.prepare(
     `UPDATE coord_outbound_drafts
         SET state = 'approved', decided_at = ?, decided_by = ?, edited_fields = ?
       WHERE id = ? AND state = 'pending'`,
-  )
-    .bind(new Date().toISOString(), decidedBy, JSON.stringify(editedFields), id)
-    .run()
-
-  if ((result.meta.changes ?? 0) !== 1) return null
-  return { ...draft, fields: editedFields }
+  ).bind(new Date().toISOString(), decidedBy, JSON.stringify(editedFields), id)
 }
 
-/** **Reject** — terminal, never reaches coord as anything but "discard this one". */
-export async function rejectOutboundDraft(
-  env: Env,
-  id: string,
-  decidedBy: string,
-): Promise<CoordOutboundDraft | null> {
-  const draft = await getPendingOutboundDraft(env, id)
-  if (draft === null) return null
-
-  const result = await env.DB.prepare(
+/**
+ * **Reject** — terminal, never reaches coord as anything but "discard this
+ * one". Same statement-returning, batch-with-the-event shape as
+ * `approveOutboundDraftStatement` above, for the same reason.
+ */
+export function rejectOutboundDraftStatement(env: Env, id: string, decidedBy: string): D1PreparedStatement {
+  return env.DB.prepare(
     `UPDATE coord_outbound_drafts
         SET state = 'rejected', decided_at = ?, decided_by = ?
       WHERE id = ? AND state = 'pending'`,
-  )
-    .bind(new Date().toISOString(), decidedBy, id)
-    .run()
-
-  if ((result.meta.changes ?? 0) !== 1) return null
-  return draft
+  ).bind(new Date().toISOString(), decidedBy, id)
 }
 
 // ── COORD'S OWN HALF: `POST /api/bridge/outbound-drafts` ────────────────────

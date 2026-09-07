@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
-import { matchRequestsPath, titleFromOutcome } from "../src/routes/requests"
+import type { CoordOutboundDraft } from "../src/coordOutboundDrafts"
+import { draftConsequence, matchRequestsPath, titleFromOutcome } from "../src/routes/requests"
 
 /**
  * Unit coverage for issue #316's fix to `titleFromOutcome`
@@ -114,5 +115,66 @@ describe("matchRequestsPath — issue #318's draft actions", () => {
     ]) {
       expect(matchRequestsPath(pathname), pathname).toBeNull()
     }
+  })
+})
+
+/**
+ * Regression coverage for a review finding on issue #318:
+ * `draftConsequence` used to key its "emails the customer" text off
+ * `kind === "status"` alone, which is wrong for 5 of the 9 possible `status`
+ * values — `src/notifications.ts`'s own `TYPE_FOR_STATUS` map sends an email
+ * only for `awaiting-signoff`, `needs-input`, `shipped` and `quality-check`.
+ * A `status` draft queued with e.g. `in-progress` would have rendered "this
+ * emails the customer" even though approving it sends nothing — backwards
+ * from issue #318's own stated goal of letting an operator tell "this
+ * reaches her inbox" from "this only changes what the portal shows". This
+ * pins the fix: the text now follows `sendTypeForStatus`, not the kind alone.
+ */
+function draft(kind: CoordOutboundDraft["kind"], fields: Record<string, string>): CoordOutboundDraft {
+  return {
+    id: "draft_xyz",
+    submissionReference: "SUB-000000",
+    kind,
+    fields,
+    queuedAt: "2026-01-01T00:00:00.000Z",
+  }
+}
+
+describe("draftConsequence — issue #318's on-screen consequence text", () => {
+  it("says a status draft emails the customer when the status value actually sends", () => {
+    for (const status of ["awaiting-signoff", "needs-input", "shipped", "quality-check"]) {
+      expect(draftConsequence(draft("status", { status }))).toBe(
+        "Approving this emails the customer — the only kind of coord message that does.",
+      )
+    }
+  })
+
+  it("says a status draft does not email the customer for a non-sending status value", () => {
+    for (const status of ["describing", "in-design", "planned", "in-progress", "on-hold"]) {
+      expect(draftConsequence(draft("status", { status }))).toBe(
+        "Approving this only changes what the portal shows. No email is sent.",
+      )
+    }
+  })
+
+  it("says no email is sent for every non-status kind, regardless of fields", () => {
+    expect(draftConsequence(draft("design_round", { outcome_definition: "x" }))).toBe(
+      "Approving this only changes what the portal shows. No email is sent.",
+    )
+    expect(draftConsequence(draft("question", { question: "x" }))).toBe(
+      "Approving this only changes what the portal shows. No email is sent.",
+    )
+    expect(draftConsequence(draft("relayed_answer", { answer: "x" }))).toBe(
+      "Approving this only changes what the portal shows. No email is sent.",
+    )
+    expect(draftConsequence(draft("preview", { preview_url: "https://example.test/preview" }))).toBe(
+      "Approving this only changes what the portal shows. No email is sent.",
+    )
+  })
+
+  it("treats a status draft with no status field as not sending, rather than throwing", () => {
+    expect(draftConsequence(draft("status", {}))).toBe(
+      "Approving this only changes what the portal shows. No email is sent.",
+    )
   })
 })

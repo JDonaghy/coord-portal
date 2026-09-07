@@ -23,8 +23,9 @@ import { expect, test, type APIRequestContext, type Browser, type Page } from "@
  *   1. a coord-owned draft queued against a submission renders on
  *      `/requests/:id`, with its kind, the submission it belongs to, when it
  *      was queued, and its editable text;
- *   2. the screen states what approving causes — a `status` draft says it
- *      emails the customer, every other kind says it does not;
+ *   2. the screen states what approving causes — a `status` draft whose
+ *      status value actually sends an email says so, a `status` draft whose
+ *      value does not (and every non-`status` kind) says it does not;
  *   3. approving sends **the edited text**, not what coord originally
  *      queued, back to coord as an `outbound_draft.approved` event on the
  *      existing pull stream;
@@ -237,7 +238,7 @@ test("a queued design-round draft renders on /requests/:id, edits are what coord
   await expect(operator.getByTestId("outbound-draft")).toHaveCount(0)
 })
 
-test("a queued status draft says it emails the customer; rejecting produces no approval event", async ({
+test("a queued status draft says it emails the customer only when the status value actually sends; rejecting produces no approval event", async ({
   browser,
   baseURL,
   request,
@@ -249,12 +250,18 @@ test("a queued status draft says it emails the customer; rejecting produces no a
   await customerContext.close()
 
   const id = draftId()
+  // "awaiting-signoff" is one of the four status values
+  // (`sendTypeForStatus`, `src/notifications.ts`) that actually emails the
+  // customer — the other five (e.g. `in-progress`, exercised below) do not,
+  // even though every one of them is a `status`-kind draft. Issue #318's own
+  // requirement is that the screen tell those two cases apart, not just key
+  // off the draft's kind.
   await pushDrafts(request, [
     {
       id,
       submission_id: seeded.reference,
       kind: "status",
-      fields: { status: "in-progress" },
+      fields: { status: "awaiting-signoff" },
       queued_at: new Date().toISOString(),
     },
   ])
@@ -272,6 +279,35 @@ test("a queued status draft says it emails the customer; rejecting produces no a
   const events = (await collectFrom(request, start)).filter((e) => e.submission_id === seeded.reference)
   expect(events).toHaveLength(1)
   expect(events[0]).toMatchObject({ type: "outbound_draft.rejected", payload: { draft_id: id, kind: "status" } })
+})
+
+test("a queued status draft with a non-sending status value says no email is sent", async ({
+  browser,
+  baseURL,
+  request,
+}) => {
+  const operator = await operatorPage(browser, baseURL)
+  const customerContext = await browser.newContext({ baseURL })
+  const customer = await customerContext.newPage()
+  const seeded = await fileRequest(customer, uniqueEmail("e2e-outbound-status-quiet"))
+  await customerContext.close()
+
+  const id = draftId()
+  await pushDrafts(request, [
+    {
+      id,
+      submission_id: seeded.reference,
+      kind: "status",
+      fields: { status: "in-progress" },
+      queued_at: new Date().toISOString(),
+    },
+  ])
+
+  await operator.goto(`/requests/${seeded.id}`)
+  const card = operator.getByTestId("outbound-draft")
+  await expect(card.getByTestId("outbound-draft-consequence")).toHaveText(
+    "Approving this only changes what the portal shows. No email is sent.",
+  )
 })
 
 test("a stranger, the owning customer, and nobody all get the same indistinguishable 404 on both draft actions", async ({

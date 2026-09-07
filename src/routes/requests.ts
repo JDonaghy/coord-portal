@@ -1,12 +1,13 @@
 import { appendEventStatement } from "../bridge/events"
 import {
-  approveOutboundDraft,
+  approveOutboundDraftStatement,
   listPendingOutboundDrafts,
-  rejectOutboundDraft,
+  rejectOutboundDraftStatement,
   type CoordOutboundDraft,
   type CoordOutboundDraftKind,
 } from "../coordOutboundDrafts"
 import { parseFormData } from "../formData"
+import { sendTypeForStatus } from "../notifications"
 import { readOperator, type Operator } from "../operators"
 import { recordOperatorRead } from "../operatorAccess"
 import { getProjectsByIds } from "../projects"
@@ -146,8 +147,14 @@ import { isFormContentType } from "./submission"
  * operator actually edited back to coord as an `outbound_draft.approved`
  * event on the existing `bridge_events` stream (`GET /api/bridge/pull`) —
  * never a route coord calls to push a decision at; the bridge stays
- * outbound-only in both directions. See `src/coordOutboundDrafts.ts` and
- * `src/bridge/events.ts` for the rest of the seam.
+ * outbound-only in both directions. The decision write
+ * (`approveOutboundDraftStatement`/`rejectOutboundDraftStatement`) and that
+ * event append share one `env.DB.batch()`, guarded together, the same
+ * all-or-nothing pairing `confirmRelayedAnswer` (`src/questions.ts`) uses —
+ * a decision recorded with no event ever announcing it is indistinguishable
+ * from coord's side to a message that simply never got sent. See
+ * `src/coordOutboundDrafts.ts` and `src/bridge/events.ts` for the rest of the
+ * seam.
  */
 export async function requestsInbox(request: Request, env: Env): Promise<Response> {
   const operator = await readOperator(request, env)
@@ -559,6 +566,18 @@ async function draftForSubmission(
  * `pending`, or not this submission's own is a guarded no-op — a 303 back to
  * the screen an operator was already looking at, never an error for a
  * double-click or a second tab that lost a race.
+ *
+ * The decision write and the `outbound_draft.approved` event append are one
+ * `env.DB.batch()`, not two separately-awaited round trips — the same
+ * all-or-nothing pairing `confirmRelayedAnswer` (`src/questions.ts`)
+ * establishes for exactly this situation. Both statements share the identical
+ * `WHERE …state = 'pending'` guard, evaluated atomically inside the batch's
+ * own transaction: either the draft is still pending, in which case both the
+ * event lands and the state flips, or it is not, in which case neither
+ * happens. A transient D1 error or a mid-flight interruption can no longer
+ * leave a decided draft with no event ever announcing it — the failure mode
+ * that made the verdict unrecoverable and the message coord was waiting to
+ * send never go out.
  */
 export async function postRequestDraftApprove(
   request: Request,
@@ -586,18 +605,22 @@ export async function postRequestDraftApprove(
     editedFields[key] = typeof raw === "string" ? raw : (pending.fields[key] ?? "")
   }
 
-  const approved = await approveOutboundDraft(env, draftId, editedFields, operator.email)
-  if (approved !== null) {
-    // Coord's own half: apply this text to the row before sending. No
-    // guard needed here beyond what `approveOutboundDraft` already proved —
-    // this event only exists because that guarded UPDATE just won.
-    await appendEventStatement(env, {
-      type: "outbound_draft.approved",
-      submissionReference: approved.submissionReference,
-      occurredAt: new Date().toISOString(),
-      payload: { draft_id: approved.id, kind: approved.kind, fields: approved.fields },
-    }).run()
-  }
+  await env.DB.batch([
+    appendEventStatement(
+      env,
+      {
+        type: "outbound_draft.approved",
+        submissionReference: pending.submissionReference,
+        occurredAt: new Date().toISOString(),
+        payload: { draft_id: pending.id, kind: pending.kind, fields: editedFields },
+      },
+      {
+        clause: `WHERE EXISTS (SELECT 1 FROM coord_outbound_drafts WHERE id = ? AND state = 'pending')`,
+        bindings: [draftId],
+      },
+    ),
+    approveOutboundDraftStatement(env, draftId, editedFields, operator.email),
+  ])
 
   return backToRequest(submission.id)
 }
@@ -607,6 +630,11 @@ export async function postRequestDraftApprove(
  * guard shape as approve above; no form fields are read beyond the same
  * content-type check every write on this surface applies, matching
  * `postReplyDiscard`'s own "carries nothing but its button" convention.
+ *
+ * Same batched, co-guarded decision-plus-event pairing as
+ * `postRequestDraftApprove` above, for the identical reason: a rejection that
+ * committed with no `outbound_draft.rejected` event ever reaching coord would
+ * leave coord waiting on a draft the portal already considers closed.
  */
 export async function postRequestDraftReject(
   request: Request,
@@ -627,15 +655,22 @@ export async function postRequestDraftReject(
   const pending = await draftForSubmission(env, submission, draftId)
   if (pending === null) return backToRequest(submission.id)
 
-  const rejected = await rejectOutboundDraft(env, draftId, operator.email)
-  if (rejected !== null) {
-    await appendEventStatement(env, {
-      type: "outbound_draft.rejected",
-      submissionReference: rejected.submissionReference,
-      occurredAt: new Date().toISOString(),
-      payload: { draft_id: rejected.id, kind: rejected.kind },
-    }).run()
-  }
+  await env.DB.batch([
+    appendEventStatement(
+      env,
+      {
+        type: "outbound_draft.rejected",
+        submissionReference: pending.submissionReference,
+        occurredAt: new Date().toISOString(),
+        payload: { draft_id: pending.id, kind: pending.kind },
+      },
+      {
+        clause: `WHERE EXISTS (SELECT 1 FROM coord_outbound_drafts WHERE id = ? AND state = 'pending')`,
+        bindings: [draftId],
+      },
+    ),
+    rejectOutboundDraftStatement(env, draftId, operator.email),
+  ])
 
   return backToRequest(submission.id)
 }
@@ -728,14 +763,22 @@ function draftFieldLabel(key: string): string {
 /**
  * What approving actually causes — issue #318's own requirement, stated on
  * the screen rather than assumed: "an operator can tell 'this reaches her
- * inbox' from 'this only changes what the portal shows'". `status` is the
- * one kind of coord-owned push that emails the customer at all
- * (`recordNotificationForStatus`, `src/bridge/updates.ts` — issue #14's three
- * customer-actionable-or-terminal statuses); every other kind here only ever
- * changes what a screen renders once coord applies it.
+ * inbox' from 'this only changes what the portal shows'".
+ *
+ * `status` is the one *kind* of coord-owned push that can email the customer
+ * at all, but not every `status` value does — `sendTypeForStatus`
+ * (`src/notifications.ts`, its own `TYPE_FOR_STATUS` map) sends only for
+ * `awaiting-signoff`, `needs-input`, `shipped` and `quality-check`; the other
+ * five statuses in the vocabulary (`describing`, `in-design`, `planned`,
+ * `in-progress`, `on-hold`) never call `recordNotificationForStatus` at all.
+ * Gating this text on `kind === "status"` alone would tell an operator
+ * approving an `in-progress` draft that it reaches the customer's inbox when
+ * it does not — exactly backwards from what this screen exists to say. So
+ * this checks the actual `status` field's send type, not just the kind.
  */
-function draftConsequence(kind: CoordOutboundDraftKind): string {
-  return kind === "status"
+export function draftConsequence(draft: CoordOutboundDraft): string {
+  const emails = draft.kind === "status" && sendTypeForStatus(draft.fields.status ?? "") !== null
+  return emails
     ? "Approving this emails the customer — the only kind of coord message that does."
     : "Approving this only changes what the portal shows. No email is sent."
 }
@@ -766,7 +809,7 @@ function outboundDraftCard(submission: Submission, draft: CoordOutboundDraft): s
         <span data-testid="outbound-draft-submission">${escapeHtml(submission.reference)}</span> &middot;
         queued <span data-testid="outbound-draft-queued-at">${escapeHtml(draft.queuedAt)}</span>
       </p>
-      <p class="draft-consequence" data-testid="outbound-draft-consequence">${escapeHtml(draftConsequence(draft.kind))}</p>
+      <p class="draft-consequence" data-testid="outbound-draft-consequence">${escapeHtml(draftConsequence(draft))}</p>
       <form method="POST" action="${action}/approve" data-testid="outbound-draft-approve-form">
 ${fields}
         <div class="actions">
