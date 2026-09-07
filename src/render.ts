@@ -724,6 +724,60 @@ const APP_STYLES = `
      as its own unrelated field in the fieldset's grid. */
   .reassign-new-project-name { margin: 0.25rem 0 0 1.75rem; }
 
+  /* ── The shipped survey (issue #328) ──────────────────────────────────────
+     src/routes/submission.ts's surveySection, rendered next to the shipped
+     screen's existing result link. Same no-JavaScript checkbox-and-label
+     disclosure as .composer-toggle / .reassign-toggle above (see either's
+     comment for the full rationale), its own classes for the same reason
+     .reassign-toggle has its own: a shipped submission has no design round
+     and no reassignment panel on the page for this to accidentally depend
+     on. label.secondary and label.ghost, used by the open and cancel
+     controls here, are already styled generically above — nothing survey-
+     specific needed for either. */
+  .survey-toggle {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  .survey-panel { margin-top: 1rem; }
+  form.survey-form { display: none; }
+  .survey-toggle:checked ~ .survey-panel form.survey-form { display: block; }
+  .survey-toggle:focus-visible ~ .survey-panel .survey-open-button {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  form.survey-form {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1.5rem; margin-top: 1rem;
+  }
+  /* Five real radio buttons, one per label, not a bespoke star widget — see
+     surveyPrompt's own doc comment for why: this is what makes the scale
+     keyboard-operable and screen-reader-readable for free. */
+  fieldset.survey-rating { border: 0; padding: 0; margin: 0 0 1rem; display: grid; gap: 0.5rem; }
+  fieldset.survey-rating legend {
+    font-size: var(--step-0); text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-dim); padding: 0; margin: 0 0 0.5rem;
+  }
+  .survey-rating-option {
+    display: flex; align-items: center; gap: 0.5em; border: 1px solid var(--line-strong);
+    border-radius: var(--r-md); padding: 0.6rem 0.85rem; cursor: pointer;
+  }
+  .survey-comment-field textarea {
+    width: 100%; font: inherit; padding: 0.65rem 0.75rem; border-radius: var(--r-md);
+    border: 1px solid var(--line-strong); background: var(--ground); color: var(--text); resize: vertical;
+  }
+  .survey-form .actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem; }
+  .survey-error {
+    background: var(--fail-wash); color: var(--fail); border: 1px solid var(--fail);
+    border-radius: var(--r-md); padding: 0.75rem 1rem; font-size: var(--step--1);
+    font-weight: 600; margin-bottom: 1rem;
+  }
+  /* The read-back state (surveyResponseCard) — plain text, no button, no
+     edit path. Deliberately not .card: it renders inside the shipped
+     screen's existing result card, not as a second card of its own. */
+  .survey-response { margin-top: 1rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+  .survey-thanks { font-weight: 600; margin: 0 0 0.35rem; }
+  .survey-response-rating { color: var(--text-dim); margin: 0 0 0.35rem; }
+  .survey-response-comment { white-space: pre-wrap; margin: 0; }
+
   /* ── Naming a project after the fact (issue #149) ─────────────────────────
      src/routes/leads.ts's renameProjectSection, on every promoted lead with
      a project. Reuses form.rename-project's shared grid layout above and the
