@@ -59,12 +59,12 @@ interface Seeded {
   reference: string
 }
 
-async function seedSubmission(page: Page, email: string, tag: string): Promise<Seeded> {
+async function seedSubmission(page: Page, email: string, tag: string, outcome?: string): Promise<Seeded> {
   await page.setExtraHTTPHeaders({ "Cf-Access-Authenticated-User-Email": email })
   await page.goto("/intake")
   await page
     .getByTestId("field-outcome")
-    .fill(`A synthetic outcome for e2e requests coverage (${tag}).`)
+    .fill(outcome ?? `A synthetic outcome for e2e requests coverage (${tag}).`)
   await page.getByTestId("field-audience").fill("synthetic e2e readers")
   await page.getByTestId("field-done-definition").fill("The requests e2e suite goes green.")
   await page.getByTestId("submit-intake").click()
@@ -91,6 +91,57 @@ async function push(
   const result = body.results[0]
   if (!result) throw new Error("push produced no result")
   return result
+}
+
+const TURNSTILE_FIELD = "cf-turnstile-response"
+
+/** Waits for the dev Turnstile stand-in to fill itself in — same wait `e2e/leads.spec.ts` and `e2e/project-naming.spec.ts` use. */
+async function settleBotGate(page: Page) {
+  await page.waitForFunction(
+    (field) => {
+      const input = document.querySelector(`input[name="${field}"]`) as HTMLInputElement | null
+      return !!input && input.value.length > 0
+    },
+    TURNSTILE_FIELD,
+    { timeout: 15_000 },
+  )
+}
+
+/**
+ * Promotes a lead through `/start` → `/leads/:id` — issue #129's "the first
+ * project is minted the instant a lead promotes" gives this submission a
+ * project immediately, which is what the naming test below needs: a project
+ * `titleFromOutcome`'s fallback would otherwise be the only thing on offer
+ * for. Same shape `e2e/project-naming.spec.ts`'s own `seedPromotedLead`
+ * uses, duplicated here rather than imported — this repo's `e2e/` specs each
+ * carry their own fixture helpers rather than sharing a file across them.
+ */
+async function seedPromotedLead(
+  browser: Browser,
+  baseURL: string | undefined,
+  operator: Page,
+  summary: string,
+  email: string,
+): Promise<{ reference: string }> {
+  const strangerContext = await contextFor(browser, baseURL, null)
+  const stranger = await strangerContext.newPage()
+  await stranger.goto("/start")
+  await stranger.getByTestId("field-lead-summary").fill(summary)
+  await stranger.getByTestId("field-lead-email").fill(email)
+  await settleBotGate(stranger)
+  await stranger.getByTestId("submit-lead").click()
+  await expect(stranger.getByTestId("lead-receipt")).toBeVisible()
+  await strangerContext.close()
+
+  await operator.goto("/leads")
+  const row = operator.getByTestId("lead-row").filter({ hasText: summary })
+  await row.getByTestId("review-lead").click()
+  await operator.getByTestId("promote-button").click()
+  await expect(operator.getByTestId("lead-detail")).toHaveAttribute("data-status", "promoted")
+  const reference = (await operator.getByTestId("promoted-submission-reference").innerText())
+    .trim()
+    .replace(/^Promoted to submission\s+/, "")
+  return { reference }
 }
 
 function flat(text: string): string {
@@ -216,29 +267,24 @@ test("an email-intake greeting does not become the row's title, and the title is
   const context = await contextFor(browser, baseURL, email)
   const page = await context.newPage()
 
-  await page.setExtraHTTPHeaders({ "Cf-Access-Authenticated-User-Email": email })
-  await page.goto("/intake")
-  await page
-    .getByTestId("field-outcome")
-    .fill(
-      "Hi,\nYour name came up when I was asking around about getting a synthetic project built for e2e coverage.",
-    )
-  await page.getByTestId("field-audience").fill("synthetic e2e readers")
-  await page.getByTestId("field-done-definition").fill("The requests e2e suite goes green.")
-  await page.getByTestId("submit-intake").click()
-  await expect(page.getByTestId("intake-receipt")).toBeVisible()
-  const reference = (await page.getByTestId("submission-reference").innerText())
-    .trim()
-    .replace(/^Reference\s+/, "")
+  // The second line is deliberately kept to 79 characters — at or under
+  // `truncateTitle`'s 80-character threshold (`src/routes/requests.ts`) — so
+  // this test asserts the salutation-skip behaviour on its own, untangled
+  // from truncation, which `test/requests.test.ts` already covers on its
+  // own.
+  const { reference } = await seedSubmission(
+    page,
+    email,
+    "greeting",
+    "Hi,\nYour name came up when I was asking about a synthetic project for e2e coverage.",
+  )
 
   const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
   const operator = await operatorContext.newPage()
 
   const row = await readRequestRow(operator, reference)
   expect(row.title).not.toBe("Hi,")
-  expect(row.title).toBe(
-    "Your name came up when I was asking around about getting a synthetic project built for e2e coverage.",
-  )
+  expect(row.title).toBe("Your name came up when I was asking about a synthetic project for e2e coverage.")
 
   // The title itself is the way in — not a button named after an unrelated
   // action available once you arrive.
@@ -251,6 +297,45 @@ test("an email-intake greeting does not become the row's title, and the title is
   await expect(operator.getByTestId("request-detail-reference")).toHaveText(reference)
 
   await Promise.all([context.close(), operatorContext.close()])
+})
+
+/**
+ * Issue #316's "Expected" section, second half: "Prefer the project name
+ * where the submission has one; otherwise the first line of `outcome`...".
+ * `listAllRequestRows` (`src/routes/requests.ts`) now batches a
+ * `getProjectsByIds` lookup and renders `project?.name ?? titleFromOutcome(...)`
+ * — this is the black-box assertion that the project-name half of that
+ * fallback actually reaches the row, not just the derived-title half the
+ * test above already covers.
+ */
+test("an operator-named project's name is the row title on /requests, ahead of the derived outcome title", async ({
+  browser,
+  baseURL,
+}) => {
+  const tag = Math.random().toString(36).slice(2, 10)
+  const summary = `A synthetic project-naming request check (${tag}).`
+  const email = uniqueEmail("e2e-requests-project-name")
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+  const { reference } = await seedPromotedLead(browser, baseURL, operator, summary, email)
+
+  // Still on /leads/:id, right after promotion — #129 mints the project the
+  // same instant, so the rename card is already there to name it with.
+  await expect(operator.getByTestId("rename-project-card")).toBeVisible()
+  const chosenName = `A synthetic named engagement (${tag})`
+  await operator.getByTestId("rename-project-input").fill(chosenName)
+  await operator.getByTestId("rename-project-submit").click()
+  await expect(operator.getByTestId("rename-project-input")).toHaveValue(chosenName)
+
+  // The row's title is now the operator-chosen name, not the promoted lead's
+  // own summary — even though that summary is exactly what `titleFromOutcome`
+  // would otherwise have derived from this submission's `outcome`.
+  const row = await readRequestRow(operator, reference)
+  expect(row.title).toBe(chosenName)
+  expect(row.title).not.toBe(summary)
+
+  await operatorContext.close()
 })
 
 test("the requests surface is a 404 to anyone who is not the operator, the same shape as a route that does not exist", async ({
