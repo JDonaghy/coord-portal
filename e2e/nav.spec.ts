@@ -105,9 +105,12 @@ async function expectSignOut(page: Page) {
   await expect(signOut).toHaveAttribute("href", LOGOUT_HREF)
 }
 
-/** The five operator links plus the divider/label that precede them — the
- * whole `nav-group-operator` group issue #308 is about (`operatorNavGroup()`
- * in `src/render.ts`). */
+/** The operator links plus the divider/label that precede them — the whole
+ * `nav-group-operator` group issue #308 is about (`operatorNavGroup()` in
+ * `src/render.ts`). `nav-surveys` (issue #329) is the newest addition to this
+ * group; it belongs in this list for the identical reason every earlier
+ * addition (`nav-requests`, `nav-clients`) already does — the layout tests
+ * below assert on the group as a whole, not on a fixed count of links. */
 const OPERATOR_GROUP_HOOKS = [
   "nav-group-divider",
   "nav-group-operator-label",
@@ -116,6 +119,7 @@ const OPERATOR_GROUP_HOOKS = [
   "nav-replies",
   "nav-requests",
   "nav-clients",
+  "nav-surveys",
 ]
 
 async function boxes(page: Page, testids: readonly string[]) {

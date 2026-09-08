@@ -33,6 +33,7 @@ import {
   type Submission,
   type SubmissionStatus,
 } from "../submissions"
+import { loadSurveyResponses, SURVEY_RATING_LABELS, type SurveyResponse } from "../surveys"
 import type { Env } from "../types"
 import {
   applyReassignmentChoice,
@@ -255,6 +256,19 @@ export interface RequestRow {
    * filter can group rows by the same identity the database itself uses.
    */
   projectId: string | null
+  /**
+   * Issue #329: the customer's survey response for this submission, once
+   * shipped — `null` both before it has shipped (nothing to answer yet) and
+   * once shipped with nobody having answered. `requestRow` below tells those
+   * two apart the same way `deriveDisplayStatus`'s own caller does: by
+   * checking `display === "shipped"` first, since only a shipped row (see
+   * `submitSurvey`'s own gate, `routes/submission.ts`) is ever eligible for
+   * a response at all, and `display` is unaffected for `shipped` by every
+   * derivation `deriveDisplayStatus` applies (both `derivedStatus` and
+   * `derivedStartWorkStatus` only ever act on `awaiting-signoff` and
+   * `describing` respectively).
+   */
+  survey: SurveyResponse | null
 }
 
 /**
@@ -300,6 +314,14 @@ async function listAllRequestRows(env: Env): Promise<RequestRow[]> {
     env,
     submissions.filter((row) => row.status === "describing").map((row) => row.reference),
   )
+  // Issue #329: only a `shipped` submission can have a response on file at
+  // all (`submitSurvey`'s own gate, `routes/submission.ts`) — scoped the same
+  // way `startWorkStates` just above scopes to `describing`, rather than
+  // asking `loadSurveyResponses` to look up a reference that can never match.
+  const surveyResponses = await loadSurveyResponses(
+    env,
+    submissions.filter((row) => row.status === "shipped").map((row) => row.reference),
+  )
 
   return submissions.map((row) => {
     const status = isSubmissionStatus(row.status) ? row.status : "describing"
@@ -315,6 +337,7 @@ async function listAllRequestRows(env: Env): Promise<RequestRow[]> {
       display,
       round: state,
       projectId: row.project_id,
+      survey: surveyResponses.get(row.reference) ?? null,
     }
   })
 }
@@ -645,11 +668,34 @@ function requestRow(row: RequestRow): string {
           </span>
         </div>
         <div class="row-side">
-          <span class="status-pill" data-testid="status-pill" data-status="${escapeHtml(row.display)}">${escapeHtml(statusText(row.display))}</span>${roundBadge(row.round)}
+          <span class="status-pill" data-testid="status-pill" data-status="${escapeHtml(row.display)}">${escapeHtml(statusText(row.display))}</span>${roundBadge(row.round)}${surveyBadge(row)}
           <a class="button secondary" href="${href}" data-testid="request-open-link">Open</a>
         </div>
       </div>
     </li>`
+}
+
+/**
+ * Issue #329: "the rating on the request row" — present only once this
+ * submission is `shipped` (the same `submitSurvey` gate that decides whether
+ * a response could ever exist, see `RequestRow.survey`'s own doc comment
+ * above), and, once shipped, always present — either the rating the customer
+ * gave, or an explicit "Not answered" when nobody has. The issue is explicit
+ * about why the latter matters: "the point of the view is knowing which
+ * customers were unhappy *and* which never said — treating those as the same
+ * thing loses the more actionable one." A `roundBadge`-shaped absent string
+ * for "no response" would collapse exactly that distinction back into
+ * silence, so this never returns `""` for a shipped row the way `roundBadge`
+ * does for one with no round.
+ */
+export function surveyBadge(row: RequestRow): string {
+  if (row.display !== "shipped") return ""
+  if (!row.survey) {
+    return `
+          <span class="survey-pill" data-testid="request-survey" data-answered="false">Not answered</span>`
+  }
+  return `
+          <span class="survey-pill" data-testid="request-survey" data-answered="true" data-rating="${row.survey.rating}">${escapeHtml(SURVEY_RATING_LABELS[row.survey.rating])}</span>`
 }
 
 /**

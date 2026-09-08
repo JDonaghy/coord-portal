@@ -1,3 +1,4 @@
+import { chunkForBinding } from "./d1"
 import type { Env } from "./types"
 
 /**
@@ -10,10 +11,20 @@ import type { Env } from "./types"
  * and no reader on the other side of the bridge that would need telling.
  * `BRIDGE_EVENT_TYPES` (`src/bridge/events.ts`) is the closed vocabulary half
  * of the sync-bridge wire contract; a survey response is not a fact the
- * fleet acts on, so it never joins that list. An operator-facing read of
- * these responses is explicitly the sibling issue this one is not — nothing
- * here renders, exports or otherwise surfaces a response anywhere but back to
- * the customer who gave it, on their own submission page.
+ * fleet acts on, so it never joins that list.
+ *
+ * ── ISSUE #329 — THE OPERATOR-FACING READ ───────────────────────────────────
+ * This module's comment used to say an operator-facing read was "explicitly
+ * the sibling issue this one is not". #329 is that sibling, landed after
+ * this one: `loadSurveyResponses` below is the batched read behind
+ * `/requests`' per-row rating badge (`routes/requests.ts`), and
+ * `routes/surveys.ts` lists every response on file, newest first. Neither is
+ * a new write path, and neither changes anything above this note — capture
+ * is still one response per submission, still `INSERT OR IGNORE`, still no
+ * `UPDATE` path. What changes is only that a response, once given, is no
+ * longer visible solely on the customer's own submission page — an operator
+ * can now read it too, same as every other customer-authored fact this
+ * portal already exposes to an operator (`design_rounds`, `messages`) does.
  *
  * ── ONE RESPONSE PER SUBMISSION ─────────────────────────────────────────────
  * `submission_surveys` is keyed on `submission_id` alone (the customer-visible
@@ -115,4 +126,48 @@ export async function recordSurveyResponse(
     .bind(submissionReference, rating, comment, createdAt)
     .run()
   return { recorded: (result.meta?.changes ?? 0) > 0 }
+}
+
+/**
+ * Every response on file for the given submission references, keyed by
+ * reference — issue #329's batched read behind `/requests`' per-row rating
+ * badge (`routes/requests.ts`'s `listAllRequestRows`). Same "one batched
+ * lookup, not one query per row" shape `loadSignoffStates` (`src/rounds.ts`)
+ * already established for that same list, chunked through `chunkForBinding`
+ * for D1's bound-parameter ceiling (`src/d1.ts`) exactly the way that
+ * function is.
+ *
+ * A reference with no response on file is simply absent from the returned
+ * map. This function does not distinguish "not shipped yet" from "shipped,
+ * nobody answered" — it only reports what is actually on file; the caller
+ * (issue #329's own "say plainly when nobody answered") is the one that
+ * knows a submission's status and so is the one that can tell those two
+ * apart.
+ */
+export async function loadSurveyResponses(
+  env: Env,
+  submissionReferences: string[],
+): Promise<Map<string, SurveyResponse>> {
+  const responses = new Map<string, SurveyResponse>()
+  if (submissionReferences.length === 0) return responses
+
+  const batches = await Promise.all(
+    chunkForBinding(submissionReferences).map(async (references) => {
+      const placeholders = references.map(() => "?").join(", ")
+      const { results } = await env.DB.prepare(
+        `SELECT submission_id, rating, comment, created_at
+           FROM submission_surveys
+          WHERE submission_id IN (${placeholders})`,
+      )
+        .bind(...references)
+        .all<SurveyRow & { submission_id: string }>()
+      return results ?? []
+    }),
+  )
+
+  for (const row of batches.flat()) {
+    const response = fromRow(row)
+    if (response) responses.set(row.submission_id, response)
+  }
+  return responses
 }

@@ -165,6 +165,7 @@ function operatorNavGroup(current: string): string {
       <a href="/replies" data-testid="nav-replies"${cur("replies")}>Replies</a>
       <a href="/requests" data-testid="nav-requests"${cur("requests")}>Requests</a>
       <a href="/clients" data-testid="nav-clients"${cur("clients")}>Clients</a>
+      <a href="/surveys" data-testid="nav-surveys"${cur("surveys")}>Responses</a>
     </span>`
 }
 
@@ -215,20 +216,21 @@ export function publicHeader(): string {
 </header>`
 }
 
-export type OperatorNavCurrent = "leads" | "deliveries" | "replies" | "requests" | "clients"
+export type OperatorNavCurrent = "leads" | "deliveries" | "replies" | "requests" | "clients" | "surveys"
 
 /**
- * The header `/leads*`, `/deliveries`, `/requests` and `/clients*` carry — kept
- * deliberately separate from `topbar()` above. Issue #103 asked for the first
- * two to merge into `topbar()` as well, but ms-2 issue #33's and ms-3 issue
- * #55's sealed acceptance specs each pin, via their own `expectOperatorTopbar`
- * helper, that those two screens render **none** of the customer topbar's
- * hooks (`nav-dashboard`, `nav-new`, `nav-outbox`) — see the long comment on
- * `topbar()` above for the full account of that conflict and why it is
- * flagged for the epic owner rather than resolved by editing either the
- * sealed tests or this function to ignore them. `/requests` (issue #104) and
- * `/clients*` (issue #144) have no sealed oracle of their own yet, but they
- * are the same shape of screen — operator-only, diagnostic, never a route a
+ * The header `/leads*`, `/deliveries`, `/requests`, `/clients*` and `/surveys`
+ * carry — kept deliberately separate from `topbar()` above. Issue #103 asked
+ * for the first two to merge into `topbar()` as well, but ms-2 issue #33's and
+ * ms-3 issue #55's sealed acceptance specs each pin, via their own
+ * `expectOperatorTopbar` helper, that those two screens render **none** of the
+ * customer topbar's hooks (`nav-dashboard`, `nav-new`, `nav-outbox`) — see the
+ * long comment on `topbar()` above for the full account of that conflict and
+ * why it is flagged for the epic owner rather than resolved by editing either
+ * the sealed tests or this function to ignore them. `/requests` (issue #104),
+ * `/clients*` (issue #144) and `/surveys` (issue #329) have no sealed oracle
+ * of their own yet, but they are the same shape of screen — operator-only,
+ * diagnostic, never a route a
  * customer's Access identity can open — so they join this unmerged header
  * rather than risk the same conflict `/leads`/`/deliveries` already hit.
  *
@@ -980,6 +982,21 @@ const APP_STYLES = `
     background: var(--surface-2); color: var(--text-dim);
   }
 
+  /* ── The survey rating badge (issue #329) — one pill, two call sites: the
+     per-row badge on /requests (routes/requests.ts's surveyBadge) and the
+     rating on each row of /surveys' own list (routes/surveys.ts's
+     surveyRow). Same neutral look as .round-pill by default; only the
+     "shipped, nobody answered" case on /requests gets the attention
+     treatment .status-pill already uses for needs-input/awaiting-signoff —
+     issue #329's own point that "not answered" must never read as visually
+     equivalent to an actual, quiet rating. */
+  .survey-pill {
+    display: inline-flex; align-items: center; white-space: nowrap;
+    padding: 0.25em 0.75em; border-radius: 999px; font-size: var(--step--1); font-weight: 600;
+    background: var(--surface-2); color: var(--text-dim);
+  }
+  .survey-pill[data-answered="false"] { background: var(--attn-wash); color: var(--attn); }
+
   /* ── The operator's client list (issue #144) — GET /clients. Reuses the
      lead inbox's .lead-row chassis above, with the one difference that
      matters on a phone: this row's side carries a full ISO timestamp
@@ -1012,6 +1029,23 @@ const APP_STYLES = `
   .reply-row .subject { font-weight: 600; }
   .reply-row .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
   .reply-row .row-side { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; min-width: 0; }
+
+  /* ── The operator's survey response list (issue #329) — GET /surveys. Same
+     chassis as .request-row above (title link, meta line, row-side pill):
+     this is the same "one row per something, newest first" list every
+     operator screen on this surface already is, not a new row shape. */
+  ul.responses-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+  .response-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 1rem 1.25rem;
+  }
+  .response-row .row-main { display: grid; gap: 0.3rem; min-width: 0; max-width: 32rem; }
+  .response-row .title { font-weight: 600; color: inherit; text-decoration: none; }
+  .response-row .title:hover { text-decoration: underline; }
+  .response-row .meta { color: var(--text-faint); font-size: var(--step--1); font-family: var(--font-mono); }
+  .response-row .comment { margin: 0.3rem 0 0; white-space: pre-wrap; }
+  .response-row .row-side { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; flex-shrink: 0; }
 
   .route-badge {
     display: inline-flex; align-items: center; padding: 0.25em 0.75em; border-radius: 999px;
