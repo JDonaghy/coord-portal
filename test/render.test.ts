@@ -178,6 +178,24 @@ describe("topbar", () => {
       expect(nonOperator).not.toContain('data-testid="nav-group-divider"')
       expect(nonOperator).not.toContain('data-testid="nav-group-operator-label"')
     })
+
+    /**
+     * Issue #329: the header this function renders takes `topbar-stacked` —
+     * nav on a full-width row of its own — exactly when it carries the
+     * operator group, because that group needs more width than the
+     * three-slot row leaves beside the brand. A customer's own three-link
+     * nav still shares the brand's line, so the class must not appear for
+     * one. e2e/nav.spec.ts measures what the class buys; this pins which
+     * header gets it.
+     */
+    it("stacks the header's nav only when the operator group is on it", () => {
+      expect(topbar("operator@example.test", "dashboard", true)).toContain(
+        '<header class="topbar topbar-stacked">',
+      )
+      expect(topbar("customer@example.test", "dashboard", false)).toContain(
+        '<header class="topbar">',
+      )
+    })
   })
 })
 
@@ -294,8 +312,16 @@ describe("operatorTopbar", () => {
     expect(rendered).toContain(">Operator<")
   })
 
-  it("shares header.topbar, so it inherits the same wrapping rules", () => {
-    expect(operatorTopbar("operator@example.test", "leads")).toContain('<header class="topbar">')
+  /**
+   * Issue #329 added `topbar-stacked` alongside `topbar`: this header's nav is
+   * the operator group and nothing else, and the group outgrew the width the
+   * three-slot row leaves beside the brand, so it takes a full-width row of
+   * its own. `topbar` is still there — every rule this header inherits is
+   * still keyed on it.
+   */
+  it("shares header.topbar, so it inherits the same wrapping rules, and stacks its nav", () => {
+    const rendered = operatorTopbar("operator@example.test", "leads")
+    expect(rendered).toContain('<header class="topbar topbar-stacked">')
   })
 })
 

@@ -400,3 +400,62 @@ test.describe("the operator group's layout on a customer screen (issue #308)", (
     await context.close()
   })
 })
+
+/**
+ * The share of its own line the operator group is allowed to use at a desktop
+ * width. Measured after issue #329's fix: 0.71 in Noto Sans, 0.75 in DejaVu
+ * Sans — so 0.85 is roomy enough that neither face trips it, and tight enough
+ * that a seventh link (or a wider face than either) fails here.
+ */
+const MAX_OPERATOR_LINE_USE = 0.85
+
+/**
+ * Issue #329's CI-only regression, pinned as a margin instead of a cliff.
+ *
+ * The sixth operator link (`nav-surveys`) took the group to 522 CSS px on a
+ * line the three-slot header left 519 px of, so the group wrapped — but only
+ * on the CI runner, which resolves the stylesheet's `system-ui` to DejaVu
+ * Sans. A developer's box answers Noto Sans and draws the same group 26 px
+ * narrower, where it fit with 7% to spare and every local run went green. The
+ * test above can only see the wrap on whichever machine has the widest font,
+ * which is exactly the failure mode that cost a merge-gate round trip.
+ *
+ * This one asserts the slack itself: the group must leave room for a face
+ * meaningfully wider than the one rendering it here, on both headers that
+ * carry it (`topbar()`'s customer screen and `operatorTopbar()`'s own). Add a
+ * seventh link without giving the group somewhere to put it and this fails on
+ * the machine you wrote it on.
+ *
+ * `.nav-group-operator` is addressed by class because it is the container
+ * itself — the element `src/render.ts` wraps the group in — and nothing else
+ * on the page reports the width of the line the group was given.
+ */
+test.describe("the operator group's line has room to spare (issue #329)", () => {
+  test("uses well under the full width of its own line at a desktop width", async ({
+    browser,
+    baseURL,
+  }) => {
+    const context = await contextFor(browser, baseURL, DEV_OPERATOR)
+    const page = await context.newPage()
+    await page.setViewportSize({ width: 1280, height: 800 })
+
+    for (const path of ["/submissions", "/leads"]) {
+      await page.goto(path)
+
+      const line = await page.locator("header.topbar nav .nav-group-operator").boundingBox()
+      if (!line) throw new Error(`${path}: the operator group has no bounding box`)
+
+      const groupBoxes = await boxes(page, OPERATOR_GROUP_HOOKS)
+      const used =
+        Math.max(...groupBoxes.map((box) => box.x + box.width)) -
+        Math.min(...groupBoxes.map((box) => box.x))
+
+      expect(
+        used / line.width,
+        `${path}: the operator group uses ${used.toFixed(0)}px of the ${line.width.toFixed(0)}px line it was given — too close to wrapping on a machine whose system-ui is wider than this one's`,
+      ).toBeLessThanOrEqual(MAX_OPERATOR_LINE_USE)
+    }
+
+    await context.close()
+  })
+})

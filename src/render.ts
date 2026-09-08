@@ -112,7 +112,12 @@ export function topbar(email: string | null, current: NavCurrent, isOperator: bo
   // really does have customer links on the other side of the divider.
   const operatorLinks = isOperator ? operatorNavGroup(current) : ""
 
-  return `<header class="topbar">
+  // Issue #329: a nav carrying the operator group is too long to share the
+  // header's first line with the brand — see the `.topbar-stacked` rule in
+  // APP_STYLES. A customer's own three-link nav still shares it.
+  const stacked = isOperator ? " topbar-stacked" : ""
+
+  return `<header class="topbar${stacked}">
   <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
   <nav aria-label="primary">
     <a href="/submissions" data-testid="nav-dashboard"${dashboardCurrent}>My requests</a>
@@ -264,7 +269,11 @@ export type OperatorNavCurrent = "leads" | "deliveries" | "replies" | "requests"
  * full rationale, flagged there as the contract's own admission).
  */
 export function operatorTopbar(email: string, current: OperatorNavCurrent): string {
-  return `<header class="topbar">
+  // `topbar-stacked` for the same reason `topbar()` above sets it: this nav is
+  // the operator group and nothing else, and the group outgrew the width the
+  // three-slot row leaves beside the brand (issue #329, `.topbar-stacked` in
+  // APP_STYLES).
+  return `<header class="topbar topbar-stacked">
   <a class="brand" href="/" data-testid="brand-home">coord-portal</a>
   <nav aria-label="primary">${operatorNavGroup(current)}
   </nav>
@@ -355,6 +364,30 @@ const APP_STYLES = `
   header.topbar nav .nav-group-operator-label {
     color: var(--text-faint); font-size: var(--step--2); text-transform: uppercase; letter-spacing: 0.05em;
   }
+  /* ── The stacked header (issue #329) — nav on its own full-width row ──────
+     Set by both headers that render operatorNavGroup(): topbar() when its
+     reader is an operator, and operatorTopbar() always. The three-slot row
+     above sizes nav as "whatever is left beside the brand", which on a
+     desktop is 519 of the header's 704 CSS px (measured: 44rem, less the
+     brand's ~119, the account button's 2.15rem and two 1rem gaps). Adding a
+     sixth operator link took the group's own width to 522px of that 519 —
+     but only in the face a CI runner resolves system-ui to (DejaVu Sans);
+     a developer's box answers Noto Sans and renders the same group 26px
+     narrower, so it fit locally and wrapped in CI. Moving the whole nav onto
+     its own row gives the group the header's full 704px instead of 519,
+     which is what stops the *next* link re-opening this: the group uses ~74%
+     of its line in the wider of those two faces now, where it needed 101%.
+     e2e/nav.spec.ts asserts that slack directly, so an addition that eats it
+     fails on the developer's own font rather than only on the runner's.
+     Brand and account menu keep the first line: order: 1 makes nav the last
+     flex item, so a flex-basis: 100% nav does not push the menu onto a
+     third line, and the menu's auto inline-start margin holds it hard right
+     now that nav is no longer the flexible item between the two. Nothing here
+     moves brand-home, which is the invariant Amendment 1's own comment above
+     exists to protect. */
+  header.topbar.topbar-stacked { flex-wrap: wrap; row-gap: 0.5rem; }
+  header.topbar.topbar-stacked nav { flex-basis: 100%; order: 1; padding-top: 0; }
+  header.topbar.topbar-stacked .account-menu { margin-inline-start: auto; }
   /* The account menu (accountMenu() in render.ts) — a native
      <details>/<summary> disclosure, no script. summary is the round
      initials button; the panel is absolutely positioned so it never
