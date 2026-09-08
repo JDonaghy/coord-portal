@@ -44,6 +44,7 @@ import {
 } from "./routes/requests"
 import { startForm, submitStart } from "./routes/start"
 import { submissionDetail, submissionRounds, submitSubmissionAction } from "./routes/submission"
+import { surveysInbox } from "./routes/surveys"
 import type { Env } from "./types"
 
 const SUBMISSION_ROUNDS_PATH = /^\/submissions\/([^/?#]+)\/rounds$/
@@ -206,6 +207,17 @@ export async function handlePages(request: Request, env: Env): Promise<Response 
     if (requestsMatch.kind === "draft-reject" && request.method === "POST") {
       return postRequestDraftReject(request, env, requestsMatch.id, requestsMatch.draftId)
     }
+    return leadsNotFound()
+  }
+
+  // The operator's read of every customer survey response (#329) — the
+  // counterpart to `/requests`' own new rating badge, the same way
+  // `/deliveries` (#55) is to `/outbox`. Owned here for every method, same
+  // reasoning as `/deliveries` above: falling through to `ASSETS.fetch` on an
+  // unsupported method would hand an unauthenticated caller a response this
+  // contract says is operator-only. See `routes/surveys.ts`.
+  if (pathname === "/surveys") {
+    if (request.method === "GET") return surveysInbox(request, env)
     return leadsNotFound()
   }
 

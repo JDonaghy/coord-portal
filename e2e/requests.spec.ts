@@ -29,6 +29,10 @@ import { expect, test, type APIRequestContext, type Browser, type Page } from "@
  * would derive a status from — issue #104's own "current round and verdict"
  * requirement.
  *
+ * Issue #329 adds a second per-row extra, covered further down: a shipped
+ * submission's customer survey response (#328), or an explicit "Not
+ * answered" when nobody has given one yet.
+ *
  * Every address and string below is invented, on the reserved `example.test`
  * TLD — CLAUDE.md rule 1. `serve:test` does not wipe `.wrangler/state`
  * between runs, so identities are tagged unique per run rather than risking a
@@ -156,6 +160,11 @@ interface RequestRow {
   round: string | null
   title: string
   titleHref: string | null
+  /** Issue #329's rating badge — `null` when the row carries none at all
+   * (not yet shipped), otherwise the pill's own text ("Not answered" or the
+   * rating label) and whether `data-answered` says "true" or "false". */
+  survey: string | null
+  surveyAnswered: string | null
 }
 
 /** The one `request-row` on `/requests` whose `request-reference` is `reference`. */
@@ -166,6 +175,7 @@ async function readRequestRow(operator: Page, reference: string): Promise<Reques
 
   const round = row.getByTestId("request-round")
   const title = row.getByTestId("request-title")
+  const survey = row.getByTestId("request-survey")
   return {
     status: await row.getAttribute("data-status"),
     customer: flat(await row.getByTestId("request-customer").innerText()),
@@ -174,6 +184,8 @@ async function readRequestRow(operator: Page, reference: string): Promise<Reques
     round: (await round.count()) > 0 ? flat(await round.innerText()) : null,
     title: flat(await title.innerText()),
     titleHref: await title.getAttribute("href"),
+    survey: (await survey.count()) > 0 ? flat(await survey.innerText()) : null,
+    surveyAnswered: (await survey.count()) > 0 ? await survey.getAttribute("data-answered") : null,
   }
 }
 
@@ -217,6 +229,9 @@ test("the operator's /requests lists every customer's submissions on one screen 
   expect(aliceRow.status).toBe("describing")
   expect(aliceRow.customer).toBe(aliceEmail)
   expect(aliceRow.round, "a submission with no design round shows no round badge").toBeNull()
+  // Issue #329: no rating badge at all before a submission ships — see the
+  // dedicated test below for the shipped cases.
+  expect(aliceRow.survey, "no rating badge before shipped").toBeNull()
   // Issue #316: the title names the request (here, the plain synthetic
   // outcome `seedSubmission` filed — no greeting to skip), and it is itself
   // the link into the detail screen, not an inert span.
@@ -310,6 +325,61 @@ test("an email-intake greeting does not become the row's title, and the title is
   await expect(operator.getByTestId("back-to-request")).toHaveText(
     "← Your name came up when I was asking about a synthetic project for e2e coverage.",
   )
+
+  await Promise.all([context.close(), operatorContext.close()])
+})
+
+/**
+ * Issue #329's "the rating on the request row": `/requests` already carries
+ * a project name, client and status per row, and a shipped submission's
+ * survey response (#328) now shows up right there too — no second screen for
+ * the common case of "did this customer already say how it went". The issue
+ * is explicit that a shipped-but-silent submission must read as "not
+ * answered", never as a bare absence indistinguishable from "not shipped
+ * yet" — the three states this test walks through in order.
+ */
+test("the request row shows no badge before shipped, 'Not answered' once shipped and silent, and the rating once answered", async ({
+  browser,
+  baseURL,
+}) => {
+  const email = uniqueEmail("e2e-requests-survey-badge")
+  const context = await contextFor(browser, baseURL, email)
+  const page = await context.newPage()
+  const { reference } = await seedSubmission(page, email, "survey-badge")
+  // `seedSubmission` leaves `page` on the submission's own detail screen —
+  // this is the one URL a customer (not an operator) can answer the survey
+  // from, captured now before anything else navigates `page` away from it.
+  const submissionUrl = page.url()
+
+  const operatorContext = await contextFor(browser, baseURL, DEV_OPERATOR)
+  const operator = await operatorContext.newPage()
+
+  // Not shipped yet: no badge at all, same as any other in-flight status.
+  const inProgress = await push(context.request, reference, 1, { status: "in-progress" })
+  expect(inProgress.outcome).toBe("applied")
+  let row = await readRequestRow(operator, reference)
+  expect(row.status).toBe("in-progress")
+  expect(row.survey, "no rating badge before shipped").toBeNull()
+
+  // Shipped, nobody has answered yet.
+  const shipped = await push(context.request, reference, 2, { status: "shipped" })
+  expect(shipped.outcome).toBe("applied")
+  row = await readRequestRow(operator, reference)
+  expect(row.status).toBe("shipped")
+  expect(row.surveyAnswered).toBe("false")
+  expect(row.survey).toBe("Not answered")
+
+  // The customer answers, on their own shipped screen — the existing #328
+  // capture path, untouched by this issue.
+  await page.goto(submissionUrl)
+  await page.getByTestId("survey-open-button").click()
+  await page.locator('[data-testid="survey-rating-option"][data-value="2"] input').check()
+  await page.getByTestId("survey-submit").click()
+  await expect(page.getByTestId("survey-response")).toHaveAttribute("data-rating", "2")
+
+  row = await readRequestRow(operator, reference)
+  expect(row.surveyAnswered).toBe("true")
+  expect(row.survey).toBe("2 stars — Unhappy")
 
   await Promise.all([context.close(), operatorContext.close()])
 })

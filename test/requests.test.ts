@@ -7,6 +7,7 @@ import {
   matchRequestsPath,
   NO_CLIENT_EMAIL_KEY,
   resolveRequestsFilter,
+  surveyBadge,
   titleFromOutcome,
   type RequestRow,
 } from "../src/routes/requests"
@@ -209,6 +210,7 @@ function row(overrides: Partial<RequestRow> & Pick<RequestRow, "id" | "reference
     display: "describing",
     round: null,
     projectId: null,
+    survey: null,
     ...overrides,
   }
 }
@@ -323,6 +325,62 @@ describe("resolveRequestsFilter — issue #323's client and project options", ()
     const rows = [row({ id: "1", reference: "SUB-000001", title: "A", customerEmail: "alice@example.test", projectId: null })]
     const filter = resolveRequestsFilter(rows, "alice@example.test", null)
     expect(filter.projectOptions).toEqual([])
+  })
+})
+
+/**
+ * Unit coverage for issue #329's "the rating on the request row" —
+ * `surveyBadge` (`src/routes/requests.ts`), the pure derivation behind that
+ * badge. Black-box coverage that it actually renders in the right place on a
+ * real page lives in `e2e/requests.spec.ts`; this file pins only the
+ * decision itself, the same split every other pure derivation in this file
+ * already draws.
+ *
+ * The issue's own emphasis — "the point of the view is knowing which
+ * customers were unhappy *and* which never said" — is exactly what these
+ * three cases pin: nothing before shipped, an explicit "Not answered" once
+ * shipped with no response, and the actual rating once one exists. Losing
+ * any of those three to one shared fallback is the bug the issue describes.
+ */
+describe("surveyBadge — issue #329", () => {
+  it("renders nothing for a submission that has not shipped yet", () => {
+    const notShipped = row({
+      id: "1",
+      reference: "SUB-000001",
+      title: "A",
+      display: "in-progress",
+      survey: null,
+    })
+    expect(surveyBadge(notShipped)).toBe("")
+  })
+
+  it("says plainly when a shipped submission has no response, rather than rendering nothing", () => {
+    const unanswered = row({
+      id: "1",
+      reference: "SUB-000001",
+      title: "A",
+      display: "shipped",
+      survey: null,
+    })
+    const markup = surveyBadge(unanswered)
+    expect(markup).toContain('data-testid="request-survey"')
+    expect(markup).toContain('data-answered="false"')
+    expect(markup).toContain("Not answered")
+  })
+
+  it("renders the customer's actual rating once shipped and answered", () => {
+    const answered = row({
+      id: "1",
+      reference: "SUB-000001",
+      title: "A",
+      display: "shipped",
+      survey: { rating: 5, comment: "Exactly what we needed.", createdAt: "2026-02-01T00:00:00.000Z" },
+    })
+    const markup = surveyBadge(answered)
+    expect(markup).toContain('data-testid="request-survey"')
+    expect(markup).toContain('data-answered="true"')
+    expect(markup).toContain('data-rating="5"')
+    expect(markup).not.toContain("Not answered")
   })
 })
 
